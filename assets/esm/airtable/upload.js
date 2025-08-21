@@ -2,27 +2,35 @@
 // POST /api/airtable/upload?filename=...&contentType=...
 // Body: raw file bytes. Ritorna { url } pubblico da usare come attachment in Airtable.
 
-import { put } from '@vercel/blob';
-
 export default async function handler(req, res){
-  // CORS sempre
+  // CORS sempre attivo (anche in caso d'errore interno)
   if (handleCORS(req, res)) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  try{
+  try {
     const filename = (req.query.filename || 'upload.bin').toString();
     const contentType = (req.query.contentType || 'application/octet-stream').toString();
+
+    // Dynamic import: evita crash su import-time se manca la dependency o il token
+    let put;
+    try {
+      ({ put } = await import('@vercel/blob'));
+    } catch (e) {
+      return res.status(500).json({
+        error: 'Missing @vercel/blob',
+        details: 'Install @vercel/blob e collega lo store al progetto oppure imposta BLOB_READ_WRITE_TOKEN',
+      });
+    }
 
     const buffer = await readBuffer(req);
     if (!buffer || !buffer.length){
       return res.status(400).json({ error: 'Empty body' });
     }
 
-    // Upload su Vercel Blob (store connesso al progetto o via BLOB_READ_WRITE_TOKEN)
+    // Upload su Vercel Blob (richiede: store connesso OPPURE env BLOB_READ_WRITE_TOKEN)
     const blob = await put(filename, buffer, { access: 'public', contentType });
-
     return res.status(200).json({ url: blob?.url });
-  }catch(e){
+  } catch (e) {
     console.error('[upload] error', e);
     return res.status(502).json({ error: 'Upload failed', details: String(e?.message || e) });
   }
@@ -34,24 +42,19 @@ function handleCORS(req, res){
   const origin = req.headers.origin || '';
   const allow = (process.env.ORIGIN_ALLOWLIST || '*').trim();
 
-  // Header base
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  // tieni largo per evitare future header custom
-  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-requested-with');
   res.setHeader('Access-Control-Max-Age', '86400');
 
-  // Politica: se allowlist è vuota o '*', consenti tutti; altrimenti consenti gli origin che matchano
   if (allow === '*' || !allow) {
     res.setHeader('Access-Control-Allow-Origin', '*');
   } else {
     const list = allow.split(',').map(s => s.trim()).filter(Boolean);
     const ok = list.some(p => safeWildcardMatch(origin, p));
-    // se matcha, riflettiamo l'origin; altrimenti di default mettiamo il primo consentito
     res.setHeader('Access-Control-Allow-Origin', ok && origin ? origin : list[0] || '*');
   }
 
-  // Preflight
   if (req.method === 'OPTIONS') {
     res.status(204).end();
     return true;
