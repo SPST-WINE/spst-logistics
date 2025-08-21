@@ -5,8 +5,8 @@
 import { put } from '@vercel/blob';
 
 export default async function handler(req, res){
-  if (req.method === 'OPTIONS') return sendCORS(req, res);
-  sendCORS(req, res);
+  // CORS sempre
+  if (handleCORS(req, res)) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
   try{
@@ -18,10 +18,9 @@ export default async function handler(req, res){
       return res.status(400).json({ error: 'Empty body' });
     }
 
-    // Upload su Vercel Blob (richiede BLOB_READ_WRITE_TOKEN su Vercel)
+    // Upload su Vercel Blob (store connesso al progetto o via BLOB_READ_WRITE_TOKEN)
     const blob = await put(filename, buffer, { access: 'public', contentType });
 
-    // Ritorna solo la URL pubblica
     return res.status(200).json({ url: blob?.url });
   }catch(e){
     console.error('[upload] error', e);
@@ -31,30 +30,40 @@ export default async function handler(req, res){
 
 /* ───────── helpers ───────── */
 
-function sendCORS(req,res){
+function handleCORS(req, res){
   const origin = req.headers.origin || '';
-  const list = (process.env.ORIGIN_ALLOWLIST || '*')
-    .split(',')
-    .map(s=>s.trim())
-    .filter(Boolean);
+  const allow = (process.env.ORIGIN_ALLOWLIST || '*').trim();
 
-  const allowed =
-    list.includes('*') ||
-    (!origin) ||
-    list.some(p => safeWildcardMatch(origin, p));
+  // Header base
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  // tieni largo per evitare future header custom
+  res.setHeader('Access-Control-Allow-Headers', '*');
+  res.setHeader('Access-Control-Max-Age', '86400');
 
-  if (allowed && origin) res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Vary','Origin');
-  res.setHeader('Access-Control-Allow-Methods','POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
-  res.setHeader('Access-Control-Max-Age','600');
-  if (req.method === 'OPTIONS') return res.status(204).end();
+  // Politica: se allowlist è vuota o '*', consenti tutti; altrimenti consenti gli origin che matchano
+  if (allow === '*' || !allow) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+  } else {
+    const list = allow.split(',').map(s => s.trim()).filter(Boolean);
+    const ok = list.some(p => safeWildcardMatch(origin, p));
+    // se matcha, riflettiamo l'origin; altrimenti di default mettiamo il primo consentito
+    res.setHeader('Access-Control-Allow-Origin', ok && origin ? origin : list[0] || '*');
+  }
+
+  // Preflight
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return true;
+  }
+  return false;
 }
 
 function safeWildcardMatch(input, pattern){
+  if (!pattern) return false;
   if (pattern === '*') return true;
   const rx = '^' + pattern.split('*').map(escapeRegex).join('.*') + '$';
-  return new RegExp(rx).test(input);
+  return new RegExp(rx).test(input || '');
 }
 function escapeRegex(str){ return str.replace(/[|\\{}()[\]^$+?.]/g, '\\$&'); }
 
