@@ -29,7 +29,7 @@ export async function fetchShipments({q='',status='all',onlyOpen=false}={}){
   }
 }
 
-export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEvasa}){
+export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEvasa, docs}){
   const id = (typeof recOrId === 'string') ? recOrId : (recOrId? (recOrId._airId||recOrId._recId||recOrId.recordId||recOrId.id) : '');
   if(!id) throw new Error('Missing record id');
 
@@ -38,17 +38,22 @@ export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEv
   const base = {};
   if (tracking) base.tracking = String(tracking).trim();
   if (typeof statoEvasa === 'boolean') base.statoEvasa = statoEvasa;
+  if (docs && typeof docs === 'object') base.docs = docs;
 
   const attempts = [];
   if (norm) attempts.push({ carrier: norm });
   if (norm) attempts.push({ carrier: { name: norm } });
-  attempts.push({}); // senza carrier
+  attempts.push({}); // senza carrier (es. solo docs)
 
   let lastErrTxt = '';
   for (const extra of attempts){
     const body = { ...base, ...extra };
     try{
-      const res = await fetch(url, { method:'PATCH', headers:{ 'Content-Type':'application/json','Accept':'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch(url, {
+        method:'PATCH',
+        headers:{ 'Content-Type':'application/json','Accept':'application/json' },
+        body: JSON.stringify(body)
+      });
       if (res.ok) return await res.json();
       const txt = await res.text();
       lastErrTxt = txt;
@@ -64,3 +69,28 @@ export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEv
   throw new Error('PATCH failed (tentativi esauriti): '+lastErrTxt);
 }
 
+/**
+ * Carica un file sullo storage del proxy (Vercel Blob) e ritorna una URL pubblica.
+ * Poi questa URL verrà passata a Airtable come attachment.
+ */
+export async function uploadAttachment(recordId, docName, file){
+  if(!USE_PROXY){ // fallback mock
+    return { url: `https://files.dev/mock/${recordId}-${docName}-${Date.now()}-${file?.name||'file'}` };
+  }
+  const safe = (s)=> String(s||'').replace(/[^\w.\-]+/g,'_');
+  const filename = `${safe(recordId)}__${safe(docName)}__${Date.now()}__${safe(file?.name||'file')}`;
+  const url = `${AIRTABLE.proxyBase}/upload?filename=${encodeURIComponent(filename)}&contentType=${encodeURIComponent(file?.type || 'application/octet-stream')}`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Accept':'application/json' },
+    body: file
+  });
+  if (!res.ok){
+    const t = await res.text().catch(()=> '');
+    throw new Error(`Upload proxy ${res.status}: ${t.slice(0,180)}`);
+  }
+  const json = await res.json().catch(()=> ({}));
+  if (!json || !json.url) throw new Error('Upload: URL non ricevuta dal proxy');
+  return { url: json.url };
+}
