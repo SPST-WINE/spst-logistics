@@ -1,19 +1,6 @@
 {
-  "version": 2,
-  "builds": [
-    { "src": "apps/proxy/api/**/*.js", "use": "@vercel/node" },
-    { "src": "apps/assets/esm/**/*", "use": "@vercel/static" }
-  ],
-  "routes": [
-    { "src": "/api/(.*)", "dest": "/apps/proxy/api/$1" },
-    { "src": "/back-office/(.*)", "dest": "/apps/assets/esm/$1",
-      "headers": { "Cache-Control": "no-cache" } }
-  ]
-}
-
-{
   "rewrites": [
-    { "source": "/back-office/(.*)", "destination": "/assets/back-office/$1" }
+    { "source": "/back-office/(.*)", "destination": "/assets/esm/$1" }
   ],
   "headers": [
     {
@@ -23,7 +10,7 @@
         { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "*" },
         { "key": "Cross-Origin-Resource-Policy", "value": "cross-origin" },
-        { "key": "Cache-Control", "value": "public, max-age=0, s-maxage=31536000, immutable" }
+        { "key": "Cache-Control", "value": "no-store" }
       ]
     }
   ]
