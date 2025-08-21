@@ -1,5 +1,5 @@
 import { DEBUG } from './config.js';
-import { fetchShipments, patchShipmentTracking } from './airtable/api.js';
+import { fetchShipments, patchShipmentTracking, uploadAttachment } from './airtable/api.js';
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
@@ -37,13 +37,34 @@ function applyFilters(){
 }
 
 /* ───────── actions ───────── */
-function onUploadForDoc(e, rec, docName){
-  const file = e.target.files && e.target.files[0];
-  if(!file) return;
-  rec.docs = rec.docs || {};
-  rec.docs[docName] = `https://files.dev/mock/${rec.id}-${docName}.pdf`;
-  toast(`${docName.replaceAll('_',' ')} caricato su ${rec.id} (mock)`);
-  applyFilters();
+async function onUploadForDoc(e, rec, docName){
+  try{
+    const file = e?.target?.files && e.target.files[0];
+    if(!file) return;
+
+    const recId = rec._recId || rec.id;
+    if(!recId){
+      toast('Errore: id record mancante');
+      return;
+    }
+
+    toast('Upload in corso…');
+
+    // 1) carica il file su storage (proxy → Vercel Blob) e ottieni una URL pubblica
+    const { url } = await uploadAttachment(recId, docName, file);
+
+    // 2) patch su Airtable: mappa il docName al campo attachment
+    await patchShipmentTracking(recId, { docs: { [docName]: url } });
+
+    toast(`${docName.replaceAll('_',' ')} caricato`);
+    await loadData();
+  }catch(err){
+    console.error('[onUploadForDoc] errore upload', err);
+    toast('Errore caricamento documento');
+  }finally{
+    // reset input file per permettere ri-upload dello stesso nome
+    if (e?.target) e.target.value = '';
+  }
 }
 
 async function onSaveTracking(rec, carrier, tn){
