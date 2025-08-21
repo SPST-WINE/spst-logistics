@@ -1,0 +1,10 @@
+{
+  "name": "spst-airtable-proxy",
+  "private": true,
+  "type": "module",
+  "version": "1.0.0",
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "@vercel/blob": "^0.23.0"
+  }
+}
