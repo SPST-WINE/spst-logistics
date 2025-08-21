@@ -2,19 +2,11 @@
   "version": 2,
   "builds": [
     { "src": "apps/proxy/api/**/*.js", "use": "@vercel/node" },
-    { "src": "apps/assets/dist/**/*", "use": "@vercel/static" }
+    { "src": "apps/assets/esm/**/*", "use": "@vercel/static" }
   ],
   "routes": [
     { "src": "/api/(.*)", "dest": "/apps/proxy/api/$1" },
-
-    { "src": "/back-office.latest.js",
-      "dest": "/apps/assets/dist/back-office.latest.js",
-      "headers": { "Cache-Control": "no-cache" }
-    },
-
-    { "src": "/static/(.*)",
-      "dest": "/apps/assets/dist/$1",
-      "headers": { "Cache-Control": "public, max-age=31536000, immutable" }
-    }
+    { "src": "/back-office/(.*)", "dest": "/apps/assets/esm/$1",
+      "headers": { "Cache-Control": "no-cache" } }
   ]
 }
