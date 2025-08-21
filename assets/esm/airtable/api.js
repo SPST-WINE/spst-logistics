@@ -1,1 +1,66 @@
+import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
+import { airtableRecordToRec } from './adapter.js';
+import { showBanner, toast } from '../utils/dom.js';
+import { normalizeCarrier } from '../utils/misc.js';
+
+export function buildFilterQuery({q,status,onlyOpen}){
+  const u = new URLSearchParams();
+  if(q) u.set('search', q);
+  if(status) u.set('status', status);
+  u.set('onlyOpen', onlyOpen ? '1' : '0');
+  u.set('pageSize','50');
+  return u.toString();
+}
+
+export async function fetchShipments({q='',status='all',onlyOpen=false}={}){
+  if(!USE_PROXY){ console.warn('USE_PROXY=false – uso MOCK'); return []; }
+  const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({q: q.trim(), status, onlyOpen})}`;
+  try{
+    const res = await fetch(url, FETCH_OPTS);
+    if(!res.ok){ const text = await res.text().catch(()=> ''); throw new Error(`Proxy ${res.status}: ${text.slice(0,180)}`); }
+    const json = await res.json();
+    const records = Array.isArray(json.records) ? json.records : [];
+    showBanner('');
+    return records.map(airtableRecordToRec);
+  }catch(err){
+    console.error('[fetchShipments] failed, uso MOCK', { url, err });
+    showBanner(`Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). <span class="small">Dettagli: ${String(err.message||err)}</span>`);
+    return [];
+  }
+}
+
+export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEvasa}){
+  const id = (typeof recOrId === 'string') ? recOrId : (recOrId? (recOrId._airId||recOrId._recId||recOrId.recordId||recOrId.id) : '');
+  if(!id) throw new Error('Missing record id');
+
+  const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
+  const norm = normalizeCarrier(carrier||'');
+  const base = {};
+  if (tracking) base.tracking = String(tracking).trim();
+  if (typeof statoEvasa === 'boolean') base.statoEvasa = statoEvasa;
+
+  const attempts = [];
+  if (norm) attempts.push({ carrier: norm });
+  if (norm) attempts.push({ carrier: { name: norm } });
+  attempts.push({}); // senza carrier
+
+  let lastErrTxt = '';
+  for (const extra of attempts){
+    const body = { ...base, ...extra };
+    try{
+      const res = await fetch(url, { method:'PATCH', headers:{ 'Content-Type':'application/json','Accept':'application/json' }, body: JSON.stringify(body) });
+      if (res.ok) return await res.json();
+      const txt = await res.text();
+      lastErrTxt = txt;
+      if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(txt)){
+        throw new Error('PATCH failed '+res.status+': '+txt);
+      }
+    }catch(e){
+      lastErrTxt = String(e && e.message || e || '');
+      if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(lastErrTxt)) throw e;
+    }
+  }
+  toast('Errore: il campo Corriere è Single Select. Usa una delle opzioni disponibili.');
+  throw new Error('PATCH failed (tentativi esauriti): '+lastErrTxt);
+}
 
