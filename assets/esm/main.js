@@ -10,21 +10,33 @@ const elStatus   = document.getElementById('status-filter');
 
 let DATA = [];
 
+/* ───────── utils ───────── */
+function debounce(fn, ms=250){
+  let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); };
+}
+
+/* ───────── data flow ───────── */
 async function loadData(){
-  const q = elSearch.value.trim();
-  const status = elStatus.value;
-  const onlyOpen = elOnlyOpen.checked;
-  const items = await fetchShipments({q, status, onlyOpen});
-  DATA = items;
-  applyFilters();
+  try{
+    const q = (elSearch?.value || '').trim();
+    const status = elStatus?.value || 'all';
+    const onlyOpen = !!elOnlyOpen?.checked;
+
+    const items = await fetchShipments({ q, status, onlyOpen });
+    DATA = items || [];
+    applyFilters();
+  }catch(err){
+    console.error('[loadData] errore', err);
+    toast('Errore nel caricamento dati');
+  }
 }
 
 function applyFilters(){
-  let out = [...DATA];
-  out.sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
+  const out = [...DATA].sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
   renderList(out, { onUploadForDoc, onSaveTracking, onComplete });
 }
 
+/* ───────── actions ───────── */
 function onUploadForDoc(e, rec, docName){
   const file = e.target.files && e.target.files[0];
   if(!file) return;
@@ -35,19 +47,27 @@ function onUploadForDoc(e, rec, docName){
 }
 
 async function onSaveTracking(rec, carrier, tn){
-  carrier = (carrier||'').trim(); tn = (tn||'').trim();
-  if(!carrier || !tn){ toast('Inserisci corriere e numero tracking'); return; }
+  carrier = (carrier||'').trim();
+  tn = (tn||'').trim();
+  if(!carrier || !tn){
+    toast('Inserisci corriere e numero tracking');
+    return;
+  }
+  const recId = rec._recId || rec.id;
+  if(!recId){
+    console.warn('onSaveTracking: record id mancante', rec);
+    toast('Errore: id record mancante');
+    return;
+  }
+
   try{
-    if(rec._recId || rec.id){
-      const res = await patchShipmentTracking(rec._recId || rec.id, { carrier, tracking: tn });
-      if (DEBUG) console.log('[TRACK PATCH OK]', res);
-      toast(`${rec.id}: tracking salvato`);
-      await loadData();
-    }else{
-      rec.tracking_carrier = carrier; rec.tracking_number = tn;
-      toast(`${rec.id}: tracking salvato (mock)`);
-      applyFilters();
-    }
+    // Compatibile con entrambe le firme della API:
+    // - patchShipmentTracking(id, { carrier, tracking })
+    // - patchShipmentTracking(id, carrier, tracking)
+    const res = await patchShipmentTracking(recId, { carrier, tracking: tn });
+    if (DEBUG) console.log('[TRACK PATCH OK]', res);
+    toast(`${rec.id}: tracking salvato`);
+    await loadData();
   }catch(err){
     console.error('Errore salvataggio tracking', err);
     toast('Errore salvataggio tracking');
@@ -55,24 +75,27 @@ async function onSaveTracking(rec, carrier, tn){
 }
 
 async function onComplete(rec){
+  const recId = rec._recId || rec.id;
+  if(!recId){
+    rec.stato = 'Pronta alla spedizione';
+    toast(`${rec.id}: evasione completata (mock)`);
+    applyFilters();
+    return;
+  }
   try{
-    if(rec._recId || rec.id){
-      await patchShipmentTracking(rec._recId || rec.id, { statoEvasa: true });
-      toast(`${rec.id}: evasione completata`);
-      await loadData();
-    }else{
-      rec.stato = 'Pronta alla spedizione';
-      toast(`${rec.id}: evasione completata (mock)`);
-      applyFilters();
-    }
-  }catch(err){ console.error('Errore evasione', err); toast('Errore evasione'); }
+    await patchShipmentTracking(recId, { statoEvasa: true });
+    toast(`${rec.id}: evasione completata`);
+    await loadData();
+  }catch(err){
+    console.error('Errore evasione', err);
+    toast('Errore evasione');
+  }
 }
 
-// listeners
-elSearch.addEventListener('input', ()=>loadData());
-elOnlyOpen.addEventListener('change', ()=>loadData());
-elStatus.addEventListener('change', ()=>loadData());
+/* ───────── listeners ───────── */
+if (elSearch)   elSearch.addEventListener('input', debounce(()=>loadData(), 250));
+if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
+if (elStatus)   elStatus.addEventListener('change', ()=>loadData());
 
-// bootstrap
+/* ───────── bootstrap ───────── */
 loadData().catch(e=>console.warn('init loadData failed', e));
-
