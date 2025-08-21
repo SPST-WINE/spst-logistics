@@ -1,6 +1,6 @@
 // utils/weights.js
 // Parser robusto per Lista Colli + utilità pesi
-// Ritorna sempre colli nel formato { L, W, H, kg } (numeri)
+// Output colli: [{ L, W, H, kg }] con numeri
 
 function toNumber(v, def = 0) {
   if (v == null) return def;
@@ -19,14 +19,13 @@ function isJsonLike(text) {
   return (t.startsWith('[') && t.endsWith(']')) || (t.startsWith('{') && t.endsWith('}'));
 }
 
-/**
- * Normalizza un oggetto (da JSON) in { L, W, H, kg }
- * Accetta sinonimi: l/len/length/Lunghezza/lato1, w/width/Larghezza/lato2, h/height/Altezza/lato3, kg/weight/peso
- */
+function hasDims(o) { return o && o.L > 0 && o.W > 0 && o.H > 0; }
+function emptyCollo() { return { L: 0, W: 0, H: 0, kg: 0 }; }
+
+/** Normalizza un oggetto (da JSON) in { L, W, H, kg } */
 function normalizeColloFromObject(obj) {
   if (!obj || typeof obj !== 'object') return null;
 
-  // Accetta sia maiuscole che minuscole e alcuni alias comuni
   const L = toNumber(
     obj.L ?? obj.l ?? obj.len ?? obj.length ?? obj.Lunghezza ?? obj.lato1 ?? obj.Lato1
   );
@@ -40,7 +39,7 @@ function normalizeColloFromObject(obj) {
     obj.kg ?? obj.Kg ?? obj.KG ?? obj.weight ?? obj.Weight ?? obj.peso ?? obj.Peso ?? obj.peso_kg ?? obj.PesoKg
   );
 
-  // Supporto opzionale campo "dims": "17x9x30"
+  // Supporto opzionale campo "dims": "40x30x10"
   if ((!L || !W || !H) && typeof obj.dims === 'string') {
     const m = obj.dims.match(/(\d+(?:[.,]\d+)?)\s*[xX×]\s*(\d+(?:[.,]\d+)?)\s*[xX×]\s*(\d+(?:[.,]\d+)?)/);
     if (m) {
@@ -57,79 +56,100 @@ function normalizeColloFromObject(obj) {
 
 /**
  * Parser per "Lista Colli Ordinata" o "Lista Colli".
- * Input può essere:
- *  - JSON (array/oggetto) con chiavi L/W/H/kg o sinonimi
- *  - Testo libero: "17x9x30 cm peso 2 kg", "17 x 9 x 30; 2,0kg", ecc.
- * Output: Array<{ L, W, H, kg }>
+ * Input:
+ *  - JSON (array/oggetto) con chiavi L/W/H/kg (o sinonimi)
+ *  - Testo libero (anche multi-riga): es. "40x30x10\n4 kg"
+ * Comportamento:
+ *  - Se dimensioni e peso sono su righe separate, vengono **uniti nello stesso collo**.
  */
 export function parseListaColli(text) {
   if (text == null) return [];
 
-  // Se è già un array JSON (oggetti)
+  // JSON già in array
   if (Array.isArray(text)) {
     return text.map(normalizeColloFromObject).filter(Boolean);
   }
 
-  // Se sembra JSON in stringa, prova a fare il parse
+  // Stringa JSON
   if (typeof text === 'string' && isJsonLike(text)) {
     try {
       const parsed = JSON.parse(text);
-      if (Array.isArray(parsed)) {
-        return parsed.map(normalizeColloFromObject).filter(Boolean);
-      }
+      if (Array.isArray(parsed)) return parsed.map(normalizeColloFromObject).filter(Boolean);
       const single = normalizeColloFromObject(parsed);
       return single ? [single] : [];
     } catch {
-      // fallback al parser testuale
+      // fallback testo
     }
   }
 
-  // Parser testuale riga-per-riga (separatore: newline, ;, |)
+  // Parser testuale
   const parts = String(text)
     .split(/[\n;|]+/g)
     .map(s => s.trim())
     .filter(Boolean);
 
   const results = [];
+  let pending = null; // collo in costruzione che attende dims e/o kg
 
-  // Cattura dimensioni complete, inclusi decimali con virgola o punto
   const dimsRe = /(\d+(?:[.,]\d+)?)\s*[xX×]\s*(\d+(?:[.,]\d+)?)\s*[xX×]\s*(\d+(?:[.,]\d+)?)/;
-  // Cattura peso in kg ovunque nella riga
   const kgRe = /(\d+(?:[.,]\d+)?)\s*(?:kg|kilo|chil?o)/i;
 
   for (const raw of parts) {
     const dm = raw.match(dimsRe);
     const km = raw.match(kgRe);
+    const hasDm = !!dm;
+    const hasKg = !!km;
 
-    if (dm) {
+    // Se iniziamo a lavorare e non c'è pending, crealo
+    if (!pending && (hasDm || hasKg)) pending = emptyCollo();
+
+    if (hasDm) {
       const L = toNumber(dm[1]);
       const W = toNumber(dm[2]);
-      const H = toNumber(dm[3]); // <-- niente troncamenti: prende tutte le cifre (es. "30")
-      const kg = km ? toNumber(km[1]) : 0;
-      if (L > 0 && W > 0 && H > 0) {
-        results.push({ L, W, H, kg });
-        continue;
+      const H = toNumber(dm[3]);
+
+      // Se abbiamo già un collo con dimensioni => quello era completo (o senza peso),
+      // e questa è l'inizio di un nuovo collo. Pusha il precedente.
+      if (pending && hasDims(pending)) {
+        results.push(pending);
+        pending = emptyCollo();
+      } else if (!pending) {
+        pending = emptyCollo();
       }
+
+      pending.L = L;
+      pending.W = W;
+      pending.H = H;
     }
 
-    // Riga con solo peso
-    if (!dm && km) {
-      results.push({ L: 0, W: 0, H: 0, kg: toNumber(km[1]) });
+    if (hasKg) {
+      const kg = toNumber(km[1]);
+      if (!pending) pending = emptyCollo();
+      // Se non c'è ancora peso sul collo in corso, assegna; altrimenti somma (raro ma sicuro)
+      pending.kg = toNumber(pending.kg, 0) + kg;
     }
+
+    // Se ora pending ha sia dims sia kg, è un collo completo → push e reset
+    if (pending && hasDims(pending) && pending.kg > 0) {
+      results.push(pending);
+      pending = null;
+    }
+  }
+
+  // Flush finale: se restano solo dimensioni o solo peso, pusha comunque
+  if (pending && (hasDims(pending) || pending.kg > 0)) {
+    results.push(pending);
+    pending = null;
   }
 
   return results;
 }
 
-/**
- * Somma i kg dei colli; se la somma è 0, usa rec.peso_reale_kg come fallback.
- * Ritorna un Number >= 0.
- */
+/** Somma i kg dei colli; se somma 0 → fallback a rec.peso_reale_kg */
 export function totalPesoKg(rec) {
   if (!rec) return 0;
   const colli = Array.isArray(rec.colli) ? rec.colli : [];
   const sum = colli.reduce((acc, c) => acc + toNumber(c?.kg, 0), 0);
   if (sum > 0) return Number(sum.toFixed(3));
-  // fallback su campo aggregato Airtable (già mappato in adapter.js)
   return toNumber(rec.peso_reale_kg, 0);
 }
