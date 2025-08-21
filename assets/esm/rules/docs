@@ -47,4 +47,3 @@ export function computeRequiredDocs(rec){
   const missing = required.filter(d=>!have.includes(d));
   return { required, missing, notes, country, tipo };
 }
-
