@@ -1,0 +1,14 @@
+{
+  "headers": [
+    {
+      "source": "/back-office/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "*" },
+        { "key": "Cross-Origin-Resource-Policy", "value": "cross-origin" },
+        { "key": "Cache-Control", "value": "public, max-age=0, s-maxage=31536000, immutable" }
+      ]
+    }
+  ]
+}
