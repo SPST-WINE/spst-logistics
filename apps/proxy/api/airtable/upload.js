@@ -1,6 +1,6 @@
 // /api/airtable/upload.js
 // POST /api/airtable/upload?filename=...&contentType=...
-// Body: raw file bytes. Ritorna { url } (public) per Airtable attachments.
+// Body: raw file bytes. Ritorna { url } pubblico per Airtable attachments.
 
 export default async function handler(req, res){
   if (handleCORS(req, res)) return;          // CORS + OPTIONS 204
@@ -45,7 +45,7 @@ export default async function handler(req, res){
 /* ───────── helpers ───────── */
 
 function handleCORS(req, res){
-  // CORS SEMPRE LARGO: niente allowlist qui per evitare mismatch.
+  // CORS largo per evitare mismatch con allowlist
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
