@@ -1,6 +1,6 @@
 // /api/airtable/upload.js
 // POST /api/airtable/upload?filename=...&contentType=...
-// Body: raw file bytes. Ritorna { url }.
+// Body: raw file bytes. Ritorna { url } (public) per Airtable attachments.
 
 export default async function handler(req, res){
   if (handleCORS(req, res)) return;          // CORS + OPTIONS 204
