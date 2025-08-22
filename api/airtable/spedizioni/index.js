@@ -20,45 +20,23 @@ export default async function handler(req, res) {
     const baseUrl = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`;
     const headers = { Authorization: `Bearer ${pat}` };
 
+    const params = new URLSearchParams();
+    params.set('pageSize', String(pageSize));
+    if (view) params.set('view', view);
+    if (offset) params.set('offset', offset);
+
     const formula = buildFilterFormula({ search, status, onlyOpen });
+    if (formula) params.set('filterByFormula', formula);
 
-    // Parametri comuni
-    const common = new URLSearchParams();
-    if (formula) common.set('filterByFormula', formula);
-    common.set('pageSize', String(pageSize));
-    if (view) common.set('view', view);
-    if (offset) common.set('offset', offset);
-
-    // Prova a ordinare su una lista di possibili campi "created"; fallback senza sort
-    const sortCandidates = [
-      'Data Creazione',      // il tuo campo
-      'Created',             // a volte nominato così
-      'Created time',        // nome di default Airtable EN
-      'Created Time',        // variante
-    ];
-
-    // 1) tenta i sort noti uno per volta; se 422 → prova il successivo
-    for (const field of sortCandidates) {
-      const p = new URLSearchParams(common);
-      p.set('sort[0][field]', field);
-      p.set('sort[0][direction]', 'desc');
-      try {
-        const out = await airtableFetch(`${baseUrl}?${p.toString()}`, { headers });
-        return res.status(200).json(out);
-      } catch (e) {
-        // se non è un 422 (unknown field), propaga subito
-        if (!String(e).includes('422')) throw e;
-        // se è 422, continua con il prossimo candidato
-      }
-    }
-
-    // 2) ultimo tentativo: senza sort (usa ordine della view)
-    const out2 = await airtableFetch(`${baseUrl}?${common.toString()}`, { headers });
-    return res.status(200).json(out2);
+    // NIENTE sort qui (alcuni campi non esistono in tutte le basi → 422/500).
+    const url = `${baseUrl}?${params.toString()}`;
+    const out = await airtableFetch(url, { headers });
+    return res.status(200).json(out);
 
   } catch (e) {
     console.error('[GET spedizioni] error', e);
-    res.status(500).json({ error: 'Fetch failed', details: String(e?.message || e) });
+    // Propaghiamo 502 con testo errore Airtable per diagnosi lato FE
+    return res.status(502).json({ error: 'Upstream error', details: String(e?.message || e) });
   }
 }
 
@@ -67,9 +45,10 @@ export default async function handler(req, res) {
 function buildFilterFormula({ search, status, onlyOpen }) {
   const parts = [];
 
-  // Ricerca full-text case-insensitive su più campi
   if (search) {
     const s = esc(search.toLowerCase());
+
+    // Campi indicizzati (estendibili)
     const FIELDS = [
       'ID Spedizione',
       'Destinatario',
@@ -86,16 +65,13 @@ function buildFilterFormula({ search, status, onlyOpen }) {
     ];
 
     const ors = [];
-
-    // match esatto veloce per ID e Tracking
+    // match esatto su ID / Tracking
     ors.push(`LOWER({ID Spedizione} & "") = "${s}"`);
     ors.push(`LOWER({Tracking Number} & "") = "${s}"`);
-
     // match "contiene" su tutti i campi
     for (const f of FIELDS) {
-      ors.push(`SEARCH("${s}", LOWER({${f}} & ""))`);
+      ors.push(`FIND("${s}", LOWER({${f}} & ""))`);
     }
-
     parts.push(`OR(${ors.join(',')})`);
   }
 
@@ -114,17 +90,12 @@ function clampInt(v,min,max,d){ const n=parseInt(v,10); return Number.isNaN(n)? 
 function assertEnv({ pat, baseId, table }){ if(!pat) throw new Error('AIRTABLE_PAT missing'); if(!baseId) throw new Error('AIRTABLE_BASE_ID missing'); if(!table) throw new Error('AIRTABLE_TABLE missing'); }
 
 function sendCORS(req,res){
-  const origin = req.headers.origin || ''; // quando apri la URL direttamente può essere vuoto
+  const origin = req.headers.origin || '';
   const list = (process.env.ORIGIN_ALLOWLIST || '*').split(',').map(s=>s.trim()).filter(Boolean);
-
-  const allowed =
-    list.includes('*') ||
-    (!origin) || // nessun header Origin: non settiamo CORS ma non è un errore
-    list.some(p => safeWildcardMatch(origin, p));
-
+  const allowed = list.includes('*') || (!origin) || list.some(p => safeWildcardMatch(origin, p));
   if (allowed && origin) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary','Origin');
-  res.setHeader('Access-Control-Allow-Methods','GET, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods','GET, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
   res.setHeader('Access-Control-Max-Age','600');
   if (req.method === 'OPTIONS') return res.status(204).end();
@@ -141,3 +112,11 @@ async function airtableFetch(url, init = {}, tries = 3, backoff = 500){
   for(let i=0;i<tries;i++){
     const r = await fetch(url, init);
     if (r.ok) return r.json();
+    const body = await r.text().catch(()=> '');
+    if ([429,500,502,503,504].includes(r.status) && i<tries-1){
+      await new Promise(rs=>setTimeout(rs, backoff*Math.pow(2,i)));
+      continue;
+    }
+    throw new Error(`Airtable ${r.status}: ${body}`);
+  }
+}
