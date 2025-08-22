@@ -1,10 +1,10 @@
 {
   "rewrites": [
-    { "source": "/back-office/(.*)", "destination": "/assets/esm/$1" }
+    { "source": "/back-office/:path*", "destination": "/assets/esm/:path*" }
   ],
   "headers": [
     {
-      "source": "/back-office/(.*)",
+      "source": "/back-office/:path*",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
@@ -14,7 +14,7 @@
       ]
     },
     {
-      "source": "/api/airtable/(.*)",
+      "source": "/api/airtable/:path*",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET,POST,PATCH,OPTIONS" },
