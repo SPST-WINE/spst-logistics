@@ -1,4 +1,4 @@
-<script>
+// assets/esm/back-office-tabs.js
 (function () {
   const tabbar = document.querySelector('.tabbar');
   if (!tabbar) return;
@@ -10,29 +10,33 @@
   };
 
   function setActive(which) {
-    tabs.forEach(a => a.classList.toggle('is-active', a.dataset.tab === which));
-    if (views.spedizioni)  views.spedizioni.style.display  = (which === 'spedizioni') ? 'block' : 'none';
-    if (views.preventivi)  views.preventivi.style.display  = (which === 'preventivi') ? 'block' : 'none';
+    tabs.forEach(a => {
+      const is = a.dataset.tab === which;
+      a.classList.toggle('is-active', is);
+      a.setAttribute('aria-current', is ? 'page' : 'false');
+    });
+    Object.entries(views).forEach(([k, el]) => {
+      if (el) el.style.display = (k === which) ? 'block' : 'none';
+    });
   }
 
   function whichFromHash(h) {
     return (h && h.includes('preventivi')) ? 'preventivi' : 'spedizioni';
   }
 
-  // click: niente scroll, aggiorno hash e UI
+  // click: niente scroll, aggiorna URL e UI
   tabs.forEach(a => {
     a.addEventListener('click', (e) => {
       e.preventDefault();
       const dest = a.dataset.tab;
-      history.replaceState(null, '', a.getAttribute('href')); // aggiorna URL
+      history.replaceState(null, '', a.getAttribute('href')); // #tab-...
       setActive(dest);
     });
   });
 
-  // cambio hash (es. link diretto #tab-preventivi)
+  // gestisci link diretto #tab-preventivi e cambi di hash esterni
   window.addEventListener('hashchange', () => setActive(whichFromHash(location.hash)));
 
   // init
   setActive(whichFromHash(location.hash));
 })();
-</script>
