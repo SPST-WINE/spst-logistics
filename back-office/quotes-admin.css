@@ -7,8 +7,17 @@
 #quotes-admin .qa-label{display:block;font-size:12px;color:var(--muted);margin:6px 0}
 #quotes-admin .qa-toolbar{display:flex;gap:10px;align-items:center}
 #quotes-admin .qa-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
-#quotes-admin .qa-split{display:flex;gap:14px}
-#quotes-admin .qa-sticky{position:sticky;top:18px;max-width:360px}
+#quotes-admin .qa-split{
+  display:grid;
+  grid-template-columns: 1fr 360px; /* contenuto | riepilogo */
+  align-items:start;
+  gap:16px;
+}
+#quotes-admin .qa-sticky{
+  position:sticky;
+  top:calc(var(--site-nav-h) + var(--bb-h) + 16px);
+  max-width:360px;
+}
 #quotes-admin .qa-inner{padding:12px}
 #quotes-admin .qa-keyval{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
 #quotes-admin .qa-divider{height:1px;background:rgba(255,255,255,.08);margin:10px 0}
@@ -37,3 +46,38 @@
   background:rgba(247,145,30,.15);border:1px solid #f7911e;color:#f7911e;
   border-radius:999px;padding:4px 8px
 }
+
+/* toolbar: allinea a destra e gestisci wrap */
+#quotes-admin .qa-toolbar{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+}
+
+/* bottoni: stessa altezza e padding */
+#quotes-admin .btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height:40px;                 /* <-- uguale per tutti */
+  padding:0 14px;              /* <-- uguale per tutti */
+  border-radius:10px;
+  font-weight:600;
+  line-height:1;
+  font-size:14px;
+}
+
+/* varianti locali */
+#quotes-admin .btn.ghost{
+  background:transparent;
+  border:1px solid rgba(255,255,255,.18);
+  color:var(--text);
+}
+#quotes-admin .btn.primary{
+  background:#f7911e;
+  border:1px solid #f7911e;
+  color:#1a1300;
+}
+
