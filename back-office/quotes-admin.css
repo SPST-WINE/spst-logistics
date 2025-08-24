@@ -81,3 +81,49 @@
   color:#1a1300;
 }
 
+/* === Toolbar finale (Termini & visibilità) : margine sopra === */
+#quotes-admin section.card:last-of-type .qa-toolbar{
+  margin-top: 12px;
+}
+
+/* === Bottoni: stessa altezza/padding/box model === */
+#quotes-admin .btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height:42px;
+  padding:0 16px;
+  border-radius:10px;
+  font-weight:600;
+  line-height:1;
+  box-sizing:border-box;
+}
+#quotes-admin .btn.ghost{
+  background:transparent;
+  border:1px solid rgba(255,255,255,.18);
+  color:var(--text);
+}
+#quotes-admin .btn.primary{
+  background:#f7911e;
+  border:1px solid #f7911e;
+  color:#1a1300;
+}
+
+/* === Badge opzioni: più piccoli e in alto a SINISTRA === */
+#quotes-admin .qa-option{
+  position:relative;
+  padding-top:28px;          /* spazio per il badge */
+}
+#quotes-admin .qa-badge{
+  position:absolute;
+  top:10px;
+  left:12px;                 /* spostato a sinistra */
+  right:auto;
+  font-size:10px;            /* più piccolo */
+  padding:3px 8px;
+  border-radius:999px;
+  background:rgba(247,145,30,.15);
+  border:1px solid #f7911e;
+  color:#f7911e;
+}
+
