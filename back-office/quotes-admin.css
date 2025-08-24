@@ -71,10 +71,10 @@
   justify-content:flex-end;
   flex-wrap:wrap;
 }
-/* margine sopra per le toolbar che stanno dentro le card (es. sezione finale) */
+/* margine sopra per le toolbar dentro card (es. sezione finale) */
 #quotes-admin section.card .qa-toolbar{ margin-top:12px; }
 
-/* bottoni uniformi (sia nelle header toolbar che nelle card toolbar) */
+/* bottoni uniformi (sia header che card) */
 #quotes-admin .qa-toolbar .btn,
 #quotes-admin .qa-header .btn{
   display:inline-flex;
@@ -102,7 +102,7 @@
 /* --- Badge OPZIONE ------------------------------------------------------- */
 #quotes-admin .qa-option{
   position:relative;
-  padding-top:48px;
+  padding-top:36px;           /* più spazio sotto il badge */
 }
 #quotes-admin .qa-badge{
   position:absolute;
