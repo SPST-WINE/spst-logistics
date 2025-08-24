@@ -1,27 +1,34 @@
-/* Scope solo Preventivi */
-#quotes-admin{ --brand:#f7911e; --input-bg:#15213b; }
-#quotes-admin .qa-title{margin:0;font-size:20px}
-#quotes-admin .qa-breadcrumbs{font-size:12px;color:var(--muted)}
-#quotes-admin .qa-h{margin:0 0 10px 0;font-size:16px}
-#quotes-admin .qa-sub{margin:0 0 8px 0;font-size:14px}
+/* === Scope Preventivi ===================================================== */
+#quotes-admin{
+  --brand:#f7911e;
+  --input-bg:#15213b;
+  --muted:#97a0b3;
+  --text:#e7ecf5;
+}
+
+/* --- Testi / titoli ------------------------------------------------------ */
+#quotes-admin .qa-title{margin:0 0 2px;font-size:20px;font-weight:700}
+#quotes-admin .qa-breadcrumbs{margin:0 0 6px;font-size:12px;color:var(--muted)}
+#quotes-admin .qa-h{margin:0 0 10px;font-size:16px;font-weight:600}
+#quotes-admin .qa-sub{margin:0 0 8px;font-size:14px;font-weight:600}
 #quotes-admin .qa-label{display:block;font-size:12px;color:var(--muted);margin:6px 0}
-#quotes-admin .qa-toolbar{display:flex;gap:10px;align-items:center}
+
+/* --- Layout --------------------------------------------------------------- */
 #quotes-admin .qa-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+
 #quotes-admin .qa-split{
   display:grid;
-  grid-template-columns: 1fr 360px; /* contenuto | riepilogo */
-  align-items:start;
+  grid-template-columns:1fr 360px; /* contenuto | riepilogo */
   gap:16px;
+  align-items:start;
 }
 #quotes-admin .qa-sticky{
   position:sticky;
   top:calc(var(--site-nav-h) + var(--bb-h) + 16px);
   max-width:360px;
 }
-#quotes-admin .qa-inner{padding:12px}
-#quotes-admin .qa-keyval{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
-#quotes-admin .qa-divider{height:1px;background:rgba(255,255,255,.08);margin:10px 0}
 
+#quotes-admin .qa-inner{padding:12px}
 #quotes-admin .qa-grid{display:grid;gap:14px}
 #quotes-admin .qa-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
 #quotes-admin .qa-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
@@ -29,25 +36,34 @@
   #quotes-admin .qa-cols-2,#quotes-admin .qa-cols-3{grid-template-columns:1fr}
 }
 
-#quotes-admin input,#quotes-admin select,#quotes-admin textarea{
-  width:100%;padding:10px 12px;border:1px solid rgba(255,255,255,.14);
-  border-radius:10px;background:var(--input-bg);color:var(--text);outline:none
-}
-#quotes-admin input:focus,#quotes-admin select:focus,#quotes-admin textarea:focus{
-  border-color:#94a3b8;box-shadow:0 0 0 3px rgba(148,163,184,0.25)
-}
-#quotes-admin input::placeholder,#quotes-admin textarea::placeholder{color:#b9c4d8;opacity:.9}
+#quotes-admin .qa-keyval{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+#quotes-admin .qa-divider{height:1px;background:rgba(255,255,255,.08);margin:10px 0}
 
-#quotes-admin .btn.primary{background:#f7911e;border-color:#f7911e;color:#1a1300;font-weight:700}
-
-#quotes-admin .qa-option{position:relative}
-#quotes-admin .qa-badge{
-  position:absolute;right:14px;top:14px;font-size:11px;
-  background:rgba(247,145,30,.15);border:1px solid #f7911e;color:#f7911e;
-  border-radius:999px;padding:4px 8px
+/* --- Campi --------------------------------------------------------------- */
+#quotes-admin input,
+#quotes-admin select,
+#quotes-admin textarea{
+  width:100%;
+  padding:10px 12px;
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:10px;
+  background:var(--input-bg);
+  color:var(--text);
+  outline:none;
 }
+#quotes-admin input:focus,
+#quotes-admin select:focus,
+#quotes-admin textarea:focus{
+  border-color:#94a3b8;
+  box-shadow:0 0 0 3px rgba(148,163,184,.25);
+}
+#quotes-admin input::placeholder,
+#quotes-admin textarea::placeholder{color:#b9c4d8;opacity:.9}
 
-/* toolbar: allinea a destra e gestisci wrap */
+/* --- Card --------------------------------------------------------------- */
+#quotes-admin .card{border-radius:16px}
+
+/* --- Toolbar & Bottoni --------------------------------------------------- */
 #quotes-admin .qa-toolbar{
   display:flex;
   gap:10px;
@@ -55,39 +71,12 @@
   justify-content:flex-end;
   flex-wrap:wrap;
 }
+/* margine sopra per le toolbar che stanno dentro le card (es. sezione finale) */
+#quotes-admin section.card .qa-toolbar{ margin-top:12px; }
 
-/* bottoni: stessa altezza e padding */
-#quotes-admin .btn{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  height:40px;                 /* <-- uguale per tutti */
-  padding:0 14px;              /* <-- uguale per tutti */
-  border-radius:10px;
-  font-weight:600;
-  line-height:1;
-  font-size:14px;
-}
-
-/* varianti locali */
-#quotes-admin .btn.ghost{
-  background:transparent;
-  border:1px solid rgba(255,255,255,.18);
-  color:var(--text);
-}
-#quotes-admin .btn.primary{
-  background:#f7911e;
-  border:1px solid #f7911e;
-  color:#1a1300;
-}
-
-/* === Toolbar finale (Termini & visibilità) : margine sopra === */
-#quotes-admin section.card:last-of-type .qa-toolbar{
-  margin-top: 12px;
-}
-
-/* === Bottoni: stessa altezza/padding/box model === */
-#quotes-admin .btn{
+/* bottoni uniformi (sia nelle header toolbar che nelle card toolbar) */
+#quotes-admin .qa-toolbar .btn,
+#quotes-admin .qa-header .btn{
   display:inline-flex;
   align-items:center;
   justify-content:center;
@@ -96,6 +85,7 @@
   border-radius:10px;
   font-weight:600;
   line-height:1;
+  font-size:14px;
   box-sizing:border-box;
 }
 #quotes-admin .btn.ghost{
@@ -109,21 +99,20 @@
   color:#1a1300;
 }
 
-/* === Badge opzioni: più piccoli e in alto a SINISTRA === */
+/* --- Badge OPZIONE ------------------------------------------------------- */
 #quotes-admin .qa-option{
   position:relative;
-  padding-top:28px;          /* spazio per il badge */
+  padding-top:28px;           /* spazio per il badge */
 }
 #quotes-admin .qa-badge{
   position:absolute;
   top:10px;
-  left:12px;                 /* spostato a sinistra */
+  left:12px;                  /* in alto a sinistra */
   right:auto;
-  font-size:10px;            /* più piccolo */
+  font-size:10px;             /* più piccolo */
   padding:3px 8px;
   border-radius:999px;
   background:rgba(247,145,30,.15);
   border:1px solid #f7911e;
   color:#f7911e;
 }
-
