@@ -3,6 +3,8 @@ import { fetchShipments, patchShipmentTracking, uploadAttachment } from './airta
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
+import './back-office-tabs.js';
+
 
 const elSearch   = document.getElementById('search');
 const elOnlyOpen = document.getElementById('only-open');
