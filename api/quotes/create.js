@@ -6,6 +6,31 @@ const allowlist = (process.env.ORIGIN_ALLOWLIST || '')
   .map(s => s.trim())
   .filter(Boolean);
 
+// --- MAPPATURA NOMI CAMPO (adatta ai tuoi nomi reali su Airtable)
+const F = {
+  prev: {
+    email: 'Email_Cliente',
+    currency: 'Valuta',           // <— cambia qui se su Preventivi si chiama diverso
+    validUntil: 'Valido_Fino_Al',
+    notes: 'Note_Globali',
+    // ... (mittente/destinatario/termini)
+  },
+  opt: {
+    link: 'Preventivo',
+    index: 'Indice',
+    carrier: 'Corriere',
+    service: 'Servizio',
+    transit: 'Tempo_Resa',
+    incoterm: 'Incoterm',
+    payer: 'Oneri_A_Carico',
+    price: 'Prezzo',
+    currency: 'Valuta',           // <— cambia qui se su Opzioni si chiama diverso
+    weight: 'Peso_Kg',
+    notes: 'Note_Operative',
+    recommended: 'Consigliata',
+  }
+};
+
 // supporta wildcard tipo https://*.webflow.io
 function isAllowed(origin) {
   if (!origin) return false;
