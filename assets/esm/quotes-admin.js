@@ -37,6 +37,7 @@ function buildOptions(select, items, placeholder = 'Seleziona…') {
   });
 }
 
+// -- Lettura anagrafiche
 function readSender() {
   const scope = document;
   return {
@@ -63,7 +64,33 @@ function readRecipient() {
   };
 }
 
+// -- Best option helpers
+function getBestOptionIndex() {
+  const checked = qs('input[name="bestOption"]:checked');
+  if (!checked) return null;
+  const opt = checked.closest('.qa-option');
+  const idx = Number(opt?.getAttribute('data-option'));
+  return Number.isFinite(idx) ? idx : null;
+}
+
+function isOptionComplete(o) {
+  return !!(
+    o.carrier &&
+    o.service &&
+    o.transit &&
+    o.incoterm &&
+    o.payer &&
+    typeof o.price === 'number' &&
+    o.price > 0
+  );
+}
+
+// -- Lettura opzioni (con flag "recommended")
 function readOptions() {
+  // prendo il radio selezionato UNA volta sola, poi confronto i wrapper
+  const best = qs('input[name="bestOption"]:checked');
+  const bestWrap = best ? best.closest('.qa-option') : null;
+
   return qsa('.qa-option').map((wrap, i) => {
     const index    = Number(wrap.getAttribute('data-option')) || i + 1;
     const carrier  = qs('.qa-carrier',  wrap)?.value || '';
@@ -75,13 +102,11 @@ function readOptions() {
     const currency = qs('.qa-currency', wrap)?.value || 'EUR';
     const weight   = toNumber(qs('.qa-weight',  wrap)?.value);
     const notes    = qs('.qa-notes',    wrap)?.value?.trim() || '';
-    const recommended = !!qs('.qa-recommend input', wrap)?.checked;
+
+    const recommended = !!bestWrap && bestWrap === wrap;
+
     return { index, carrier, service, transit, incoterm, payer, price, currency, weight, notes, recommended };
   });
-}
-
-function isOptionComplete(o) {
-  return !!(o.carrier && o.service && o.transit && o.incoterm && o.payer && typeof o.price === 'number' && o.price > 0);
 }
 
 // Validazione minima per abilitare il bottone
@@ -92,13 +117,18 @@ function formIsValid() {
   return !!(email && validity && opts.length >= 1);
 }
 
+// Riepilogo laterale
 function refreshSummary() {
   text(qs('#sum-customer'), qs('#customer-email')?.value?.trim() || '—');
   text(qs('#sum-validity'), fmtDate(qs('#quote-validity')?.value));
   text(qs('#sum-currency'), qs('#quote-currency')?.value || 'EUR');
   text(qs('#sum-options'), `${readOptions().length} opzioni`);
+
+  const bestIdx = getBestOptionIndex();
+  text(qs('#sum-best'), bestIdx ? `Opzione ${bestIdx}` : '—');
 }
 
+// Submit
 async function handleCreate(ev) {
   ev.preventDefault();
 
@@ -114,7 +144,7 @@ async function handleCreate(ev) {
     recipient    : readRecipient(),
     terms: {
       version       : qs('#terms-version')?.value || 'v1.0',
-      visibility    : qs('#link-visibility')?.value || 'Immediata', // valori allineati ai single select Airtable
+      visibility    : qs('#link-visibility')?.value || 'Immediata',
       slug          : '', // opzionale
       linkExpiryDays: toNumber(qs('#link-expiry')?.value) || undefined,
       linkExpiryDate: undefined,
@@ -148,9 +178,8 @@ async function handleCreate(ev) {
       return;
     }
 
-    // Successo
     alert('Preventivo creato! ID: ' + json.id);
-    // Qui potresti fare redirect alla vista del preventivo o pulire il form.
+    // TODO: redirect alla vista del preventivo o reset soft del form
   } catch (err) {
     console.error('[quotes-admin] network error:', err);
     alert('Errore di rete durante la creazione del preventivo (vedi console).');
@@ -160,6 +189,7 @@ async function handleCreate(ev) {
   }
 }
 
+// Wireup
 function wireup() {
   const root = qs('#view-preventivi');
   if (!root) return;
@@ -179,6 +209,11 @@ function wireup() {
     const btn = qs('#btn-create');
     if (btn) btn.disabled = !formIsValid();
   }));
+
+  // Aggiorna riepilogo al cambio della "consigliata"
+  qsa('input[name="bestOption"]', root).forEach(r =>
+    r.addEventListener('change', refreshSummary)
+  );
 
   // Primo refresh + wiring bottone
   refreshSummary();
