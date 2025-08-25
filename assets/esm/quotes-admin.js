@@ -1,27 +1,54 @@
 // assets/esm/quotes-admin.js
 console.debug('[quotes-admin] boot');
 
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
+const $  = (s, r=document) => r.querySelector(s);
+const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
 const root = $('#quotes-admin');
-if (!root) {
-  console.warn('[quotes-admin] #quotes-admin non trovato');
+
+if (!root) console.warn('[quotes-admin] #quotes-admin non trovato');
+
+/* ---------- UI: trasforma i campi "Corriere*" in single-select ---------- */
+function upgradeCarrierInputs() {
+  const carriers =
+    Array.isArray(window.BACK_OFFICE_CONFIG?.CARRIERS) &&
+    window.BACK_OFFICE_CONFIG.CARRIERS.length
+      ? window.BACK_OFFICE_CONFIG.CARRIERS
+      : ['DHL','UPS','FedEx','TNT','Privato']; // fallback
+
+  $$('.qa-option', root).forEach(opt => {
+    // trova il contenitore del campo con label "Corriere*"
+    const fieldBoxes = $$('.qa-grid.qa-cols-2 > div', opt);
+    const corriereBox = fieldBoxes.find(b =>
+      $('.qa-label', b)?.textContent?.trim().toLowerCase().startsWith('corriere')
+    );
+    if (!corriereBox) return;
+
+    const old = $('input, select', corriereBox);
+
+    // crea/select e popola
+    const sel = document.createElement('select');
+    sel.setAttribute('data-field','carrier');
+
+    // placeholder
+    const ph = new Option('Seleziona corriere', '', true, false);
+    ph.disabled = true;
+    sel.add(ph);
+    carriers.forEach(c => sel.add(new Option(c, c)));
+
+    if (old) corriereBox.replaceChild(sel, old);
+    else corriereBox.appendChild(sel);
+  });
+
+  console.debug('[quotes-admin] carrier selects ready');
 }
 
-// --- abilita bottoni e collega eventi
+/* ---------------- Abilita bottoni e collega eventi ---------------- */
 function enableAndWireButtons() {
   const createBtns = $$('button[title="Crea preventivo"]', root);
   const draftBtns  = $$('button[title="Salva bozza"]', root);
 
-  // abilita
-  [...createBtns, ...draftBtns].forEach(b => {
-    if (!b) return;
-    b.disabled = false;
-    b.removeAttribute('disabled');
-  });
+  [...createBtns, ...draftBtns].forEach(b => { b.disabled = false; b.removeAttribute('disabled'); });
 
-  // collega click
   createBtns.forEach(b => {
     b.addEventListener('click', (e) => {
       e.preventDefault();
@@ -29,27 +56,25 @@ function enableAndWireButtons() {
         console.error('[quotes-admin] errore creazione', err);
         alert('Errore durante la creazione del preventivo.');
       });
-    }, { once: false });
+    });
   });
 
   console.debug('[quotes-admin] create buttons wired:', createBtns.length);
 }
 
-// --- helper per leggere un valore in modo sicuro
+/* ---------------- Helpers ---------------- */
 const val = (el) => (el && typeof el.value === 'string') ? el.value.trim() : '';
 
-// --- raccoglie i dati dal form
+/* ---------------- Raccoglie i dati dal form ---------------- */
 function collectPayload() {
-  // Card "Dati cliente" (è la prima section dentro .qa-split)
+  // Dati cliente
   const customerCard = $('.qa-split section.card', root);
   const cliente_email = val($('#customer-email', customerCard));
   const valuta        = val($('select', customerCard)) || 'EUR';
   const validita_iso  = val($('input[type="date"]', customerCard)) || null;
   const note_globali  = val($('textarea', customerCard));
 
-  // Mittente (usa i data-field che hai impostato)
-  const mitt = $('.qa-inner .qa-sub', root)?.textContent?.includes('Mittente')
-    ? $('.qa-inner', root) : null;
+  // Mittente
   const mittente = {
     sender_name:    val($('[data-field="sender_name"]', root)),
     sender_country: val($('[data-field="sender_country"]', root)),
@@ -60,8 +85,8 @@ function collectPayload() {
     sender_tax:     val($('[data-field="sender_tax"]', root)),
   };
 
-  // Destinatario (non hai data-field: leggo per posizione nella seconda card "Destinatario")
-  const destCard = $$('.qa-inner', root)[1] || null;
+  // Destinatario (per posizione nella 2ª card)
+  const destCard   = $$('.qa-inner', root)[1] || null;
   const destInputs = destCard ? $$('.qa-grid input', destCard) : [];
   const destinatario = {
     name:    val(destInputs[0]),
@@ -75,36 +100,40 @@ function collectPayload() {
 
   const note_spedizione = val($('section.card textarea[rows="3"]', root));
 
-  // Opzioni (2 card .qa-option). Leggo i campi per placeholder/ordine.
+  // Opzioni
   const opzioni = $$('.qa-option', root).map(opt => {
-    const badge = $('.qa-badge', opt)?.textContent?.trim() || '';
-    const corriere = val($('input[placeholder^="DHL"]', opt));
-    const servizio = val($('input[placeholder*="Express"]', opt));
-    const resa     = val($('input[placeholder*="giorni"]', opt));
-    const incoterm = val($('input[placeholder^="EXW"]', opt));
+    const badge    = $('.qa-badge', opt)?.textContent?.trim() || '';
+    const carrier  = $('select[data-field="carrier"]', opt) ||
+                     $('select[name="carrier"]', opt) ||
+                     $('input[placeholder^="DHL"]', opt); // fallback se non trasformato
+    const servizio = $('input[placeholder*="Express"]', opt);
+    const resa     = $('input[placeholder*="giorni"]', opt);
+    const incoterm = $('input[placeholder^="EXW"]', opt);
     const selects  = $$('select', opt);
-    const oneriSel = selects[0];
-    const valutaSel= selects[1];
-    const prezzo   = Number(val($('input[type="number"][placeholder^="es. 12"]', opt)) || 0);
-    const peso     = Number(val($('input[type="number"][placeholder^="es. 2"]', opt)) || 0);
-    const note     = val($('textarea', opt));
+    // dopo l'upgrade avremo 2 select: [carrier, oneri] + valuta più avanti
+    const oneriSel = selects.find(s => s !== carrier && !s.matches('[data-field="carrier"]'));
+    const valutaSel= selects[selects.length - 1];
+
+    const prezzo = Number(val($('input[type="number"][placeholder^="es. 12"]', opt)) || 0);
+    const peso   = Number(val($('input[type="number"][placeholder^="es. 2"]', opt)) || 0);
+    const note   = val($('textarea', opt));
 
     return {
       etichetta: badge,
-      corriere,
-      servizio,
-      resa,
-      incoterm,
-      oneri: val(oneriSel),
+      corriere:  val(carrier),
+      servizio:  val(servizio),
+      resa:      val(resa),
+      incoterm:  val(incoterm),
+      oneri:     val(oneriSel),
       prezzo,
-      valuta: val(valutaSel) || 'EUR',
+      valuta:    val(valutaSel) || 'EUR',
       peso,
       note,
       consigliata: false
     };
   });
 
-  // Termini & visibilità (ultima section)
+  // Termini & visibilità
   const termsSection = $('section.card:last-of-type', root);
   const selects = $$('select', termsSection);
   const versione   = val(selects[0]) || 'v1.0';
@@ -124,13 +153,17 @@ function collectPayload() {
   };
 }
 
-// --- invio al backend
+/* ---------------- Invio al backend ---------------- */
 async function handleCreateQuote() {
   const payload = collectPayload();
 
   if (!payload.cliente_email) {
     alert('Inserisci l’email del cliente.');
     $('#customer-email', root)?.focus();
+    return;
+  }
+  if (payload.opzioni.some(o => !o.corriere)) {
+    alert('Scegli il corriere in ogni opzione.');
     return;
   }
 
@@ -141,18 +174,15 @@ async function handleCreateQuote() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
-
   const data = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    console.error('[quotes-admin] response error', data);
-    throw new Error(data?.error || 'HTTP ' + r.status);
-  }
+  if (!r.ok) throw new Error(data?.error || 'HTTP ' + r.status);
 
   alert(`Preventivo creato!\nID: ${data.id || '—'}`);
 }
 
-// bootstrap
+/* ---------------- Bootstrap ---------------- */
 document.addEventListener('DOMContentLoaded', () => {
   if (!root) return;
-  enableAndWireButtons();
+  upgradeCarrierInputs();   // 👈 rende i corrieri single-select
+  enableAndWireButtons();   // 👈 abilita bottoni e collega click
 });
