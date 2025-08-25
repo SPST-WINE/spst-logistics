@@ -174,3 +174,158 @@ function init() {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// === helpers ===============================================================
+const $ = (s, el=document) => el.querySelector(s);
+const $$ = (s, el=document) => Array.from(el.querySelectorAll(s));
+const ISO = d => d ? new Date(d).toISOString() : null;
+
+// mappa select a stringa “pulita”
+const val = el => (el?.value ?? '').trim();
+
+// === 1) COSTRUISCI PAYLOAD PREVENTIVO secondo i CAMPI AIRTABLE =============
+function collectQuote() {
+  return {
+    // Tabella Preventivi
+    Email_Cliente: val($('#customer-email')),
+    Valuta: val($('#quote-currency')) || 'EUR',
+    Valido_Fino_Al: val($('#quote-validity')),         // input type="date" → YYYY-MM-DD ok per Airtable
+    Note_Globali: val($('#quote-notes')),
+
+    Versione_Termini: val($('#terms-version')),
+    Visibilita: val($('#link-visibility')) === 'Solo bozza' ? 'Solo_Bozza' : 'Immediata',
+
+    Stato: 'Bozza',            // iniziale; “Pubblicato” lo metteremo in /publish
+    // Mittente_*
+    Mittente_RagioneSociale: val($('[data-field="sender_name"]')),
+    Mittente_Paese:           val($('[data-field="sender_country"]')),
+    Mittente_Citta:           val($('[data-field="sender_city"]')),
+    Mittente_CAP:             val($('[data-field="sender_zip"]')),
+    Mittente_Indirizzo:       val($('[data-field="sender_address"]')),
+    Mittente_Telefono:        val($('[data-field="sender_phone"]')),
+    Mittente_TaxID:           val($('[data-field="sender_tax"]')),
+    // Destinatario_*
+    Destinatario_RagioneSociale: val($('[data-field="rcpt_name"]')),
+    Destinatario_Paese:          val($('[data-field="rcpt_country"]')),
+    Destinatario_Citta:          val($('[data-field="rcpt_city"]')),
+    Destinatario_CAP:            val($('[data-field="rcpt_zip"]')),
+    Destinatario_Indirizzo:      val($('[data-field="rcpt_address"]')),
+    Destinatario_Telefono:       val($('[data-field="rcpt_phone"]')),
+    Destinatario_TaxID:          val($('[data-field="rcpt_tax"]')),
+  };
+}
+
+// === 2) OPZIONI (tabella OpzioniPreventivo) ================================
+function collectOptions() {
+  return $$('.qa-option').map(card => {
+    const idx = Number(card.getAttribute('data-option') || 0);
+    return {
+      Indice: idx,
+      Corriere: val(card.querySelector('.qa-carrier')),
+      Servizio: val(card.querySelector('.qa-service')),
+      Tempo_Resa: val(card.querySelector('.qa-transit')),
+      Incoterm: val(card.querySelector('.qa-incoterm')),
+      Oneri_A_Carico: val(card.querySelector('.qa-payer')),
+      Prezzo: Number(card.querySelector('.qa-price')?.value || 0),
+      Valuta: val(card.querySelector('.qa-currency')) || 'EUR',
+      Peso_Kg: Number(card.querySelector('.qa-weight')?.value || 0),
+      Note_Operative: val(card.querySelector('.qa-notes')),
+      Consigliata: false,
+    };
+  }).filter(o => o.Corriere || o.Prezzo); // tieni solo opzioni “compilate”
+}
+
+// === 3) VALIDAZIONE MINIMA ==================================================
+function canCreate() {
+  const q = collectQuote();
+  const opts = collectOptions();
+  const emailOk = /\S+@\S+\.\S+/.test(q.Email_Cliente || '');
+  const hasOneOpt = opts.some(o => o.Corriere && o.Incoterm && o.Prezzo > 0);
+  return emailOk && q.Valido_Fino_Al && hasOneOpt;
+}
+
+// === 4) ABILITA BOTTONI =====================================================
+function wireEnableButtons() {
+  const inputs = $$(
+    '#quotes-admin input, #quotes-admin select, #quotes-admin textarea'
+  );
+  const btnCreate = $('#btn-create') || document.querySelector('.qa-header .btn.primary[title="Crea preventivo"]');
+  const btnPreview = $('#btn-preview');
+
+  const refresh = () => {
+    const ok = canCreate();
+    if (btnCreate) btnCreate.disabled = !ok;
+    if (btnPreview) btnPreview.disabled = !window.__LAST_QUOTE_ID__;
+  };
+  inputs.forEach(i => i.addEventListener('input', refresh));
+  refresh();
+}
+
+// === 5) CREA PREVENTIVO (chiama la tua API /api/quotes/create) =============
+async function handleCreate(e) {
+  e?.preventDefault?.();
+  if (!canCreate()) return alert('Compila email, validità e almeno 1 opzione completa.');
+
+  const payload = {
+    quote: collectQuote(),
+    options: collectOptions(),
+  };
+
+  const resp = await fetch('/api/quotes/create', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const json = await resp.json();
+  if (!resp.ok) return alert(json.error || 'Errore creazione');
+
+  // salva id per publish/anteprima
+  window.__LAST_QUOTE_ID__ = json.id;
+  (document.getElementById('btn-preview') || {}).disabled = false;
+
+  // feedback
+  console.log('Creato:', json);
+  alert('Preventivo creato ✔️');
+}
+
+// === 6) PUBLISH (genera link pubblico) =====================================
+async function handlePreview() {
+  const id = window.__LAST_QUOTE_ID__;
+  if (!id) return alert('Prima crea il preventivo.');
+  const days = Number($('#link-expiry')?.value || 14);
+
+  const resp = await fetch('/api/quotes/publish', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify({ quoteId: id, expiryDays: days }),
+  });
+  const j = await resp.json();
+  if (!resp.ok) return alert(j.error || 'Errore pubblicazione');
+  window.open(j.url, '_blank');
+}
+
+// === boot ==================================================================
+export function initQuotesAdmin() {
+  // popola select Corriere/Incoterm se non lo fai già altrove
+  const carriers = (window.BACK_OFFICE_CONFIG?.CARRIERS || []);
+  const incoterms = (window.BACK_OFFICE_CONFIG?.INCOTERMS || []);
+  $$('.qa-carrier').forEach(s => {
+    s.innerHTML = '<option value="">Seleziona corriere</option>' +
+      carriers.map(c=>`<option>${c}</option>`).join('');
+  });
+  $$('.qa-incoterm').forEach(s => {
+    s.innerHTML = '<option value="">Seleziona incoterm</option>' +
+      incoterms.map(c=>`<option>${c}</option>`).join('');
+  });
+
+  wireEnableButtons();
+
+  // aggancia bottoni (rispetta i tuoi id/class esistenti)
+  (document.getElementById('btn-create') ||
+   document.querySelector('.qa-header .btn.primary[title="Crea preventivo"]'))
+    ?.addEventListener('click', handleCreate);
+
+  document.getElementById('btn-preview')
+    ?.addEventListener('click', handlePreview);
+}
+
