@@ -1,6 +1,42 @@
 // api/quotes/create.js
 // Node runtime (Next/Vercel API). Crea un Preventivo e le Opzioni collegate su Airtable.
 
+// api/quotes/create.js
+const allowlist = (process.env.ORIGIN_ALLOWLIST || '').split(',').map(s => s.trim()).filter(Boolean);
+
+function setCors(req, res) {
+  const origin = req.headers.origin || '';
+  const allowed = allowlist.includes(origin);
+  const headers = {
+    'Access-Control-Allow-Origin': allowed ? origin : '*',
+    'Vary': 'Origin',
+    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Credentials': 'true',
+  };
+  Object.entries(headers).forEach(([k, v]) => res.setHeader(k, v));
+  if (req.method === 'OPTIONS') { res.status(204).end(); return true; }
+  return false;
+}
+
+export default async function handler(req, res) {
+  if (setCors(req, res)) return;
+
+  if (req.method !== 'POST') {
+    res.status(405).json({ error: 'Method not allowed' }); return;
+  }
+
+  try {
+    const payload = req.body || {};
+    // TODO: crea record in "Preventivi" + "OpzioniPreventivo" su Airtable
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: String(e) });
+  }
+}
+
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') {
     return res.status(200).send('ok');
