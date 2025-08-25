@@ -179,3 +179,48 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: String(err.message || err) });
   }
 }
+
+// /api/quotes/create.ts
+import type { VercelRequest, VercelResponse } from '@vercel/node';
+import fetch from 'node-fetch';
+
+const { AIRTABLE_TOKEN, AIRTABLE_BASE_ID, TB_PREVENTIVI, TB_OPZIONI } = process.env;
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  if (req.method !== 'POST') return res.status(405).json({ error:'Method not allowed' });
+  try {
+    const { quote, options } = req.body || {};
+    if (!quote?.Email_Cliente) return res.status(400).json({ error:'Email_Cliente mancante' });
+
+    // 1) CREA PREVENTIVO
+    const r1 = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(TB_PREVENTIVI!)}`,{
+      method:'POST',
+      headers:{ 'Authorization':`Bearer ${AIRTABLE_TOKEN}`, 'Content-Type':'application/json' },
+      body: JSON.stringify({ fields: quote })
+    });
+    const j1 = await r1.json();
+    if (!r1.ok) return res.status(r1.status).json(j1);
+    const quoteId = j1.id as string;
+
+    // 2) CREA OPZIONI (se presenti)
+    const opts = Array.isArray(options) ? options.filter(Boolean) : [];
+    if (opts.length) {
+      const payload = {
+        records: opts.map(o => ({
+          fields: { ...o, Preventivo: [quoteId] }
+        }))
+      };
+      const r2 = await fetch(`https://api.airtable.com/v0/${AIRTABLE_BASE_ID}/${encodeURIComponent(TB_OPZIONI!)}`,{
+        method:'POST',
+        headers:{ 'Authorization':`Bearer ${AIRTABLE_TOKEN}`, 'Content-Type':'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const j2 = await r2.json();
+      if (!r2.ok) return res.status(r2.status).json(j2);
+    }
+
+    return res.status(200).json({ id: quoteId });
+  } catch (e:any) {
+    return res.status(500).json({ error: e?.message || 'create failed' });
+  }
+}
