@@ -216,45 +216,45 @@ async function handleCreate(ev){
 
 // === wiring =================================================================
 function wireup(){
-  const root = qs('#view-preventivi');
-  if (!root) return;
+  const view = qs('#view-preventivi');
+  if (!view) return;
+
+  const container = qs('#quotes-admin', view);
 
   // Popola select da config
   const carriers  = (window.BACK_OFFICE_CONFIG?.CARRIERS  || ['DHL','UPS','FedEx','TNT','Privato']);
   const incoterms = (window.BACK_OFFICE_CONFIG?.INCOTERMS || ['EXW','DAP','DDP']);
-  qsa('.qa-option', root).forEach(wrap => {
+  qsa('.qa-option', container).forEach(wrap => {
     buildOptions(qs('.qa-carrier',  wrap), carriers,  'Seleziona corriere');
     buildOptions(qs('.qa-incoterm', wrap), incoterms, 'Seleziona incoterm');
   });
 
+  // Utility per abilitare/disabilitare i bottoni create
+  const syncButtons = () => {
+    const ok = formIsValid();
+    qsa('[data-action="create"], #btn-create', container).forEach(b => b.disabled = !ok);
+    // bozza la lasciamo sempre cliccabile
+    qsa('[data-action="draft"]', container).forEach(b => b.disabled = false);
+  };
+
   // Input → riepilogo + abilitazioni
-  qsa('input,select,textarea', root).forEach(el => el.addEventListener('input', () => {
-    refreshSummary();
-    const createBtns = qsa('[data-action="create"], #btn-create');
-    createBtns.forEach(b => b.disabled = !formIsValid());
-    // appena tocchi qualcosa, abilito salvataggio bozza
-    qsa('[data-action="draft"]').forEach(b => b.disabled = false);
-  }));
+  qsa('input,select,textarea', container).forEach(el => {
+    el.addEventListener('input', () => { refreshSummary(); syncButtons(); });
+    if (el.name === 'bestOption') el.addEventListener('change', () => { refreshSummary(); });
+  });
 
-  // cambio radio consigliata → highlight + riepilogo
-  qsa('input[name="bestOption"]').forEach(r => r.addEventListener('change', () => {
-    applyRecommendedStyles(); refreshSummary();
-  }));
-
-  // Bottoni
-  qsa('[data-action="draft"]').forEach(b => b.addEventListener('click', handleDraft));
-  qsa('[data-action="create"], #btn-create').forEach(b => b.addEventListener('click', handleCreate));
+  // EVENT DELEGATION: intercetta click sui bottoni dentro #quotes-admin
+  container.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-action="draft"], [data-action="create"], #btn-create');
+    if (!btn) return;
+    if (btn.matches('[data-action="draft"]')) return handleDraft(e);
+    // [data-action="create"] o #btn-create → pubblicazione
+    return handleCreate(e);
+  });
 
   // Stato iniziale
   refreshSummary();
-  qsa('[data-action="create"], #btn-create').forEach(b => b.disabled = !formIsValid());
-  // bozza: abilitata (o se riprendi una bozza, comunque abilitata)
-  qsa('[data-action="draft"]').forEach(b => b.disabled = false);
-
-  // ripresa bozza in sessione
-  if (currentDraftId){
-    qsa('[data-action="draft"], [data-action="create"], #btn-create').forEach(b => b.disabled = false);
-  }
+  syncButtons();
 }
 
 document.addEventListener('DOMContentLoaded', wireup);
