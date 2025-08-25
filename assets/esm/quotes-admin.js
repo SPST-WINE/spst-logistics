@@ -114,8 +114,8 @@ async function handleCreate(ev) {
     recipient    : readRecipient(),
     terms: {
       version       : qs('#terms-version')?.value || 'v1.0',
-      visibility    : qs('#link-visibility')?.value || 'Immediata', // valori allineati ai single select Airtable
-      slug          : '', // opzionale
+      visibility    : qs('#link-visibility')?.value || 'Immediata',
+      slug          : '',
       linkExpiryDays: toNumber(qs('#link-expiry')?.value) || undefined,
       linkExpiryDate: undefined,
     },
@@ -138,15 +138,30 @@ async function handleCreate(ev) {
       body: JSON.stringify(body),
     });
 
-    let json;
-    try { json = await resp.json(); } catch { json = null; }
+    let json = null;
+    try { json = await resp.json(); } catch {}
 
     if (!resp.ok || json?.ok === false) {
-      console.error('CREATE FAILED →', { status: resp.status, json });
-      const msg = json?.message || json?.error || `HTTP ${resp.status}`;
-      alert(`Errore durante la creazione del preventivo:\n${msg}`);
+      console.error('CREATE FAILED →', { status: resp.status, json, sent: body });
+      const errObj = json?.error ?? json;
+      const errMsg =
+        (typeof errObj === 'string' && errObj) ||
+        errObj?.message ||
+        JSON.stringify(errObj, null, 2) ||
+        `HTTP ${resp.status}`;
+      alert(`Errore durante la creazione del preventivo:\n${errMsg}`);
       return;
     }
+
+    alert('Preventivo creato! ID: ' + json.id);
+  } catch (err) {
+    console.error('[quotes-admin] network error:', err);
+    alert('Errore di rete durante la creazione del preventivo (vedi console).');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = prevLabel || 'Crea preventivo';
+  }
+}
 
     // Successo
     alert('Preventivo creato! ID: ' + json.id);
