@@ -116,3 +116,50 @@
   border:1px solid #f7911e;
   color:#f7911e;
 }
+
+/* ===== Recommend toggle & card highlight ===== */
+.qa-opt-head{
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:10px;
+}
+
+.qa-recommend input{ position:absolute; opacity:0; pointer-events:none; }
+
+.qa-recommend .qa-recommend-ui{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:8px 12px; border-radius:999px;
+  background:#0e152b; border:1px solid rgba(255,255,255,.12);
+  cursor:pointer; user-select:none;
+  transition:all .16s ease;
+  font-size:12px; font-weight:600; color:#cfd6e6;
+}
+
+.qa-recommend .qa-recommend-ui .dot{
+  width:10px; height:10px; border-radius:50%;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.55);
+  background:transparent; transition:all .16s ease;
+}
+
+.qa-recommend input:checked + .qa-recommend-ui{
+  border-color: rgba(79,124,255,.55);
+  box-shadow: inset 0 0 0 1px rgba(79,124,255,.35);
+  color:#e7ecf5;
+}
+
+.qa-recommend input:checked + .qa-recommend-ui .dot{
+  box-shadow:none; background:var(--accent);
+}
+
+/* Evidenzia l'intera card quando consigliata */
+.qa-option{
+  transition: box-shadow .18s ease, border-color .18s ease, transform .12s ease;
+}
+.qa-option.is-recommended{
+  border-color: rgba(79,124,255,.45);
+  box-shadow: inset 0 0 0 1px rgba(79,124,255,.35), 0 6px 20px rgba(0,0,0,.28);
+}
+.qa-option.is-recommended .qa-badge{
+  background: rgba(79,124,255,.18);
+  border-color: rgba(79,124,255,.45);
+  color:#dbe4ff;
+}
