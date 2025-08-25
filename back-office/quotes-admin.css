@@ -163,3 +163,23 @@
   border-color: rgba(79,124,255,.45);
   color:#dbe4ff;
 }
+
+/* --- Opzioni di spedizione: spaziatura pill consigliata --- */
+.qa-option .qa-opt-head{
+  display:flex;
+  align-items:flex-start;   /* allinea il gruppo in alto */
+  gap:10px;
+  margin-bottom:10px;       /* aria sotto l’intestazione */
+}
+
+.qa-option .qa-badge{
+  margin-top:2px;           /* micro-allineamento badge con radio */
+}
+
+.qa-option .qa-recommend{
+  margin-top:10px;          /* spinge giù il pill rispetto al badge */
+}
+
+@media (min-width: 1024px){
+  .qa-option .qa-recommend{ margin-top:12px; }  /* un filo più giù su desktop */
+}
