@@ -1,156 +1,187 @@
 // assets/esm/quotes-admin.js
-// Back Office – Preventivi (pulito: niente $ duplicati)
 
-const _q  = (sel, root = document) => root.querySelector(sel);
-const _qa = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+// Deduce l'origin giusto (lo script viene servito da spst-logistics.vercel.app)
+const API_BASE = new URL(import.meta.url).origin;
 
-const CFG = window.BACK_OFFICE_CONFIG || {};
-const LOG = !!CFG.DEBUG;
+// Helpers comodi
+const qs  = (sel, el=document) => el.querySelector(sel);
+const qsa = (sel, el=document) => Array.from(el.querySelectorAll(sel));
+const text = (el, v) => { if (el) el.textContent = v ?? '—'; };
 
-const ORIGIN = (() => { try { return new URL(CFG.PROXY_BASE).origin; } catch { return location.origin; } })();
-const CREATE_URL = `${ORIGIN}/api/quotes/create`;
-
-const ROOT = _q('#quotes-admin');
-if (!ROOT) {
-  console.warn('[quotes-admin] #quotes-admin non trovato');
+function fmtDate(value) {
+  if (!value) return '—';
+  try {
+    const d = new Date(value);
+    if (Number.isNaN(+d)) return '—';
+    return d.toISOString().slice(0,10); // YYYY-MM-DD (coerente con Airtable Date)
+  } catch { return '—'; }
 }
 
-// Helpers ---------------------------------------------------------------------
+function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : undefined; }
 
-function fillSelect(el, items, placeholder) {
-  if (!el) return;
-  el.innerHTML = '';
-  if (placeholder) {
-    const p = document.createElement('option');
-    p.disabled = true; p.selected = true; p.textContent = placeholder;
-    el.appendChild(p);
-  }
-  (items || []).forEach(v => {
-    const o = document.createElement('option');
-    o.value = v; o.textContent = v;
-    el.appendChild(o);
+function buildOptions(select, items, placeholder='Seleziona…') {
+  if (!select) return;
+  select.innerHTML = '';
+  const ph = document.createElement('option');
+  ph.value = ''; ph.textContent = placeholder; select.appendChild(ph);
+  items.forEach(v => {
+    const opt = document.createElement('option');
+    opt.value = v;
+    opt.textContent = v;
+    select.appendChild(opt);
   });
 }
 
-function collectOption(block, idx) {
+function readSender() {
+  const scope = document;
   return {
-    Indice: idx,
-    Corriere: _q('.qa-carrier', block)?.value?.trim() || '',
-    Servizio: _q('.qa-service', block)?.value?.trim() || '',
-    Tempo_Resa: _q('.qa-transit', block)?.value?.trim() || '',
-    Incoterm: _q('.qa-incoterm', block)?.value || '',
-    Oneri_A_Carico: _q('.qa-payer', block)?.value || '',
-    Prezzo: parseFloat(_q('.qa-price', block)?.value || '0'),
-    Valuta: _q('.qa-currency', block)?.value || 'EUR',
-    Peso_Kg: parseFloat(_q('.qa-weight', block)?.value || '0'),
-    Note_Operative: _q('.qa-notes', block)?.value?.trim() || '',
+    name   : qs('[data-field="sender_name"]', scope)?.value?.trim() || '',
+    country: qs('[data-field="sender_country"]', scope)?.value?.trim() || '',
+    city   : qs('[data-field="sender_city"]', scope)?.value?.trim() || '',
+    zip    : qs('[data-field="sender_zip"]', scope)?.value?.trim() || '',
+    address: qs('[data-field="sender_address"]', scope)?.value?.trim() || '',
+    phone  : qs('[data-field="sender_phone"]', scope)?.value?.trim() || '',
+    tax    : qs('[data-field="sender_tax"]', scope)?.value?.trim() || '',
   };
 }
 
-function collectData() {
-  const quote = {
-    Email_Cliente: _q('#customer-email')?.value.trim() || '',
-    Valuta: _q('#quote-currency')?.value || 'EUR',
-    Valido_Fino_Al: _q('#quote-validity')?.value || null,
-    Note_Globali: _q('#quote-notes')?.value?.trim() || '',
-
-    Mittente_Nome: _q('[data-field="sender_name"]')?.value?.trim() || '',
-    Mittente_Paese: _q('[data-field="sender_country"]')?.value?.trim() || '',
-    Mittente_Citta: _q('[data-field="sender_city"]')?.value?.trim() || '',
-    Mittente_CAP: _q('[data-field="sender_zip"]')?.value?.trim() || '',
-    Mittente_Indirizzo: _q('[data-field="sender_address"]')?.value?.trim() || '',
-    Mittente_Telefono: _q('[data-field="sender_phone"]')?.value?.trim() || '',
-    Mittente_Tax: _q('[data-field="sender_tax"]')?.value?.trim() || '',
-
-    Destinatario_Nome: _q('[data-field="rcpt_name"]')?.value?.trim() || '',
-    Destinatario_Paese: _q('[data-field="rcpt_country"]')?.value?.trim() || '',
-    Destinatario_Citta: _q('[data-field="rcpt_city"]')?.value?.trim() || '',
-    Destinatario_CAP: _q('[data-field="rcpt_zip"]')?.value?.trim() || '',
-    Destinatario_Indirizzo: _q('[data-field="rcpt_address"]')?.value?.trim() || '',
-    Destinatario_Telefono: _q('[data-field="rcpt_phone"]')?.value?.trim() || '',
-    Destinatario_Tax: _q('[data-field="rcpt_tax"]')?.value?.trim() || '',
-
-    Note_Spedizione: _q('#shipment-notes')?.value?.trim() || '',
-
-    Versione_Termini: _q('#terms-version')?.value || '',
-    Visibilita: _q('#link-visibility')?.value || 'Immediata',
-    Scadenza_Link_Giorni: parseInt(_q('#link-expiry')?.value || '14', 10),
+function readRecipient() {
+  const scope = document;
+  return {
+    name   : qs('[data-field="rcpt_name"]', scope)?.value?.trim() || '',
+    country: qs('[data-field="rcpt_country"]', scope)?.value?.trim() || '',
+    city   : qs('[data-field="rcpt_city"]', scope)?.value?.trim() || '',
+    zip    : qs('[data-field="rcpt_zip"]', scope)?.value?.trim() || '',
+    address: qs('[data-field="rcpt_address"]', scope)?.value?.trim() || '',
+    phone  : qs('[data-field="rcpt_phone"]', scope)?.value?.trim() || '',
+    tax    : qs('[data-field="rcpt_tax"]', scope)?.value?.trim() || '',
   };
-
-  const options = _qa('.qa-option').map((b, i) => collectOption(b, i + 1))
-    .filter(o => o.Corriere || o.Servizio || o.Prezzo);
-
-  return { quote, options };
 }
 
-function validate({ quote, options }) {
-  if (!quote.Email_Cliente || !quote.Valido_Fino_Al) return false;
-  if (options.length === 0) return false;
-  const first = options[0];
-  if (!first.Corriere || !first.Servizio || !first.Prezzo) return false;
-  return true;
+function readOptions() {
+  return qsa('.qa-option').map((wrap, i) => {
+    const index = Number(wrap.getAttribute('data-option')) || i+1;
+    const carrier  = qs('.qa-carrier',  wrap)?.value || '';
+    const service  = qs('.qa-service',  wrap)?.value?.trim() || '';
+    const transit  = qs('.qa-transit',  wrap)?.value?.trim() || '';
+    const incoterm = qs('.qa-incoterm', wrap)?.value || '';
+    const payer    = qs('.qa-payer',    wrap)?.value || '';
+    const price    = toNumber(qs('.qa-price',   wrap)?.value);
+    const currency = qs('.qa-currency', wrap)?.value || 'EUR';
+    const weight   = toNumber(qs('.qa-weight',  wrap)?.value);
+    const notes    = qs('.qa-notes',    wrap)?.value?.trim() || '';
+    const recommended = false; // in futuro: checkbox “Consigliata”
+
+    return { index, carrier, service, transit, incoterm, payer, price, currency, weight, notes, recommended };
+  });
+}
+
+// Validazione minima per abilitare il bottone
+function formIsValid() {
+  const email = qs('#customer-email')?.value?.trim();
+  const validity = qs('#quote-validity')?.value;
+  const opts = readOptions().filter(o =>
+    o.carrier && o.service && o.transit && o.incoterm && o.payer && toNumber(o.price) > 0
+  );
+  return !!(email && validity && opts.length >= 1);
 }
 
 function refreshSummary() {
-  const { quote, options } = collectData();
-  const sc = _q('#sum-customer'); if (sc) sc.textContent = quote.Email_Cliente || '—';
-  const sv = _q('#sum-validity'); if (sv) sv.textContent = quote.Valido_Fino_Al || '—';
-  const cu = _q('#sum-currency'); if (cu) cu.textContent = quote.Valuta || 'EUR';
-  const so = _q('#sum-options');  if (so) so.textContent = `${options.length} opzioni`;
-
-  const btn = _q('#btn-create');
-  if (btn) btn.disabled = !validate({ quote, options });
+  text(qs('#sum-customer'), qs('#customer-email')?.value?.trim() || '—');
+  text(qs('#sum-validity'), fmtDate(qs('#quote-validity')?.value));
+  text(qs('#sum-currency'), qs('#quote-currency')?.value || 'EUR');
+  text(qs('#sum-options'), `${readOptions().length} opzioni`);
 }
 
-function bindListeners() {
-  _qa('#quotes-admin input, #quotes-admin select, #quotes-admin textarea')
-    .forEach(el => {
-      el.addEventListener('input', refreshSummary);
-      el.addEventListener('change', refreshSummary);
-    });
-}
+async function handleCreate(ev) {
+  ev.preventDefault();
 
-function initCombos() {
-  const carriers  = CFG.CARRIERS  || ['DHL','UPS','FedEx','TNT','Privato'];
-  const incoterms = CFG.INCOTERMS || ['EXW','DAP','DDP'];
-  _qa('.qa-option').forEach(block => {
-    fillSelect(_q('.qa-carrier', block), carriers, 'Seleziona corriere');
-    fillSelect(_q('.qa-incoterm', block), incoterms, 'Seleziona incoterm');
-  });
-}
+  const btn = ev.currentTarget;
+  if (btn.disabled) return;
 
-// Actions ---------------------------------------------------------------------
+  const body = {
+    customerEmail: qs('#customer-email')?.value?.trim(),
+    currency    : qs('#quote-currency')?.value || 'EUR',
+    validUntil  : qs('#quote-validity')?.value || null,
+    notes       : qs('#quote-notes')?.value?.trim() || '',
 
-async function handleCreate() {
-  const data = collectData();
-  if (!validate(data)) return;
+    sender   : readSender(),
+    recipient: readRecipient(),
+
+    terms: {
+      version        : qs('#terms-version')?.value || 'v1.0',
+      visibility     : qs('#link-visibility')?.value || 'Immediata', // valori allineati ai single select Airtable
+      slug           : '', // opzionale: puoi popolarlo in futuro
+      linkExpiryDays : toNumber(qs('#link-expiry')?.value) || undefined,
+      // opzionale: se vuoi calcolare anche una data precisa di scadenza lato FE
+      linkExpiryDate : undefined,
+    },
+
+    options: readOptions(),
+  };
+
+  if (!formIsValid()) {
+    alert('Compila i campi obbligatori (email, validità, almeno 1 opzione completa).');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Creo…';
 
   try {
-    const res = await fetch(CREATE_URL, {
+    const resp = await fetch(`${API_BASE}/api/quotes/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify(data)
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(body),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json().catch(() => ({}));
-    console.log('[quotes-admin] Preventivo creato:', json);
-    alert('Preventivo creato con successo.');
+    const json = await resp.json();
+
+    if (!resp.ok || json?.ok === false) {
+      const msg = json?.error?.message || json?.error || `HTTP ${resp.status}`;
+      console.error('[quotes-admin] create failed:', json);
+      alert(`Errore durante la creazione del preventivo:\n${msg}`);
+      return;
+    }
+
+    // Successo
+    alert('Preventivo creato! ID: ' + json.id);
+    // Reset soft: mantieni i dati anagrafici se vuoi; al momento non resetto nulla.
   } catch (err) {
-    console.error('[quotes-admin] Create failed:', err);
-    alert('Errore durante la creazione del preventivo.');
+    console.error('[quotes-admin] network error:', err);
+    alert('Errore di rete durante la creazione del preventivo.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Crea preventivo';
   }
 }
 
-// Boot ------------------------------------------------------------------------
+function wireup() {
+  const root = qs('#view-preventivi');
+  if (!root) return;
 
-function init() {
-  if (!ROOT) return;
-  initCombos();
-  bindListeners();
+  // Popola select Corriere/Incoterm
+  const carriers  = (window.BACK_OFFICE_CONFIG?.CARRIERS  || ['DHL','UPS','FedEx','TNT','Privato']);
+  const incoterms = (window.BACK_OFFICE_CONFIG?.INCOTERMS || ['EXW','DAP','DDP']);
+  qsa('.qa-option').forEach(wrap => {
+    buildOptions(qs('.qa-carrier',  wrap), carriers,  'Seleziona corriere');
+    buildOptions(qs('.qa-incoterm', wrap), incoterms, 'Seleziona incoterm');
+  });
+
+  // Aggiorna riepilogo e stato del bottone on input
+  const inputs = qsa('input,select,textarea', root);
+  inputs.forEach(el => el.addEventListener('input', () => {
+    refreshSummary();
+    qs('#btn-create') && (qs('#btn-create').disabled = !formIsValid());
+  }));
+
+  // Primo refresh
   refreshSummary();
-  const btn = _q('#btn-create');
-  if (btn) btn.addEventListener('click', e => { e.preventDefault(); handleCreate(); });
-  if (LOG) console.log('Persistenza LOCAL attivata');
+  const createBtn = qs('#btn-create');
+  if (createBtn) {
+    createBtn.disabled = !formIsValid();
+    createBtn.addEventListener('click', handleCreate);
+  }
 }
-init();
+
+// Avvio
+document.addEventListener('DOMContentLoaded', wireup);
