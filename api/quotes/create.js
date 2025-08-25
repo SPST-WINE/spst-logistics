@@ -191,16 +191,16 @@ export default async function handler(req, res) {
     // crea Preventivo
     const qResp = await atCreate(TB_QUOTE, [{ fields: qFields }]);
     const quoteId = qResp.records?.[0]?.id;
-    if (!quoteId) {
-      throw new Error('Quote created but no record id returned');
-    }
+    if (typeof quoteId !== 'string' || !quoteId.startsWith('rec')) {
+    throw new Error('Invalid quoteId returned from Airtable: ' + String(quoteId));
+     }
 
     // crea Opzioni col link inverso
     const rawOptions = Array.isArray(body.options) ? body.options : [];
     if (rawOptions.length) {
       const optRecords = rawOptions.map(o => ({
         fields: {
-          Preventivo     : [ { id: quoteId } ],
+          Preventivo     : [ quoteId ],
           Indice         : toNumber(o.index),
           Corriere       : o.carrier,
           Servizio       : o.service,
