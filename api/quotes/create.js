@@ -6,30 +6,54 @@ const allowlist = (process.env.ORIGIN_ALLOWLIST || '')
   .map(s => s.trim())
   .filter(Boolean);
 
-// --- MAPPATURA NOMI CAMPO (adatta ai tuoi nomi reali su Airtable)
+
+// === MAPPATURA NOMI CAMPI (frontend -> Airtable) ===
 const F = {
   prev: {
-    email: 'Email_Cliente',
-    currency: 'Valuta',           // <— cambia qui se su Preventivi si chiama diverso
+    email     : 'Email_Cliente',
+    currency  : 'Valuta',
     validUntil: 'Valido_Fino_Al',
-    notes: 'Note_Globali',
-    // ... (mittente/destinatario/termini)
+    notes     : 'Note_Globali',
+    // ...
   },
+
+  // 🔧 CORREGGI QUI IN BASE AI NOMI DELLA TUA BASE
+  mittente: {
+    name   : 'Mittente_Nome',
+    country: 'Mittente_Paese',
+    city   : 'Mittente_Citta',
+    zip    : 'Mittente_CAP',        // se in tabella è "CAP", metti 'CAP'
+    address: 'Mittente_Indirizzo',
+    phone  : 'Mittente_Telefono',
+    tax    : 'Mittente_Tax',        // ← PRIMA era Mittente_TaxID
+  },
+
+  destinatario: {
+    name   : 'Destinatario_Nome',
+    country: 'Destinatario_Paese',
+    city   : 'Destinatario_Citta',
+    zip    : 'Destinatario_CAP',
+    address: 'Destinatario_Indirizzo',
+    phone  : 'Destinatario_Telefono',
+    tax    : 'Destinatario_Tax',    // usa il nome che hai in tabella (es. Destinatario_Tax)
+  },
+
   opt: {
-    link: 'Preventivo',
-    index: 'Indice',
-    carrier: 'Corriere',
-    service: 'Servizio',
-    transit: 'Tempo_Resa',
-    incoterm: 'Incoterm',
-    payer: 'Oneri_A_Carico',
-    price: 'Prezzo',
-    currency: 'Valuta',           // <— cambia qui se su Opzioni si chiama diverso
-    weight: 'Peso_Kg',
-    notes: 'Note_Operative',
+    link       : 'Preventivo',
+    index      : 'Indice',
+    carrier    : 'Corriere',
+    service    : 'Servizio',
+    transit    : 'Tempo_Resa',
+    incoterm   : 'Incoterm',
+    payer      : 'Oneri_A_Carico',
+    price      : 'Prezzo',
+    currency   : 'Valuta',          // tabella OpzioniPreventivo: campo "Valuta" (single select)
+    weight     : 'Peso_Kg',
+    notes      : 'Note_Operative',
     recommended: 'Consigliata',
-  }
+  },
 };
+
 
 // supporta wildcard tipo https://*.webflow.io
 function isAllowed(origin) {
