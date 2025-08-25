@@ -13,22 +13,17 @@ function fmtDate(value) {
   try {
     const d = new Date(value);
     if (Number.isNaN(+d)) return '—';
-    return d.toISOString().slice(0, 10); // YYYY-MM-DD
+    return d.toISOString().slice(0,10); // YYYY-MM-DD
   } catch { return '—'; }
 }
 
-function toNumber(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : undefined;
-}
+function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : undefined; }
 
-function buildOptions(select, items, placeholder = 'Seleziona…') {
+function buildOptions(select, items, placeholder='Seleziona…') {
   if (!select) return;
   select.innerHTML = '';
   const ph = document.createElement('option');
-  ph.value = '';
-  ph.textContent = placeholder;
-  select.appendChild(ph);
+  ph.value = ''; ph.textContent = placeholder; select.appendChild(ph);
   items.forEach(v => {
     const opt = document.createElement('option');
     opt.value = v;
@@ -37,7 +32,6 @@ function buildOptions(select, items, placeholder = 'Seleziona…') {
   });
 }
 
-// -- Lettura anagrafiche
 function readSender() {
   const scope = document;
   return {
@@ -64,33 +58,7 @@ function readRecipient() {
   };
 }
 
-// -- Best option helpers
-function getBestOptionIndex() {
-  const checked = qs('input[name="bestOption"]:checked');
-  if (!checked) return null;
-  const opt = checked.closest('.qa-option');
-  const idx = Number(opt?.getAttribute('data-option'));
-  return Number.isFinite(idx) ? idx : null;
-}
-
-function isOptionComplete(o) {
-  return !!(
-    o.carrier &&
-    o.service &&
-    o.transit &&
-    o.incoterm &&
-    o.payer &&
-    typeof o.price === 'number' &&
-    o.price > 0
-  );
-}
-
-// -- Lettura opzioni (con flag "recommended")
 function readOptions() {
-  // prendo il radio selezionato UNA volta sola, poi confronto i wrapper
-  const best = qs('input[name="bestOption"]:checked');
-  const bestWrap = best ? best.closest('.qa-option') : null;
-
   return qsa('.qa-option').map((wrap, i) => {
     const index    = Number(wrap.getAttribute('data-option')) || i + 1;
     const carrier  = qs('.qa-carrier',  wrap)?.value || '';
@@ -102,11 +70,21 @@ function readOptions() {
     const currency = qs('.qa-currency', wrap)?.value || 'EUR';
     const weight   = toNumber(qs('.qa-weight',  wrap)?.value);
     const notes    = qs('.qa-notes',    wrap)?.value?.trim() || '';
-
-    const recommended = !!bestWrap && bestWrap === wrap;
-
+    const recommended = !!qs('.qa-recommend input', wrap)?.checked;
     return { index, carrier, service, transit, incoterm, payer, price, currency, weight, notes, recommended };
   });
+}
+
+function isOptionComplete(o) {
+  return !!(o.carrier && o.service && o.transit && o.incoterm && o.payer && typeof o.price === 'number' && o.price > 0);
+}
+
+// ===== Bottoni "Crea preventivo" (multipli) =====
+const getCreateButtons = () => qsa('[data-action="create"]');
+
+function updateCreateButtonsState() {
+  const disabled = !formIsValid();
+  getCreateButtons().forEach(b => b.disabled = disabled);
 }
 
 // Validazione minima per abilitare il bottone
@@ -117,21 +95,26 @@ function formIsValid() {
   return !!(email && validity && opts.length >= 1);
 }
 
-// Riepilogo laterale
 function refreshSummary() {
+  const opts = readOptions();
   text(qs('#sum-customer'), qs('#customer-email')?.value?.trim() || '—');
   text(qs('#sum-validity'), fmtDate(qs('#quote-validity')?.value));
   text(qs('#sum-currency'), qs('#quote-currency')?.value || 'EUR');
-  text(qs('#sum-options'), `${readOptions().length} opzioni`);
+  text(qs('#sum-options'), `${opts.length} opzioni`);
 
-  const bestIdx = getBestOptionIndex();
-  text(qs('#sum-best'), bestIdx ? `Opzione ${bestIdx}` : '—');
+  const best = opts.find(o => o.recommended)?.index;
+  text(qs('#sum-best'), best ? `Opzione ${best}` : '—');
 }
 
-// Submit
+function applyRecommendedStyles() {
+  qsa('.qa-option').forEach(wrap => {
+    const isRec = !!qs('.qa-recommend input', wrap)?.checked;
+    wrap.classList.toggle('is-recommended', isRec);
+  });
+}
+
 async function handleCreate(ev) {
   ev.preventDefault();
-
   const btn = ev.currentTarget;
   if (btn.disabled) return;
 
@@ -145,7 +128,7 @@ async function handleCreate(ev) {
     terms: {
       version       : qs('#terms-version')?.value || 'v1.0',
       visibility    : qs('#link-visibility')?.value || 'Immediata',
-      slug          : '', // opzionale
+      slug          : '',
       linkExpiryDays: toNumber(qs('#link-expiry')?.value) || undefined,
       linkExpiryDate: undefined,
     },
@@ -157,7 +140,9 @@ async function handleCreate(ev) {
     return;
   }
 
-  btn.disabled = true;
+  // disabilita tutti i bottoni, mostra "Creo…" solo su quello cliccato
+  const allCreateBtns = getCreateButtons();
+  allCreateBtns.forEach(b => b.disabled = true);
   const prevLabel = btn.textContent;
   btn.textContent = 'Creo…';
 
@@ -168,8 +153,7 @@ async function handleCreate(ev) {
       body: JSON.stringify(body),
     });
 
-    let json;
-    try { json = await resp.json(); } catch { json = null; }
+    let json; try { json = await resp.json(); } catch { json = null; }
 
     if (!resp.ok || json?.ok === false) {
       console.error('CREATE FAILED →', { status: resp.status, json });
@@ -179,17 +163,17 @@ async function handleCreate(ev) {
     }
 
     alert('Preventivo creato! ID: ' + json.id);
-    // TODO: redirect alla vista del preventivo o reset soft del form
+    // TODO: redirect alla pagina dettaglio o reset soft dei campi.
   } catch (err) {
     console.error('[quotes-admin] network error:', err);
     alert('Errore di rete durante la creazione del preventivo (vedi console).');
   } finally {
-    btn.disabled = false;
     btn.textContent = prevLabel || 'Crea preventivo';
+    allCreateBtns.forEach(b => b.disabled = false);
+    updateCreateButtonsState();
   }
 }
 
-// Wireup
 function wireup() {
   const root = qs('#view-preventivi');
   if (!root) return;
@@ -202,26 +186,27 @@ function wireup() {
     buildOptions(qs('.qa-incoterm', wrap), incoterms, 'Seleziona incoterm');
   });
 
-  // Aggiorna riepilogo e abilitazione bottone on input
-  const inputs = qsa('input,select,textarea', root);
-  inputs.forEach(el => el.addEventListener('input', () => {
-    refreshSummary();
-    const btn = qs('#btn-create');
-    if (btn) btn.disabled = !formIsValid();
-  }));
+  // Input/change → aggiorna riepilogo, highlight e stato bottoni
+  qsa('input,select,textarea', root).forEach(el => {
+    el.addEventListener('input', () => {
+      refreshSummary();
+      applyRecommendedStyles();
+      updateCreateButtonsState();
+    });
+    el.addEventListener('change', () => {
+      refreshSummary();
+      applyRecommendedStyles();
+      updateCreateButtonsState();
+    });
+  });
 
-  // Aggiorna riepilogo al cambio della "consigliata"
-  qsa('input[name="bestOption"]', root).forEach(r =>
-    r.addEventListener('change', refreshSummary)
-  );
+  // Wiring bottoni "crea" (header + footer)
+  getCreateButtons().forEach(b => b.addEventListener('click', handleCreate));
 
-  // Primo refresh + wiring bottone
+  // Primo refresh/stato
   refreshSummary();
-  const createBtn = qs('#btn-create');
-  if (createBtn) {
-    createBtn.disabled = !formIsValid();
-    createBtn.addEventListener('click', handleCreate);
-  }
+  applyRecommendedStyles();
+  updateCreateButtonsState();
 }
 
 // Avvio
