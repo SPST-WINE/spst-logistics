@@ -1,44 +1,36 @@
-// quotes-admin.js
-const ROOT = document.getElementById('quotes-admin');
-if (ROOT) {
-  const emailInput = ROOT.querySelector('#customer-email');
+// assets/esm/quotes-admin.js (estratto)
+const root = document.querySelector('#quotes-admin');
+if (root) {
+  const btnCreate = root.querySelector('.qa-toolbar .btn.primary');
+  btnCreate?.addEventListener('click', async (e) => {
+    e.preventDefault();
 
-  // ---- Helper API
-  async function fetchSenderByEmail(email) {
-    const res = await fetch(`/api/quotes/lookup?email=${encodeURIComponent(email)}`, { credentials: 'same-origin' });
-    if (!res.ok) return null;
-    if (res.status === 204) return null;
-    return res.json();
-  }
-  function fillSender(data) {
-    if (!data) return;
-    for (const [k, v] of Object.entries(data)) {
-      const el = ROOT.querySelector(`[data-field="${k}"]`);
-      if (el && !el.value) el.value = v;
-    }
-  }
+    const email = root.querySelector('#customer-email')?.value?.trim();
+    if (!email) return alert('Inserisci email cliente');
 
-  // ---- Autofill al change/blur
-  const handler = async () => {
-    const email = emailInput?.value.trim();
-    if (!email) return;
-    const data = await fetchSenderByEmail(email);
-    fillSender(data);
-  };
-  if (emailInput) {
-    emailInput.addEventListener('change', handler);
-    emailInput.addEventListener('blur', handler);
-  }
+    // TODO: mappa tutti i campi reali
+    const payload = {
+      cliente_email: email,
+      valuta: root.querySelector('select')?.value || 'EUR',
+      validita_iso: root.querySelector('input[type="date"]')?.value || null,
+      opzioni: [
+        { etichetta: 'OPZIONE 1', corriere: 'DHL', servizio: 'Express', resa: '2–5 giorni', incoterm: 'DDP', oneri: 'Mittente', prezzo: 120, valuta: 'EUR', peso: 2.5, note: '' },
+        { etichetta: 'OPZIONE 2', corriere: 'DHL', servizio: 'Economy', resa: '3–7 giorni', incoterm: 'DAP', oneri: 'Mittente', prezzo: 140, valuta: 'EUR', peso: 3.0, note: '' },
+      ],
+      termini: { versione: 'v1.0', visibilita: 'Subito', scadenza_giorni: 14 },
+    };
 
-  // ---- (Prossimo step) Creazione preventivo
-  async function createQuote(payload) {
-    const res = await fetch('/api/quotes/create', {
+    const r = await fetch('/api/quotes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error('Create failed');
-    return res.json(); // { quoteId, publicSlug }
-  }
-  // TODO: bind al click del bottone quando usciamo dal mock.
+
+    const data = await r.json();
+    if (!r.ok) {
+      console.error(data);
+      return alert('Errore creazione preventivo');
+    }
+    alert(`Preventivo creato: ${data.id}`);
+  });
 }
