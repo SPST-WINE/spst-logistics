@@ -172,7 +172,7 @@ export default async function handler(req, res) {
       Mittente_CAP     : body.sender?.zip,
       Mittente_Indirizzo: body.sender?.address,
       Mittente_Telefono : body.sender?.phone,
-      Mittente_TaxID    : body.sender?.tax,
+      Mittente_Tax    : body.sender?.tax,
 
       Destinatario_Nome     : body.recipient?.name,
       Destinatario_Paese    : body.recipient?.country,
@@ -180,7 +180,7 @@ export default async function handler(req, res) {
       Destinatario_CAP      : body.recipient?.zip,
       Destinatario_Indirizzo: body.recipient?.address,
       Destinatario_Telefono : body.recipient?.phone,
-      Destinatario_TaxID    : body.recipient?.tax,
+      Destinatario_Tax    : body.recipient?.tax,
 
       Versione_Termini  : body.terms?.version,
       Visibilita        : mapVisibility(body.terms?.visibility),
