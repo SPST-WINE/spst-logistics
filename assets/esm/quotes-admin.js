@@ -32,27 +32,25 @@ function buildOptions(select, items, placeholder='Seleziona…') {
 }
 
 function readSender() {
-  const scope = document;
   return {
-    name   : qs('[data-field="sender_name"]', scope)?.value?.trim() || '',
-    country: qs('[data-field="sender_country"]', scope)?.value?.trim() || '',
-    city   : qs('[data-field="sender_city"]', scope)?.value?.trim() || '',
-    zip    : qs('[data-field="sender_zip"]', scope)?.value?.trim() || '',
-    address: qs('[data-field="sender_address"]', scope)?.value?.trim() || '',
-    phone  : qs('[data-field="sender_phone"]', scope)?.value?.trim() || '',
-    tax    : qs('[data-field="sender_tax"]', scope)?.value?.trim() || '',
+    name   : qs('[data-field="sender_name"]')?.value?.trim() || '',
+    country: qs('[data-field="sender_country"]')?.value?.trim() || '',
+    city   : qs('[data-field="sender_city"]')?.value?.trim() || '',
+    zip    : qs('[data-field="sender_zip"]')?.value?.trim() || '',
+    address: qs('[data-field="sender_address"]')?.value?.trim() || '',
+    phone  : qs('[data-field="sender_phone"]')?.value?.trim() || '',
+    tax    : qs('[data-field="sender_tax"]')?.value?.trim() || '',
   };
 }
 function readRecipient() {
-  const scope = document;
   return {
-    name   : qs('[data-field="rcpt_name"]', scope)?.value?.trim() || '',
-    country: qs('[data-field="rcpt_country"]', scope)?.value?.trim() || '',
-    city   : qs('[data-field="rcpt_city"]', scope)?.value?.trim() || '',
-    zip    : qs('[data-field="rcpt_zip"]', scope)?.value?.trim() || '',
-    address: qs('[data-field="rcpt_address"]', scope)?.value?.trim() || '',
-    phone  : qs('[data-field="rcpt_phone"]', scope)?.value?.trim() || '',
-    tax    : qs('[data-field="rcpt_tax"]', scope)?.value?.trim() || '',
+    name   : qs('[data-field="rcpt_name"]')?.value?.trim() || '',
+    country: qs('[data-field="rcpt_country"]')?.value?.trim() || '',
+    city   : qs('[data-field="rcpt_city"]')?.value?.trim() || '',
+    zip    : qs('[data-field="rcpt_zip"]')?.value?.trim() || '',
+    address: qs('[data-field="rcpt_address"]')?.value?.trim() || '',
+    phone  : qs('[data-field="rcpt_phone"]')?.value?.trim() || '',
+    tax    : qs('[data-field="rcpt_tax"]')?.value?.trim() || '',
   };
 }
 
@@ -81,19 +79,18 @@ function getBestIndex(opts){
   if (chosen) return Number(chosen);
   const valid = opts.filter(o => typeof o.price==='number');
   if (!valid.length) return undefined;
-  // fallback: la più economica
   valid.sort((a,b)=>a.price-b.price);
   return valid[0]?.index;
 }
 
-// Validazione minima per creare
+// Validazione per creare (richiede email, validità e ≥1 opzione completa)
 function formIsValid() {
   const email = qs('#customer-email')?.value?.trim();
   const validity = qs('#quote-validity')?.value;
   const opts = readOptions().filter(isOptionComplete);
   return !!(email && validity && opts.length >= 1);
 }
-// Validazione per preview (basta 1 opzione completa)
+// Validazione per preview (basta ≥1 opzione completa)
 function previewIsValid() {
   return readOptions().some(isOptionComplete);
 }
@@ -128,7 +125,7 @@ async function handleCreate(ev) {
     terms: {
       version       : qs('#terms-version')?.value || 'v1.0',
       visibility    : qs('#link-visibility')?.value || 'Immediata',
-      slug          : '', // opzionale; in futuro: generazione backend
+      slug          : '',
       linkExpiryDays: toNumber(qs('#link-expiry')?.value) || undefined,
       linkExpiryDate: undefined,
     },
@@ -319,16 +316,23 @@ function wireup(){
   // Ricalcola riepilogo e stato bottoni
   qsa('input,select,textarea', container).forEach(el => {
     el.addEventListener('input', () => { refreshSummary(); syncButtons(); });
-    if (el.name === 'bestOption') el.addEventListener('change', () => { refreshSummary(); });
+    if (el.name === 'bestOption') el.addEventListener('change', () => { refreshSummary(); syncButtons(); });
   });
 
-  // Event delegation: click su crea/preview (alto e basso)
+  // Event delegation per sicurezza
   container.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action="create"], #btn-create, #btn-preview');
     if (!btn) return;
     if (btn.id === 'btn-preview') return handlePreview(e);
-    return handleCreate(e);
+    if (btn.matches('[data-action="create"]') || btn.id === 'btn-create') return handleCreate(e);
   });
+
+  // Bind diretto (nel caso in cui il delegation non prendesse)
+  qsa('[data-action="create"]', container).forEach(b => b.addEventListener('click', handleCreate));
+  const btnCreateBottom = qs('#btn-create', container);
+  if (btnCreateBottom) btnCreateBottom.addEventListener('click', handleCreate);
+  const btnPreview = qs('#btn-preview', container);
+  if (btnPreview) btnPreview.addEventListener('click', handlePreview);
 
   refreshSummary();
   syncButtons();
