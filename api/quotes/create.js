@@ -4,6 +4,31 @@
 // api/quotes/create.js
 const allowlist = (process.env.ORIGIN_ALLOWLIST || '').split(',').map(s => s.trim()).filter(Boolean);
 
+import { applyCors } from "../_cors.js"; // path corretto rispetto a /api/quotes/create.js
+
+export default async function handler(req, res) {
+  // CORS & preflight
+  if (applyCors(req, res)) return;
+
+  if (req.method !== "POST") {
+    res.status(405).json({ ok: false, error: "Method not allowed" });
+    return;
+  }
+
+  try {
+    const payload = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
+
+    // TODO: qui la tua logica di creazione su Airtable
+    // (usa TB_PREVENTIVI / TB_OPZIONI, ecc.)
+    // Per test: rispondiamo OK senza fare nulla
+    res.status(200).json({ ok: true, received: payload });
+  } catch (err) {
+    console.error("[quotes/create] error:", err);
+    res.status(500).json({ ok: false, error: err?.message || "Internal error" });
+  }
+}
+
+
 function setCors(req, res) {
   const origin = req.headers.origin || '';
   const allowed = allowlist.includes(origin);
