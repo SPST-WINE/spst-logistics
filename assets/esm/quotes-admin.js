@@ -191,3 +191,5 @@ function wireup() {
 
 // Avvio
 document.addEventListener('DOMContentLoaded', wireup);
+  }
+}
