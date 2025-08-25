@@ -75,7 +75,7 @@ function readOptions() {
     const currency = qs('.qa-currency', wrap)?.value || 'EUR';
     const weight   = toNumber(qs('.qa-weight',  wrap)?.value);
     const notes    = qs('.qa-notes',    wrap)?.value?.trim() || '';
-    const recommended = false; // in futuro: checkbox “Consigliata”
+    const recommended = !!qs('.qa-recommend input', wrap)?.checked;
     return { index, carrier, service, transit, incoterm, payer, price, currency, weight, notes, recommended };
   });
 }
