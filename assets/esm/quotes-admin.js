@@ -7,6 +7,29 @@ const root = $('#quotes-admin');
 
 if (!root) console.warn('[quotes-admin] #quotes-admin non trovato');
 
+// --- Incoterms ---
+const INCOTERMS = (() => {
+  const fromConf = window.BACK_OFFICE_CONFIG?.INCOTERMS;
+  const base = Array.isArray(fromConf) && fromConf.length
+    ? fromConf
+    : ['EXW','FCA','CPT','CIP','DAP','DPU','DDP','FAS','FOB','CFR','CIF'];
+  return base;
+})();
+
+function populateIncotermSelects(root = document) {
+  const sels = root.querySelectorAll('#quotes-admin .qa-incoterm');
+  sels.forEach(sel => {
+    sel.innerHTML =
+      '<option value="" disabled selected>Seleziona incoterm</option>' +
+      INCOTERMS.map(i => `<option value="${i}">${i}</option>`).join('');
+  });
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  populateIncotermSelects();
+});
+
+
 /* ---------- UI: trasforma i campi "Corriere*" in single-select ---------- */
 function upgradeCarrierInputs() {
   const carriers =
