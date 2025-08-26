@@ -2,33 +2,32 @@
 
 // ===== CORS allowlist =====
 const DEFAULT_ALLOW = [
-  'https://spst.it',
-  'https://www.spst.it',
-  'https://spst-logistics.vercel.app',
-  'http://localhost:3000',
-  'http://localhost:8888',
+  "https://spst.it",
+  "https://www.spst.it",
+  "https://spst-logistics.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:8888",
 ];
-const allowlist = (process.env.ORIGIN_ALLOWLIST || DEFAULT_ALLOW.join(','))
-  .split(',').map(s => s.trim()).filter(Boolean);
+const allowlist = (process.env.ORIGIN_ALLOWLIST || DEFAULT_ALLOW.join(","))
+  .split(",").map(s => s.trim()).filter(Boolean);
 
 function isAllowed(origin) {
   if (!origin) return false;
   for (const item of allowlist) {
-    if (item.includes('*')) {
-      const esc = item.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('\\*', '.*');
-      if (new RegExp('^' + esc + '$').test(origin)) return true;
+    if (item.includes("*")) {
+      const esc = item.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace("\\*", ".*");
+      if (new RegExp("^" + esc + "$").test(origin)) return true;
     } else if (item === origin) return true;
   }
   return false;
 }
 function setCors(res, origin) {
   const allowed = isAllowed(origin);
-  res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
   if (allowed) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    // res.setHeader('Access-Control-Allow-Credentials', 'true'); // se usi cookie/sessione
+    res.setHeader("Access-Control-Allow-Origin", origin);
   }
 }
 
@@ -124,7 +123,7 @@ export default async function handler(req, res) {
     const qFields = {
       Email_Cliente   : body.customerEmail || undefined,
       Valuta          : body.currency || undefined,
-      Valido_Fino_Al  : body.validUntil || undefined, // "YYYY-MM-DD"
+      Valido_Fino_Al  : body.validUntil || undefined, // YYYY-MM-DD
       Note_Globali    : body.notes || undefined,
 
       Mittente_Nome      : body.sender?.name || undefined,
@@ -143,12 +142,12 @@ export default async function handler(req, res) {
       Destinatario_Telefono  : body.recipient?.phone || undefined,
       Destinatario_Tax       : body.recipient?.tax || undefined,
 
-      Versione_Termini      : body.terms?.version || "v1.0",
-      Visibilita            : mapVisibility(body.terms?.visibility) || "Immediata",
-      Slug_Pubblico         : slug,                                  // URL_Pubblico è formula → NON scrivere
-      Scadenza_Link         : expiryDate ? expiryDate.toISOString() : undefined,
+      Versione_Termini  : body.terms?.version || "v1.0",
+      Visibilita        : mapVisibility(body.terms?.visibility) || "Immediata",
+      Slug_Pubblico     : slug,
+      Scadenza_Link     : expiryDate ? expiryDate.toISOString() : undefined,
 
-      Opzione_Consigliata   : getBestIndex(Array.isArray(body.options) ? body.options : []),
+      Opzione_Consigliata : getBestIndex(Array.isArray(body.options) ? body.options : []),
     };
 
     // ---- DEBUG (dry-run)
@@ -156,6 +155,7 @@ export default async function handler(req, res) {
       const rawOptions = Array.isArray(body.options) ? body.options : [];
       const wouldOptions = rawOptions.map(o => ({
         Preventivo     : "<record id created after>",
+        Preventivo_Id  : "<record id created after>",
         Indice         : toNumber(o.index),
         Corriere       : o.carrier || undefined,
         Servizio       : o.service || undefined,
@@ -178,13 +178,16 @@ export default async function handler(req, res) {
       throw new Error("Quote created but no valid record id returned");
     }
 
-    // ---- crea Opzioni (dopo avere quoteId!)
+    // ---- crea Opzioni collegate + campo di appoggio Preventivo_Id
     const rawOptions = Array.isArray(body.options) ? body.options : [];
     if (rawOptions.length) {
       const optRecords = rawOptions.map(o => ({
         fields: {
-          // Linked record: array di record IDs (stringhe)
+          // linked record: array di record IDs (stringhe)
           Preventivo     : [ quoteId ],
+          // supporto per ricerche veloci lato viewer
+          Preventivo_Id  : quoteId,
+
           Indice         : toNumber(o.index),
           Corriere       : o.carrier || undefined,
           Servizio       : o.service || undefined,
