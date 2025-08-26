@@ -2,9 +2,7 @@
 
 // ===== CORS allowlist =====
 const allowlist = (process.env.ORIGIN_ALLOWLIST || "")
-  .split(",")
-  .map(s => s.trim())
-  .filter(Boolean);
+  .split(",").map(s => s.trim()).filter(Boolean);
 
 function isAllowed(origin) {
   if (!origin) return false;
@@ -13,13 +11,10 @@ function isAllowed(origin) {
       const esc = item.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace("\\*", ".*");
       const re = new RegExp("^" + esc + "$");
       if (re.test(origin)) return true;
-    } else if (item === origin) {
-      return true;
-    }
+    } else if (item === origin) return true;
   }
   return false;
 }
-
 function setCors(res, origin) {
   if (isAllowed(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
   res.setHeader("Vary", "Origin");
@@ -31,25 +26,29 @@ function setCors(res, origin) {
 // ===== Airtable =====
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;   // "Preventivi"
-const TB_OPT   = process.env.TB_OPZIONI;      // "OpzioniPreventivo"
+const TB_QUOTE = process.env.TB_PREVENTIVI;    // Preventivi
+const TB_OPT   = process.env.TB_OPZIONI;       // OpzioniPreventivo
 
 async function atCreate(table, records) {
   const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
+  const payload = { records };
   const resp = await fetch(url, {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${AT_PAT}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ records }),
+    headers: { Authorization: `Bearer ${AT_PAT}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
   const json = await resp.json();
   if (!resp.ok) {
+    // LOG dettagliato per debug
+    console.error(`[AT CREATE FAIL] table=${table} status=${resp.status}`);
+    console.error(`[AT PAYLOAD] ${JSON.stringify(payload, null, 2)}`);
+    console.error(`[AT ERROR] ${JSON.stringify(json, null, 2)}`);
     const err = new Error(json?.error?.message || "Airtable error");
     err.name = json?.error?.type || "AirtableError";
     err.status = resp.status;
     err.payload = json;
+    err.table = table;
+    err.sent = payload;
     throw err;
   }
   return json;
@@ -136,12 +135,12 @@ export default async function handler(req, res) {
       Destinatario_Telefono  : body.recipient?.phone || undefined,
       Destinatario_Tax       : body.recipient?.tax || undefined,
 
-      Versione_Termini  : body.terms?.version || "v1.0",
-      Visibilita        : mapVisibility(body.terms?.visibility) || "Immediata",
-      Slug_Pubblico     : slug,                                  // NON scrivere URL_Pubblico (formula)
-      Scadenza_Link     : expiryDate ? expiryDate.toISOString() : undefined,
+      Versione_Termini      : body.terms?.version || "v1.0",
+      Visibilita            : mapVisibility(body.terms?.visibility) || "Immediata",
+      Slug_Pubblico         : slug,                                  // URL_Pubblico è formula → NON scrivere
+      Scadenza_Link         : expiryDate ? expiryDate.toISOString() : undefined,
 
-      Opzione_Consigliata: getBestIndex(Array.isArray(body.options) ? body.options : []),
+      Opzione_Consigliata   : getBestIndex(Array.isArray(body.options) ? body.options : []),
     };
 
     // ---- DEBUG (dry-run)
@@ -176,7 +175,8 @@ export default async function handler(req, res) {
     if (rawOptions.length) {
       const optRecords = rawOptions.map(o => ({
         fields: {
-          Preventivo     : [{ id: quoteId }],          // array di record-link objects
+          // FIX: Airtable REST v0 accetta l'array di record IDs (stringhe)
+          Preventivo     : [ quoteId ],
           Indice         : toNumber(o.index),
           Corriere       : o.carrier || undefined,
           Servizio       : o.service || undefined,
@@ -196,7 +196,7 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok:true, id: quoteId, slug, url: publicUrl });
   } catch (err) {
     const status  = err.status || 500;
-    const details = err.payload || { name: err.name, message: err.message, stack: err.stack };
+    const details = err.payload || { name: err.name, message: err.message, stack: err.stack, table: err.table, sent: err.sent };
     console.error("[api/quotes/create] error:", details);
     return res.status(status).json({ ok:false, error: details });
   }
