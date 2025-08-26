@@ -168,39 +168,44 @@ function escapeHtml(s=""){
 }
 function buildPreviewHtml(model){
   const { customerEmail, currency, validUntil, notes, sender, recipient, options } = model;
-  const bestIndex = getBestIndex(options || []);
+  const best = getBestIndex(options) || options[0]?.index;
 
-  const rows = (options||[]).map(o => `
-    <div class="opt ${o.index===bestIndex?'is-best':''}">
+  const rows = options.map(o => `
+    <div class="opt ${o.index===best?'is-best':''}">
       <div class="opt-head">
         <div class="badge">OPZIONE ${o.index}</div>
-        ${o.index===bestIndex ? '<span class="pill">Consigliata</span>' : ''}
+        ${o.index===best ? '<span class="pill">Consigliata</span>' : ''}
       </div>
       <div class="grid">
-        <div><div class="k">Corriere</div><div class="v">${escapeHtml(o.carrier||"—")}</div></div>
-        <div><div class="k">Servizio</div><div class="v">${escapeHtml(o.service||"—")}</div></div>
-        <div><div class="k">Tempo di resa</div><div class="v">${escapeHtml(o.transit||"—")}</div></div>
-        <div><div class="k">Incoterm</div><div class="v">${escapeHtml(o.incoterm||"—")}</div></div>
-        <div><div class="k">Oneri a carico</div><div class="v">${escapeHtml(o.payer||"—")}</div></div>
+        <div><div class="k">Corriere</div><div class="v">${escapeHtml(o.carrier||'—')}</div></div>
+        <div><div class="k">Servizio</div><div class="v">${escapeHtml(o.service||'—')}</div></div>
+        <div><div class="k">Tempo di resa</div><div class="v">${escapeHtml(o.transit||'—')}</div></div>
+        <div><div class="k">Incoterm</div><div class="v">${escapeHtml(o.incoterm||'—')}</div></div>
+        <div><div class="k">Oneri a carico</div><div class="v">${escapeHtml(o.payer||'—')}</div></div>
         <div><div class="k">Prezzo</div><div class="v">${money(o.price, o.currency||currency)}</div></div>
-        <div><div class="k">Peso reale</div><div class="v">${typeof o.weight==="number" ? o.weight.toFixed(2)+" kg" : "—"}</div></div>
+        <div><div class="k">Peso reale</div><div class="v">${typeof o.weight==='number' ? o.weight.toFixed(2)+' kg' : '—'}</div></div>
       </div>
-      ${o.notes ? `<div class="notes">${escapeHtml(o.notes)}</div>` : ""}
+      ${o.notes ? `
+        <div class="notes">
+          <div class="k">Note aggiuntive</div>
+          <div class="v">${escapeHtml(o.notes)}</div>
+        </div>` : ''
+      }
     </div>
-  `).join("");
+  `).join('');
 
-  return `<!doctype html>
+  const html = `<!doctype html>
 <html lang="it"><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Anteprima Preventivo • SPST</title>
 <style>
   :root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}
-  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
   .wrap{max-width:960px;margin:24px auto;padding:0 16px}
-  .header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin:8px 0 16px;flex-wrap:wrap}
+  .header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
   .brand{display:flex;align-items:center;gap:10px}
-  .brand .logo{height:28px;width:auto}
+  .brand .logo{width:28px;height:28px;display:block}
   h1{margin:0;font-size:22px}
   .card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -211,10 +216,11 @@ function buildPreviewHtml(model){
   .opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}
   .opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}
   .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-  .notes{margin-top:8px;color:var(--muted)}
+  .notes{margin-top:8px}
   .small{font-size:12px;color:var(--muted)}
-  @media (max-width:900px){ .grid{grid-template-columns:1fr 1fr} .grid2{grid-template-columns:1fr} h1{font-size:20px} }
-  @media (max-width:560px){ .grid{grid-template-columns:1fr} .wrap{padding:0 12px} body{font-size:16px} }
+  .small a{color:var(--accent);text-decoration:none;border-bottom:1px dashed rgba(110,168,255,.6)}
+  .small a:hover{opacity:.9}
+  @media (max-width:900px){ .grid{grid-template-columns:1fr 1fr} .grid2{grid-template-columns:1fr} }
   @media print{ body{background:#fff;color:#000} .card{border-color:#ddd} .opt{background:#fff;border-color:#ddd} .small{color:#444} }
 </style>
 </head>
@@ -222,7 +228,7 @@ function buildPreviewHtml(model){
   <div class="wrap">
     <div class="header">
       <div class="brand">
-        <img class="logo" src="${LOGO_URL}" alt="SPST logo" />
+        <img class="logo" alt="SPST" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png"/>
         <h1>Preventivo SPST</h1>
       </div>
       <div class="small">Valido fino al <strong>${fmtDate(validUntil)}</strong></div>
@@ -232,27 +238,27 @@ function buildPreviewHtml(model){
       <div class="grid2">
         <div>
           <div class="k">Cliente</div>
-          <div class="v">${escapeHtml(customerEmail || "—")}</div>
+          <div class="v">${escapeHtml(customerEmail || '—')}</div>
         </div>
         <div>
           <div class="k">Valuta</div>
-          <div class="v">${escapeHtml(currency || "EUR")}</div>
+          <div class="v">${escapeHtml(currency||'EUR')}</div>
         </div>
       </div>
-      ${notes ? `<div style="margin-top:10px"><div class="k">Note</div><div class="v">${escapeHtml(notes)}</div></div>` : ""}
+      ${notes ? `<div style="margin-top:10px"><div class="k">Note</div><div class="v">${escapeHtml(notes)}</div></div>`:''}
     </div>
 
     <div class="card">
       <div class="grid2">
         <div>
           <div class="k">Mittente</div>
-          <div class="v">${escapeHtml(sender?.name || "—")}</div>
-          <div class="small">${escapeHtml([sender?.address, sender?.zip, sender?.city, sender?.country].filter(Boolean).join(", "))}</div>
+          <div class="v">${escapeHtml(sender?.name||'—')}</div>
+          <div class="small">${escapeHtml([sender?.address, sender?.zip, sender?.city, sender?.country].filter(Boolean).join(', '))}</div>
         </div>
         <div>
           <div class="k">Destinatario</div>
-          <div class="v">${escapeHtml(recipient?.name || "—")}</div>
-          <div class="small">${escapeHtml([recipient?.address, recipient?.zip, recipient?.city, recipient?.country].filter(Boolean).join(", "))}</div>
+          <div class="v">${escapeHtml(recipient?.name||'—')}</div>
+          <div class="small">${escapeHtml([recipient?.address, recipient?.zip, recipient?.city, recipient?.country].filter(Boolean).join(', '))}</div>
         </div>
       </div>
     </div>
@@ -263,73 +269,75 @@ function buildPreviewHtml(model){
     </div>
 
     <div class="small" style="margin-top:8px">
-      Anteprima non vincolante. I termini e le condizioni SPST si applicano.
+      Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente.
+      Per maggiori informazioni consulta i <a href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.
     </div>
   </div>
 </body></html>`;
+  return html;
 }
 
 function handlePreview(ev){
   ev.preventDefault();
-  if (!previewIsValid()){
-    alert("Per l’anteprima serve almeno 1 opzione compilata (corriere, servizio, incoterm, oneri, prezzo).");
+  if (!previewIsValid()) {
+    alert('Per l’anteprima serve almeno 1 opzione compilata (corriere, servizio, incoterm, oneri, prezzo).');
     return;
   }
+
   const model = {
-    customerEmail: qs("#customer-email")?.value?.trim(),
-    currency     : qs("#quote-currency")?.value || "EUR",
-    validUntil   : qs("#quote-validity")?.value || null,
-    notes        : qs("#quote-notes")?.value?.trim() || "",
+    customerEmail: qs('#customer-email')?.value?.trim(),
+    currency     : qs('#quote-currency')?.value || 'EUR',
+    validUntil   : qs('#quote-validity')?.value || null,
+    notes        : qs('#quote-notes')?.value?.trim() || '',
     sender       : readSender(),
     recipient    : readRecipient(),
     options      : readOptions().filter(isOptionComplete),
   };
+
   const html = buildPreviewHtml(model);
-  const w = window.open("", "_blank");
-  if (w){ w.document.open(); w.document.write(html); w.document.close(); }
-  else { alert("Impossibile aprire la finestra di anteprima (popup bloccato?)"); }
+  const w = window.open('', '_blank', 'noopener,noreferrer');
+  if (!w) return;  // niente popup d’errore: se è bloccato, silenzio
+  w.document.open(); w.document.write(html); w.document.close();
 }
+
 
 // === Wiring ================================================================
 function wireup(){
-  const view = qs("#view-preventivi");
+  const view = qs('#view-preventivi');
   if (!view) return;
-  const root = qs("#quotes-admin", view);
+  const container = qs('#quotes-admin', view);
 
   // Popola select da config
-  const carriers  = (window.BACK_OFFICE_CONFIG?.CARRIERS  || ["DHL","UPS","FedEx","TNT","Privato"]);
-  const incoterms = (window.BACK_OFFICE_CONFIG?.INCOTERMS || ["EXW","DAP","DDP"]);
-  qsa(".qa-option", root).forEach(wrap => {
-    buildOptions(qs(".qa-carrier",  wrap), carriers,  "Seleziona corriere");
-    buildOptions(qs(".qa-incoterm", wrap), incoterms, "Seleziona incoterm");
+  const carriers  = (window.BACK_OFFICE_CONFIG?.CARRIERS  || ['DHL','UPS','FedEx','TNT','Privato']);
+  const incoterms = (window.BACK_OFFICE_CONFIG?.INCOTERMS || ['EXW','DAP','DDP']);
+  qsa('.qa-option', container).forEach(wrap => {
+    buildOptions(qs('.qa-carrier',  wrap), carriers,  'Seleziona corriere');
+    buildOptions(qs('.qa-incoterm', wrap), incoterms, 'Seleziona incoterm');
   });
 
-  // Sync stato bottoni
   const syncButtons = () => {
     const okCreate  = formIsValid();
     const okPreview = previewIsValid();
-    qsa('[data-action="create"], #btn-create', root).forEach(b => b.disabled = !okCreate);
-    qsa('#btn-preview', root).forEach(b => b.disabled = !okPreview);
+    qsa('[data-action="create"], #btn-create', container).forEach(b => b.disabled = !okCreate);
+    qsa('#btn-preview', container).forEach(b => b.disabled = !okPreview);
   };
 
-  // Ricalcola riepilogo/stato su input
-  qsa("input,select,textarea", root).forEach(el => {
-    el.addEventListener("input", () => { refreshSummary(); syncButtons(); });
-    if (el.name === "bestOption") el.addEventListener("change", () => { refreshSummary(); syncButtons(); });
+  // Ricalcola riepilogo e stato bottoni
+  qsa('input,select,textarea', container).forEach(el => {
+    el.addEventListener('input', () => { refreshSummary(); syncButtons(); });
+  });
+  // cambio opzione consigliata
+  qsa('input[name="bestOption"]', container).forEach(el => {
+    el.addEventListener('change', () => { refreshSummary(); syncButtons(); });
   });
 
-  // Delegation (cattura entrambi i bottoni)
-  root.addEventListener("click", (e) => {
+  // 🔁 Event delegation: un solo listener per click
+  container.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-action="create"], #btn-create, #btn-preview');
     if (!btn) return;
-    if (btn.id === "btn-preview") return handlePreview(e);
-    if (btn.matches('[data-action="create"]') || btn.id === "btn-create") return handleCreate(e);
+    if (btn.id === 'btn-preview') { handlePreview(e); return; }
+    if (btn.matches('[data-action="create"]') || btn.id === 'btn-create') { handleCreate(e); }
   });
-
-  // Fallback binding diretto
-  qsa('[data-action="create"]', root).forEach(b => b.addEventListener("click", handleCreate));
-  qs("#btn-create", root)?.addEventListener("click", handleCreate);
-  qs("#btn-preview", root)?.addEventListener("click", handlePreview);
 
   refreshSummary();
   syncButtons();
