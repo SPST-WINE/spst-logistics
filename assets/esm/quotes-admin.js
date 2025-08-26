@@ -134,28 +134,47 @@ async function handleCreate(ev){
   const prev = btn.textContent;
   btn.textContent = "Creo…";
 
-  try{
+  try {
     const resp = await fetch(`${API_BASE}/api/quotes/create`, {
-      method: "POST",
-      headers: { "Content-Type":"application/json" },
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
       body: JSON.stringify(body),
     });
-    let json = null; try { json = await resp.json(); } catch {}
-    if (!resp.ok || json?.ok === false){
-      console.error("CREATE FAILED →", { status: resp.status, json });
+    const json = await resp.json();
+
+    if (!resp.ok || json?.ok === false) {
+      console.error('CREATE FAILED →', { status: resp.status, json });
       const msg = json?.error?.message || json?.error || `HTTP ${resp.status}`;
       alert(`Errore durante la creazione del preventivo:\n${msg}`);
       return;
     }
-    alert("Preventivo creato! ID: " + json.id);
-  } catch (err){
-    console.error("[quotes-admin] network error:", err);
-    alert("Errore di rete durante la creazione del preventivo.");
+
+    // Successo
+    alert('Preventivo creato! ID: ' + json.id);
+
+    // Proponi invio via email
+    if (confirm('Vuoi inviarlo subito al cliente?')) {
+      const send = await fetch(`${API_BASE}/api/quotes/send`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify({ id: json.id })
+      });
+      const sj = await send.json();
+      if (!send.ok || sj?.ok === false) {
+        console.error('[send] failed', sj);
+        alert('Invio email non riuscito. Puoi riprovare più tardi.');
+      } else {
+        alert('Email inviata al cliente!\nLink: ' + sj.url);
+      }
+    }
+  } catch (err) {
+    console.error('[quotes-admin] network error:', err);
+    alert('Errore di rete durante la creazione del preventivo.');
   } finally {
     btn.disabled = false;
-    btn.textContent = prev || "Crea preventivo";
+    btn.textContent = prev || 'Crea preventivo';
   }
-}
+
 
 // === Anteprima (statica, locale) ===========================================
 function money(n, curr="EUR"){
