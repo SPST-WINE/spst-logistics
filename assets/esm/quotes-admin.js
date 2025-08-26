@@ -107,30 +107,40 @@ function refreshSummary() {
 
 // ====== CREATE ======
 let creating = false;
+
 async function handleCreate(ev) {
   ev.preventDefault();
-  const btn = ev.currentTarget.closest('button');
-  if (btn?.disabled) return;
+  if (creating) return;
+
   if (!formIsValid()) {
     alert('Compila i campi obbligatori (email, validità e almeno 1 opzione completa).');
     return;
   }
-  if (creating) return;
-  creating = true;
-  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; var prev = btn.textContent; btn.textContent = 'Creo…'; }
 
+  // Mettiamo in stato "busy" tutti i bottoni Crea
+  creating = true;
+  const buttons = Array.from(document.querySelectorAll('[data-action="create"], #btn-create'));
+  const prevText = new Map();
+  buttons.forEach(b => {
+    prevText.set(b, b.textContent);
+    b.disabled = true;
+    b.dataset.busy = '1';
+    b.textContent = 'Creo…';
+  });
+
+  // Costruisci payload dal form
   const body = {
-    customerEmail: qs('#customer-email')?.value?.trim(),
-    currency     : qs('#quote-currency')?.value || 'EUR',
-    validUntil   : qs('#quote-validity')?.value || null,
-    notes        : qs('#quote-notes')?.value?.trim() || '',
+    customerEmail: document.querySelector('#customer-email')?.value?.trim(),
+    currency     : document.querySelector('#quote-currency')?.value || 'EUR',
+    validUntil   : document.querySelector('#quote-validity')?.value || null,
+    notes        : document.querySelector('#quote-notes')?.value?.trim() || '',
     sender       : readSender(),
     recipient    : readRecipient(),
     terms: {
-      version       : qs('#terms-version')?.value || 'v1.0',
-      visibility    : qs('#link-visibility')?.value || 'Immediata',
-      slug          : '',
-      linkExpiryDays: toNumber(qs('#link-expiry')?.value) || undefined,
+      version       : document.querySelector('#terms-version')?.value || 'v1.0',
+      visibility    : document.querySelector('#link-visibility')?.value || 'Immediata',
+      slug          : '',                              // opzionale: puoi lasciarlo vuoto, lo genera il server
+      linkExpiryDays: toNumber(document.querySelector('#link-expiry')?.value) || undefined,
       linkExpiryDate: undefined,
     },
     options: readOptions().filter(isOptionComplete),
@@ -139,23 +149,33 @@ async function handleCreate(ev) {
   try {
     const resp = await fetch(`${API_BASE}/api/quotes/create`, {
       method: 'POST',
-      headers: { 'Content-Type':'application/json' },
-      body: JSON.stringify(body),
+      headers: { 'Content-Type': 'application/json' },
+      body  : JSON.stringify(body),
     });
-    let json=null; try{ json=await resp.json(); }catch{}
+
+    const json = await resp.json().catch(() => ({}));
     if (!resp.ok || json?.ok === false) {
-      console.error('CREATE FAILED →', { status: resp.status, json });
       const msg = json?.error?.message || json?.error || `HTTP ${resp.status}`;
-      alert(`Errore durante la creazione del preventivo:\n${msg}`);
-      return;
+      throw new Error(msg);
     }
-    alert('Preventivo creato! ID: ' + json.id);
+
+    // Successo: mostro e copro negli appunti l’URL pubblico
+    const url = json.url || (json.slug ? `${location.origin}/quote/${json.slug}` : '');
+    if (url) {
+      try { await navigator.clipboard.writeText(url); } catch {}
+    }
+    alert(`Preventivo creato!\n\nID: ${json.id}\n${url ? `Link cliente:\n${url}\n\n(Il link è stato copiato negli appunti.)` : ''}`);
   } catch (err) {
-    console.error('[quotes-admin] network error:', err);
-    alert('Errore di rete durante la creazione del preventivo.');
+    console.error('CREATE FAILED →', err);
+    alert(`Errore durante la creazione del preventivo:\n${err.message || err}`);
   } finally {
+    // Ripristino bottoni e stato
     creating = false;
-    if (btn) { btn.disabled = false; btn.textContent = prev || 'Crea preventivo'; btn.removeAttribute('data-busy'); }
+    buttons.forEach(b => {
+      b.disabled = !formIsValid();
+      b.textContent = prevText.get(b) || 'Crea preventivo';
+      delete b.dataset.busy;
+    });
   }
 }
 
