@@ -23,8 +23,7 @@
       ]
     }
   ]
-}
-
+},
 {
   "rewrites": [
     { "source": "/quote/:slug", "destination": "/api/quote/:slug" }
