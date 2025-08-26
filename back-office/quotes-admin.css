@@ -13,35 +13,6 @@
 #quotes-admin .qa-sub{margin:0 0 8px;font-size:14px;font-weight:600}
 #quotes-admin .qa-label{display:block;font-size:12px;color:var(--muted);margin:6px 0}
 
-/* Date picker in tema scuro: icona del calendario bianca */
-
-/* ==== Input [type=date]: icon white, clickable, no layout shifts ==== */
-#quotes-admin input[type="date"]{
-  color-scheme: dark;           /* dark-friendly popup & controls */
-  padding-right: 12px;          /* keep normal padding (no fake icon) */
-}
-
-/* WebKit/Blink (Chrome/Edge/Safari) — recolor native icon to white */
-#quotes-admin input[type="date"]::-webkit-calendar-picker-indicator{
-  background: transparent;
-  filter: invert(1) grayscale(1) brightness(1.6);  /* -> white icon */
-  opacity: .95;
-  cursor: pointer;              /* clickable */
-  pointer-events: auto;         /* make sure clicks go through */
-}
-#quotes-admin input[type="date"]::-webkit-calendar-picker-indicator:hover{
-  opacity: 1;
-}
-
-/* Optional: hide spin/clear if they show up dark */
-#quotes-admin input[type="date"]::-webkit-inner-spin-button,
-#quotes-admin input[type="date"]::-webkit-clear-button{
-  display: none;
-}
-
-*/
-
-
 /* --- Layout --------------------------------------------------------------- */
 #quotes-admin .qa-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
 
