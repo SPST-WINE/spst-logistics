@@ -1,20 +1,17 @@
 // api/quotes/create.js
 
-// ===== CORS allowlist (domini autorizzati a chiamare questa API) ==========
-const allowlist = (process.env.ORIGIN_ALLOWLIST || '')
-  .split(',')
+// ===== CORS allowlist =====
+const allowlist = (process.env.ORIGIN_ALLOWLIST || "")
+  .split(",")
   .map(s => s.trim())
   .filter(Boolean);
 
 function isAllowed(origin) {
   if (!origin) return false;
   for (const item of allowlist) {
-    if (item.includes('*')) {
-      // wildcard: https://*.webflow.io
-      const esc = item
-        .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-        .replace('\\*', '.*');
-      const re = new RegExp('^' + esc + '$');
+    if (item.includes("*")) {
+      const esc = item.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace("\\*", ".*");
+      const re = new RegExp("^" + esc + "$");
       if (re.test(origin)) return true;
     } else if (item === origin) {
       return true;
@@ -24,133 +21,126 @@ function isAllowed(origin) {
 }
 
 function setCors(res, origin) {
-  if (isAllowed(origin)) {
-    res.setHeader('Access-Control-Allow-Origin', origin);
-  }
-  res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  if (isAllowed(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  res.setHeader("Access-Control-Allow-Credentials", "true");
 }
 
-// ===== ENV / Airtable ======================================================
-const AT_BASE  = process.env.AIRTABLE_BASE_ID;
+// ===== helpers Airtable =====
+const AT_BASE  = process.env.AIRTABLE_BASE_ID; // es: appXXXXXXXXXXXXXX
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;      // es. "Preventivi"
-const TB_OPT   = process.env.TB_OPZIONI;         // es. "OpzioniPreventivo"
+const TB_QUOTE = process.env.TB_PREVENTIVI;    // nome tab Preventivi
+const TB_OPT   = process.env.TB_OPZIONI;       // nome tab OpzioniPreventivo
 
-// Base pubblica per i link del preventivo (senza trailing slash)
-const PUBLIC_QUOTE_BASE_URL =
-  (process.env.PUBLIC_QUOTE_BASE_URL || 'https://spst-logistics.vercel.app/quote').replace(/\/$/, '');
-
-// === helpers fetch Airtable =================================================
 async function atCreate(table, records) {
   const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
-  const r = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${AT_PAT}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ records }),
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${AT_PAT}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ records })
   });
-  const json = await r.json();
-  if (!r.ok) {
-    const err = new Error(json?.error?.message || 'Airtable error');
-    err.status = r.status;
+  const json = await resp.json();
+  if (!resp.ok) {
+    const err = new Error(json?.error?.message || "Airtable error");
+    err.name = json?.error?.type || "AirtableError";
+    err.status = resp.status;
     err.payload = json;
     throw err;
   }
   return json;
 }
 
-// === helpers vari ==========================================================
+// ===== utils =====
 function mapVisibility(v) {
   if (!v) return undefined;
   const s = String(v).toLowerCase();
-  if (s.includes('immed') || s === 'subito') return 'Immediata';
-  if (s.includes('bozza')) return 'Solo_Bozza';
+  if (s.includes("immediat") || s === "subito") return "Immediata";
+  if (s.includes("bozza")) return "Solo_Bozza";
   return v;
 }
-function mapIncoterm(v) { return v || undefined; }
-function mapPayer(v) { return v || undefined; }
-function toNumber(x) { const n = Number(x); return Number.isFinite(n) ? n : undefined; }
-function fmtISODate(d) { try { return new Date(d).toISOString().slice(0,10); } catch { return undefined; } }
-
-function makeSlug() {
-  const d = new Date();
-  const y = String(d.getFullYear()).slice(2);
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const dd = String(d.getDate()).padStart(2, '0');
-  const rand = Math.random().toString(36).slice(2, 7);
-  return `q-${y}${m}${dd}-${rand}`;
+const mapIncoterm = v => v || undefined;
+const mapPayer    = v => v || undefined;
+function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : undefined; }
+function addDays(base, days){
+  const d = new Date(base);
+  d.setHours(0,0,0,0);
+  d.setDate(d.getDate() + Number(days || 0));
+  return d;
 }
 
-// ===== handler =============================================================
+// ===== handler =====
 export default async function handler(req, res) {
   setCors(res, req.headers.origin);
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST')   return res.status(405).json({ ok:false, error:'Method Not Allowed' });
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST")   return res.status(405).json({ ok:false, error:"Method Not Allowed" });
 
   try {
-    // sanity env
     if (!AT_BASE || !AT_PAT || !TB_QUOTE || !TB_OPT) {
-      throw new Error('Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI');
+      throw new Error("Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI");
     }
 
-    // parse body
-    const body = req.body && typeof req.body === 'object'
-      ? req.body
-      : JSON.parse(req.body || '{}');
+    const body = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
 
-    // ======= CREA RECORD PREVENTIVO =======================================
-    const slug = makeSlug();
+    // ---------- genera slug + scadenza link
+    const now  = new Date();
+    const slug = `q-${now.toISOString().slice(2,10).replace(/-/g,"")}-${Math.random().toString(36).slice(2,7)}`;
 
+    let expiryDate;
+    if (body?.terms?.linkExpiryDate) {
+      const d = new Date(body.terms.linkExpiryDate);
+      if (!Number.isNaN(+d)) expiryDate = d;
+    } else if (body?.terms?.linkExpiryDays) {
+      expiryDate = addDays(now, body.terms.linkExpiryDays);
+    }
+
+    // ---------- campi PREVENTIVO (mappa ai nomi della tua base)
     const qFields = {
-      // Anagrafica cliente / intestazione
+      // meta
       Email_Cliente   : body.customerEmail || undefined,
       Valuta          : body.currency || undefined,
-      Valido_Fino_Al  : body.validUntil ? fmtISODate(body.validUntil) : undefined,
+      Valido_Fino_Al  : body.validUntil || undefined,
       Note_Globali    : body.notes || undefined,
 
-      // Mittente
-      Mittente_Nome      : body.sender?.name || undefined,
-      Mittente_Paese     : body.sender?.country || undefined,
-      Mittente_Citta     : body.sender?.city || undefined,
-      Mittente_CAP       : body.sender?.zip || undefined,
-      Mittente_Indirizzo : body.sender?.address || undefined,
-      Mittente_Telefono  : body.sender?.phone || undefined,
-      Mittente_Tax       : body.sender?.tax || undefined,     // <- nome campo in base
+      // mittente
+      Mittente_Nome       : body.sender?.name || undefined,
+      Mittente_Paese      : body.sender?.country || undefined,
+      Mittente_Citta      : body.sender?.city || undefined,
+      Mittente_CAP        : body.sender?.zip || undefined,
+      Mittente_Indirizzo  : body.sender?.address || undefined,
+      Mittente_Telefono   : body.sender?.phone || undefined,
+      Mittente_Tax        : body.sender?.tax || undefined,   // <-- il tuo campo
 
-      // Destinatario
-      Destinatario_Nome      : body.recipient?.name || undefined,
-      Destinatario_Paese     : body.recipient?.country || undefined,
-      Destinatario_Citta     : body.recipient?.city || undefined,
-      Destinatario_CAP       : body.recipient?.zip || undefined,
-      Destinatario_Indirizzo : body.recipient?.address || undefined,
-      Destinatario_Telefono  : body.recipient?.phone || undefined,
-      Destinatario_Tax       : body.recipient?.tax || undefined,
+      // destinatario
+      Destinatario_Nome       : body.recipient?.name || undefined,
+      Destinatario_Paese      : body.recipient?.country || undefined,
+      Destinatario_Citta      : body.recipient?.city || undefined,
+      Destinatario_CAP        : body.recipient?.zip || undefined,
+      Destinatario_Indirizzo  : body.recipient?.address || undefined,
+      Destinatario_Telefono   : body.recipient?.phone || undefined,
+      Destinatario_Tax        : body.recipient?.tax || undefined,
 
-      // Termini & pubblicazione
-      Versione_Termini  : body.terms?.version || 'v1.0',
-      Visibilita        : mapVisibility(body.terms?.visibility) || 'Immediata',
-      Slug_Pubblico     : slug,
-      Scadenza_Link     : toNumber(body.terms?.linkExpiryDays), // (giorni) se esiste il campo numerico
-      // Se aveste anche una data calcolata, aggiungete un campo tipo 'Link_Expiry_Data'
-      // Link_Expiry_Data  : body.terms?.linkExpiryDate ? fmtISODate(body.terms.linkExpiryDate) : undefined,
+      // termini / link pubblico
+      Versione_Termini : body.terms?.version || "v1.0",
+      Visibilita       : mapVisibility(body.terms?.visibility) || "Immediata",
+      Slug_Pubblico    : slug,
+      Slug             : slug, // ridondanza per compatibilità
+      Scadenza_Link    : expiryDate ? expiryDate.toISOString() : undefined,
     };
 
-    const qResp = await atCreate(TB_QUOTE, [{ fields: qFields }]);
+    // crea record Preventivo
+    const qResp   = await atCreate(TB_QUOTE, [{ fields: qFields }]);
     const quoteId = qResp.records?.[0]?.id;
-    if (!quoteId) throw new Error('Quote created but no record id returned');
+    if (!quoteId) throw new Error("Quote created but no record id returned");
 
-    // ======= CREA OPZIONI (collegandole al preventivo) ====================
+    // crea Opzioni col link inverso
     const rawOptions = Array.isArray(body.options) ? body.options : [];
     if (rawOptions.length) {
       const optRecords = rawOptions.map(o => ({
         fields: {
-          Preventivo     : [quoteId],                 // link record id
+          Preventivo     : [{ id: quoteId }],
           Indice         : toNumber(o.index),
           Corriere       : o.carrier || undefined,
           Servizio       : o.service || undefined,
@@ -164,19 +154,20 @@ export default async function handler(req, res) {
           Consigliata    : !!o.recommended,
         }
       }));
-
-      // Airtable: max 10 per batch (qui di solito 1–2)
+      // max 10 per batch: qui normalmente 1–2
       await atCreate(TB_OPT, optRecords);
     }
 
-    // ======= URL pubblico (pagina cliente) =================================
-    const publicUrl = `${PUBLIC_QUOTE_BASE_URL}/${encodeURIComponent(slug)}`;
+    // URL pubblico (configurabile)
+    const PUBLIC_QUOTE_BASE_URL =
+      process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote";
+    const publicUrl = `${PUBLIC_QUOTE_BASE_URL.replace(/\/$/,"")}/${encodeURIComponent(slug)}`;
 
     return res.status(200).json({ ok:true, id: quoteId, slug, url: publicUrl });
   } catch (err) {
     const status  = err.status || 500;
     const details = err.payload || { name: err.name, message: err.message, stack: err.stack };
-    console.error('[api/quotes/create] error →', details);
+    console.error("[api/quotes/create] error:", details);
     return res.status(status).json({ ok:false, error: details });
   }
 }
