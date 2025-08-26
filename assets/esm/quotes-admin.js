@@ -110,74 +110,74 @@ let creating = false;
 
 async function handleCreate(ev) {
   ev.preventDefault();
-  if (creating) return;
+  const btn = ev.currentTarget.closest('button');
+  if (btn?.disabled || creating) return;
 
   if (!formIsValid()) {
     alert('Compila i campi obbligatori (email, validità e almeno 1 opzione completa).');
     return;
   }
 
-  // Mettiamo in stato "busy" tutti i bottoni Crea
   creating = true;
-  const buttons = Array.from(document.querySelectorAll('[data-action="create"], #btn-create'));
-  const prevText = new Map();
-  buttons.forEach(b => {
-    prevText.set(b, b.textContent);
-    b.disabled = true;
-    b.dataset.busy = '1';
-    b.textContent = 'Creo…';
-  });
+  const prev = btn?.textContent;
+  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; btn.textContent = 'Creo…'; }
 
-  // Costruisci payload dal form
+  // costruiamo il body una volta sola, così lo possiamo loggare in caso di errore
   const body = {
-    customerEmail: document.querySelector('#customer-email')?.value?.trim(),
-    currency     : document.querySelector('#quote-currency')?.value || 'EUR',
-    validUntil   : document.querySelector('#quote-validity')?.value || null,
-    notes        : document.querySelector('#quote-notes')?.value?.trim() || '',
+    customerEmail: qs('#customer-email')?.value?.trim(),
+    currency     : qs('#quote-currency')?.value || 'EUR',
+    validUntil   : qs('#quote-validity')?.value || null,
+    notes        : qs('#quote-notes')?.value?.trim() || '',
     sender       : readSender(),
     recipient    : readRecipient(),
     terms: {
-      version       : document.querySelector('#terms-version')?.value || 'v1.0',
-      visibility    : document.querySelector('#link-visibility')?.value || 'Immediata',
-      slug          : '',                              // opzionale: puoi lasciarlo vuoto, lo genera il server
-      linkExpiryDays: toNumber(document.querySelector('#link-expiry')?.value) || undefined,
+      version       : qs('#terms-version')?.value || 'v1.0',
+      visibility    : qs('#link-visibility')?.value || 'Immediata',
+      slug          : '',
+      linkExpiryDays: toNumber(qs('#link-expiry')?.value) || undefined,
       linkExpiryDate: undefined,
     },
     options: readOptions().filter(isOptionComplete),
   };
 
+  // abilita risposta verbosa dal backend
+  const url = `${API_BASE}/api/quotes/create${window.BACK_OFFICE_CONFIG?.DEBUG ? '?debug=1' : ''}`;
+
   try {
-    const resp = await fetch(`${API_BASE}/api/quotes/create`, {
+    const resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body  : JSON.stringify(body),
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(body),
     });
 
-    const json = await resp.json().catch(() => ({}));
+    let json = null;
+    try { json = await resp.json(); } catch { /* no-op */ }
+
     if (!resp.ok || json?.ok === false) {
-      const msg = json?.error?.message || json?.error || `HTTP ${resp.status}`;
-      throw new Error(msg);
+      console.error('[CREATE FAILED]', { status: resp.status, url, body, json });
+      const msg =
+        json?.error?.message ||
+        json?.error?.error?.message ||                 // shape tipica Airtable
+        json?.error?.type ||
+        (typeof json?.error === 'object' ? JSON.stringify(json.error) : json?.error) ||
+        `HTTP ${resp.status}`;
+
+      alert(`Errore durante la creazione del preventivo:\n${msg}`);
+      return;
     }
 
-    // Successo: mostro e copro negli appunti l’URL pubblico
-    const url = json.url || (json.slug ? `${location.origin}/quote/${json.slug}` : '');
-    if (url) {
-      try { await navigator.clipboard.writeText(url); } catch {}
-    }
-    alert(`Preventivo creato!\n\nID: ${json.id}\n${url ? `Link cliente:\n${url}\n\n(Il link è stato copiato negli appunti.)` : ''}`);
+    // OK
+    const link = json?.url || json?.publicUrl || null;
+    alert(`Preventivo creato! ID: ${json?.id}${link ? `\nLink cliente: ${link}` : ''}`);
   } catch (err) {
-    console.error('CREATE FAILED →', err);
-    alert(`Errore durante la creazione del preventivo:\n${err.message || err}`);
+    console.error('[quotes-admin] network error:', err);
+    alert('Errore di rete durante la creazione del preventivo.');
   } finally {
-    // Ripristino bottoni e stato
     creating = false;
-    buttons.forEach(b => {
-      b.disabled = !formIsValid();
-      b.textContent = prevText.get(b) || 'Crea preventivo';
-      delete b.dataset.busy;
-    });
+    if (btn) { btn.disabled = false; btn.dataset.busy = ''; btn.textContent = prev || 'Crea preventivo'; }
   }
 }
+
 
 // ====== PREVIEW (in nuova tab con Blob URL) ======
 function money(n, curr='EUR'){
