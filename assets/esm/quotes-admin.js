@@ -29,6 +29,67 @@ function buildOptions(select, items, placeholder="Seleziona…") {
   });
 }
 
+function money(n, curr='EUR'){
+  if (typeof n !== 'number') return '—';
+  try { return new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n); }
+  catch { return `${n.toFixed(2)} ${curr}`; }
+}
+const escapeHtml = s => String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+/* ------------------------- Sezione COLLI -------------------------- */
+function pkgRowTemplate(idx, v={qty:1,length:'',width:'',height:'',weight:''}){
+  return `
+  <div class="qa-pkg-row" data-row="${idx}" style="display:grid;grid-template-columns:80px repeat(3,1fr) 120px 80px;gap:8px;margin:6px 0">
+    <input type="number" min="1" class="qa-pkg-qty"    value="${v.qty||1}"    placeholder="Q.tà">
+    <input type="number" min="0" step="0.1"  class="qa-pkg-l"  value="${v.length||''}" placeholder="L">
+    <input type="number" min="0" step="0.1"  class="qa-pkg-w"  value="${v.width||''}"  placeholder="W">
+    <input type="number" min="0" step="0.1"  class="qa-pkg-h"  value="${v.height||''}" placeholder="H">
+    <input type="number" min="0" step="0.01" class="qa-pkg-weight" value="${v.weight||''}" placeholder="kg">
+    <button type="button" class="qa-pkg-del">✕</button>
+  </div>`;
+}
+function readPackages(){
+  return qsa('#qa-pkg-rows .qa-pkg-row').map(row => ({
+    qty    : Number(qs('.qa-pkg-qty',    row)?.value)||1,
+    length : Number(qs('.qa-pkg-l',      row)?.value)||0,
+    width  : Number(qs('.qa-pkg-w',      row)?.value)||0,
+    height : Number(qs('.qa-pkg-h',      row)?.value)||0,
+    weight : Number(qs('.qa-pkg-weight', row)?.value)||0,
+  })).filter(p => p.qty>0);
+}
+function refreshPkgTotals(){
+  const arr = readPackages();
+  const pieces = arr.reduce((a,b)=>a+(b.qty||1),0);
+  const weight = arr.reduce((a,b)=>a+((b.weight||0)*(b.qty||1)),0);
+  const el = qs('#qa-pkg-totals');
+  if (el) el.textContent = `Totale colli: ${pieces} · Peso reale totale: ${weight.toFixed(2)} kg`;
+  // Aggiorna riepilogo rapido se presente
+  text(qs('#sum-packages'), pieces ? `${pieces} colli • ${weight.toFixed(2)} kg` : "—");
+}
+function wirePackagesUI(){
+  const rows = qs('#qa-pkg-rows');
+  const add  = qs('#qa-pkg-add');
+  if (!rows) return; // la card colli potrebbe non esserci in alcune viste
+
+  const addRow = (v={}) => {
+    const idx = rows.children.length + 1;
+    rows.insertAdjacentHTML('beforeend', pkgRowTemplate(idx, v));
+    refreshPkgTotals();
+  };
+  add?.addEventListener('click', () => addRow());
+
+  rows?.addEventListener('click', (e) => {
+    if (e.target.classList.contains('qa-pkg-del')) {
+      e.target.closest('.qa-pkg-row')?.remove();
+      refreshPkgTotals();
+    }
+  });
+  rows?.addEventListener('input', refreshPkgTotals);
+
+  // una riga di default
+  if (!rows.children.length) addRow();
+}
+
 /* -------------------------- Lettura form -------------------------- */
 function readSender() {
   return {
@@ -62,10 +123,9 @@ function readOptions() {
     const payer     = qs(".qa-payer",    wrap)?.value || "";
     const price     = toNumber(qs(".qa-price",   wrap)?.value);
     const currency  = qs(".qa-currency", wrap)?.value || "EUR";
-    const weight    = toNumber(qs(".qa-weight",  wrap)?.value);
     const notes     = qs(".qa-notes",    wrap)?.value?.trim() || "";
     const recommended = !!qs(".qa-recommend input", wrap)?.checked;
-    return { index, carrier, service, transit, incoterm, payer, price, currency, weight, notes, recommended };
+    return { index, carrier, service, transit, incoterm, payer, price, currency, notes, recommended };
   });
 }
 function isOptionComplete(o){
@@ -83,33 +143,31 @@ function formIsValid() {
   const email = qs("#customer-email")?.value?.trim();
   const validity = qs("#quote-validity")?.value;
   const opts = readOptions().filter(isOptionComplete);
-  return !!(email && validity && opts.length >= 1);
+  const pkgs = readPackages();
+  return !!(email && validity && opts.length >= 1 && pkgs.length >= 1);
 }
 function previewIsValid() {
-  return readOptions().some(isOptionComplete);
+  return readOptions().some(isOptionComplete) && readPackages().length >= 1;
 }
 function refreshSummary() {
   text(qs("#sum-customer"), qs("#customer-email")?.value?.trim() || "—");
   text(qs("#sum-validity"), fmtDate(qs("#quote-validity")?.value));
   text(qs("#sum-currency"), qs("#quote-currency")?.value || "EUR");
+
   const opts = readOptions();
   text(qs("#sum-options"), `${opts.length} opzioni`);
   const best = getBestIndex(opts);
   text(qs("#sum-best"), best ? `Opzione ${best}` : "—");
+
+  refreshPkgTotals();
 }
 
 /* ------------------------ Anteprima cliente ------------------------ */
-function money(n, curr='EUR'){
-  if (typeof n !== 'number') return '—';
-  try { return new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n); }
-  catch { return `${n.toFixed(2)} ${curr}`; }
-}
-const escapeHtml = s => String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 function buildPreviewHtml(model){
-  const { customerEmail, currency, validUntil, notes, sender, recipient, options } = model;
+  const { customerEmail, currency, validUntil, notes, sender, recipient, options, packages } = model;
   const best = getBestIndex(options) || options[0]?.index;
 
-  const rows = options.map(o => `
+  const optRows = options.map(o => `
     <div class="opt ${o.index===best?'is-best':''}">
       <div class="opt-head">
         <div class="badge">OPZIONE ${o.index}</div>
@@ -122,11 +180,41 @@ function buildPreviewHtml(model){
         <div><div class="k">Incoterm</div><div class="v">${escapeHtml(o.incoterm||'—')}</div></div>
         <div><div class="k">Oneri a carico</div><div class="v">${escapeHtml(o.payer||'—')}</div></div>
         <div><div class="k">Prezzo</div><div class="v">${money(o.price, o.currency||currency)}</div></div>
-        <div><div class="k">Peso reale</div><div class="v">${typeof o.weight==='number' ? o.weight.toFixed(2)+' kg' : '—'}</div></div>
       </div>
       ${o.notes ? `<div class="notes"><strong>Note aggiuntive:</strong> ${escapeHtml(o.notes)}</div>` : ''}
     </div>
   `).join("");
+
+  const pkgs = Array.isArray(packages) ? packages : [];
+  const pieces = pkgs.reduce((a,b)=>a+(b.qty||1),0);
+  const weight = pkgs.reduce((a,b)=>a+((b.weight||0)*(b.qty||1)),0);
+
+  const pkgCard = `
+    <div class="card">
+      <div class="k" style="margin-bottom:6px">Colli</div>
+      <div class="small" style="margin-bottom:8px">
+        Totale colli: <strong>${pieces}</strong> ·
+        Peso reale totale: <strong>${weight.toFixed(2)} kg</strong>
+      </div>
+      ${pkgs.length ? `
+        <div style="overflow:auto">
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr>
+              <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Q.tà</th>
+              <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>
+              <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>
+            </tr></thead>
+            <tbody>
+              ${pkgs.map(p=>`
+                <tr>
+                  <td style="padding:6px 8px">${p.qty||1}</td>
+                  <td style="padding:6px 8px">${[p.length,p.width,p.height].map(n=>Number(n||0).toFixed(1)).join(' × ')}</td>
+                  <td style="padding:6px 8px">${Number(p.weight||0).toFixed(2)}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>` : ``}
+    </div>`;
 
   return `<!doctype html>
 <html lang="it"><head>
@@ -152,6 +240,8 @@ h1{margin:0;font-size:22px}
 .notes{margin-top:8px;color:var(--muted)}
 .small{font-size:12px;color:var(--muted)}
 @media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
+table{border-collapse:collapse;width:100%}
+th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}
 </style></head>
 <body><div class="wrap">
   <div class="header">
@@ -161,6 +251,7 @@ h1{margin:0;font-size:22px}
     </div>
     <div class="small">Valido fino al <strong>${fmtDate(validUntil)}</strong></div>
   </div>
+
   <div class="card">
     <div class="grid2">
       <div><div class="k">Cliente</div><div class="v">${escapeHtml(customerEmail||"—")}</div></div>
@@ -168,6 +259,7 @@ h1{margin:0;font-size:22px}
     </div>
     ${notes ? `<div style="margin-top:10px"><div class="k">Note</div><div class="v">${escapeHtml(notes)}</div></div>` : ""}
   </div>
+
   <div class="card">
     <div class="grid2">
       <div>
@@ -182,10 +274,14 @@ h1{margin:0;font-size:22px}
       </div>
     </div>
   </div>
+
+  ${pkgCard}
+
   <div class="card">
     <div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>
-    ${rows || '<div class="small">Nessuna opzione completa.</div>'}
+    ${optRows || '<div class="small">Nessuna opzione completa.</div>'}
   </div>
+
   <div class="small" style="margin-top:8px">
     Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente.
     Per maggiori informazioni consulta i <a style="color:#9ec1ff" href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.
@@ -207,7 +303,7 @@ async function handleCreate(ev) {
   if (btn?.disabled) return;
 
   if (!formIsValid()) {
-    alert("Compila i campi obbligatori (email, validità e almeno 1 opzione completa).");
+    alert("Compila i campi obbligatori (email, validità, almeno 1 collo e almeno 1 opzione completa).");
     return;
   }
   if (creating) return;
@@ -223,6 +319,7 @@ async function handleCreate(ev) {
       notes        : qs("#quote-notes")?.value?.trim() || "",
       sender       : readSender(),
       recipient    : readRecipient(),
+      packages     : readPackages(),
       terms: {
         version       : qs("#terms-version")?.value || "v1.0",
         visibility    : qs("#link-visibility")?.value || "Immediata",
@@ -251,14 +348,13 @@ async function handleCreate(ev) {
       return;
     }
 
-    // Dry-run? Mostra cosa sarebbe stato creato.
     if (json?.debug) {
       console.log("[DEBUG create] wouldCreate:", json.wouldCreate);
+      console.log("[DEBUG create] packages:", body.packages);
       alert("Modalità debug: nessun record creato.\nControlla la console per il payload inviato.");
       return;
     }
 
-    // Successo reale: apri il link e copialo negli appunti
     if (json?.url) {
       try { await navigator.clipboard.writeText(json.url); } catch {}
       window.open(json.url, "_blank", "noopener");
@@ -279,7 +375,7 @@ async function handleCreate(ev) {
 function handlePreview(ev){
   ev.preventDefault();
   if (!previewIsValid()) {
-    alert("Per l’anteprima serve almeno 1 opzione compilata (corriere, servizio, incoterm, oneri, prezzo).");
+    alert("Per l’anteprima serve almeno 1 collo e almeno 1 opzione (corriere, servizio, incoterm, oneri, prezzo).");
     return;
   }
   const model = {
@@ -289,6 +385,7 @@ function handlePreview(ev){
     notes        : qs("#quote-notes")?.value?.trim() || "",
     sender       : readSender(),
     recipient    : readRecipient(),
+    packages     : readPackages(),
     options      : readOptions().filter(isOptionComplete),
   };
   const html = buildPreviewHtml(model);
@@ -322,6 +419,9 @@ function wireup(){
     buildOptions(qs(".qa-carrier",  wrap), carriers,  "Seleziona corriere");
     buildOptions(qs(".qa-incoterm", wrap), incoterms, "Seleziona incoterm");
   });
+
+  // Sezione colli
+  wirePackagesUI();
 
   const syncButtons = () => {
     const okCreate  = formIsValid();
