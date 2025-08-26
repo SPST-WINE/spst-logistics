@@ -1,26 +1,46 @@
 // api/quotes/create.js
 
 // ===== CORS allowlist =====
-const allowlist = (process.env.ORIGIN_ALLOWLIST || "")
-  .split(",").map(s => s.trim()).filter(Boolean);
+// ===== CORS allowlist =====
+const DEFAULT_ALLOW = [
+  'https://spst.it',
+  'https://www.spst.it',
+  'https://spst-logistics.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:8888',
+];
+const allowlist = (process.env.ORIGIN_ALLOWLIST || DEFAULT_ALLOW.join(','))
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 function isAllowed(origin) {
   if (!origin) return false;
   for (const item of allowlist) {
-    if (item.includes("*")) {
-      const esc = item.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace("\\*", ".*");
-      const re = new RegExp("^" + esc + "$");
-      if (re.test(origin)) return true;
-    } else if (item === origin) return true;
+    if (item.includes('*')) {
+      const esc = item.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('\\*', '.*');
+      if (new RegExp('^' + esc + '$').test(origin)) return true;
+    } else if (item === origin) {
+      return true;
+    }
   }
   return false;
 }
+
 function setCors(res, origin) {
-  if (isAllowed(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
+  const allowed = isAllowed(origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+
+  // Se consentito, echo dell’origine. Niente wildcard + credentials.
+  if (allowed) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    // metti questo solo se usi cookie/sessione:
+    // res.setHeader('Access-Control-Allow-Credentials', 'true');
+  } else {
+    // fallback DEV utile se l'ENV è momentaneamente errata
+    // (lasciare commentato in produzione)
+    // res.setHeader('Access-Control-Allow-Origin', '*');
+  }
 }
 
 // ===== Airtable =====
