@@ -138,6 +138,67 @@ function getBestIndex(opts){
   return valid[0]?.index;
 }
 
+/* --------------------------- Colli (Packages) --------------------------- */
+function pkgRowTemplate(p={qty:1,l:'',w:'',h:'',kg:''}){
+  const row = document.createElement('div');
+  row.className = 'pkg-row';
+  row.innerHTML = `
+    <input type="number" min="1" step="1"   class="pkg-qty" value="${p.qty ?? 1}" />
+    <input type="number" min="0" step="0.1" class="pkg-l"   placeholder="lunghezza" value="${p.l ?? ''}" />
+    <input type="number" min="0" step="0.1" class="pkg-w"   placeholder="larghezza" value="${p.w ?? ''}" />
+    <input type="number" min="0" step="0.1" class="pkg-h"   placeholder="altezza"   value="${p.h ?? ''}" />
+    <input type="number" min="0" step="0.01" class="pkg-kg"  placeholder="kg"        value="${p.kg ?? ''}" />
+    <button type="button" class="pkg-remove">Elimina</button>
+  `;
+  return row;
+}
+function addPackageRow(p){ const rows = qs('#qa-pkg-rows'); rows.appendChild(pkgRowTemplate(p)); refreshPackages(); }
+
+function readPackages(){
+  const wrap = qs('#qa-packages');
+  if (!wrap) return [];
+  return qsa('.pkg-row', wrap).map(r => ({
+    qty: toNumber(qs('.pkg-qty', r)?.value) || 0,
+    l  : toNumber(qs('.pkg-l',   r)?.value),
+    w  : toNumber(qs('.pkg-w',   r)?.value),
+    h  : toNumber(qs('.pkg-h',   r)?.value),
+    kg : toNumber(qs('.pkg-kg',  r)?.value),
+  })).filter(p => p.qty > 0);
+}
+
+function refreshPackages(){
+  const pkgs = readPackages();
+  const totQty = pkgs.reduce((s,p)=> s + (p.qty||0), 0);
+  const totKg  = pkgs.reduce((s,p)=> s + (p.kg||0) * (p.qty||1), 0);
+  text(qs('#qa-pkg-totals'), `Totale colli: ${totQty} · Peso reale totale: ${totKg.toFixed(2)} kg`);
+  text(qs('#sum-packages'), totQty ? `${totQty} collo${totQty===1?'':'i'} (${totKg.toFixed(2)} kg)` : '—');
+}
+
+function wirePackages(){
+  const rows = qs('#qa-pkg-rows');
+  const add  = qs('#qa-pkg-add');
+
+  // Add row
+  add?.addEventListener('click', () => addPackageRow({ qty:1 }));
+
+  // Recalc on input
+  rows?.addEventListener('input', (e) => { if (e.target.closest('.pkg-row')) refreshPackages(); });
+
+  // Remove
+  rows?.addEventListener('click', (e) => {
+    if (e.target.matches('.pkg-remove')) {
+      e.preventDefault();
+      const r = e.target.closest('.pkg-row');
+      if (r) r.remove();
+      refreshPackages();
+    }
+  });
+
+  // Prima riga
+  if (!rows?.children.length) addPackageRow({ qty:1 });
+}
+
+
 /* --------------------- Validazione + Riepilogo --------------------- */
 function formIsValid() {
   const email = qs("#customer-email")?.value?.trim();
@@ -153,6 +214,11 @@ function refreshSummary() {
   text(qs("#sum-customer"), qs("#customer-email")?.value?.trim() || "—");
   text(qs("#sum-validity"), fmtDate(qs("#quote-validity")?.value));
   text(qs("#sum-currency"), qs("#quote-currency")?.value || "EUR");
+  refreshPackages();
+  const best = getBestIndex(readOptions());
+  text(qs("#sum-best"), best ? `Opzione ${best}` : "—");
+}
+
 
   const opts = readOptions();
   text(qs("#sum-options"), `${opts.length} opzioni`);
@@ -320,6 +386,7 @@ async function handleCreate(ev) {
       sender       : readSender(),
       recipient    : readRecipient(),
       packages     : readPackages(),
+shipmentNotes: qs("#shipment-notes")?.value?.trim() || "",
       terms: {
         version       : qs("#terms-version")?.value || "v1.0",
         visibility    : qs("#link-visibility")?.value || "Immediata",
@@ -443,6 +510,9 @@ function wireup(){
     if (btn.id === "btn-preview") return handlePreview(e);
     if (btn.matches('[data-action="create"]') || btn.id === "btn-create") return handleCreate(e);
   });
+
+    wirePackages();
+  refreshPackages();
 
   // Fallback binding diretto
   qsa('[data-action="create"]', container).forEach(b => b.addEventListener("click", handleCreate));
