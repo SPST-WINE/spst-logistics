@@ -1,9 +1,8 @@
 // assets/esm/quotes-admin.js
-
 // Base API: stesso origin dello script (spst-logistics.vercel.app)
 const API_BASE = new URL(import.meta.url).origin;
 
-// Helpers
+/* ------------------------- Helpers di base ------------------------- */
 const qs  = (sel, el=document) => el.querySelector(sel);
 const qsa = (sel, el=document) => Array.from(el.querySelectorAll(sel));
 const text = (el, v) => { if (el) el.textContent = v ?? "—"; };
@@ -30,6 +29,7 @@ function buildOptions(select, items, placeholder="Seleziona…") {
   });
 }
 
+/* -------------------------- Lettura form -------------------------- */
 function readSender() {
   return {
     name   : qs('[data-field="sender_name"]')?.value?.trim() || "",
@@ -52,7 +52,6 @@ function readRecipient() {
     tax    : qs('[data-field="rcpt_tax"]')?.value?.trim() || "",
   };
 }
-
 function readOptions() {
   return qsa(".qa-option").map((wrap, i) => {
     const index     = Number(wrap.getAttribute("data-option")) || i+1;
@@ -72,7 +71,6 @@ function readOptions() {
 function isOptionComplete(o){
   return !!(o.carrier && o.service && o.transit && o.incoterm && o.payer && typeof o.price==="number" && o.price>0);
 }
-
 function getBestIndex(opts){
   const chosen = document.querySelector('input[name="bestOption"]:checked')?.value;
   if (chosen) return Number(chosen);
@@ -80,18 +78,16 @@ function getBestIndex(opts){
   return valid[0]?.index;
 }
 
-// Validazione per creare (richiede email, validità e ≥1 opzione completa)
+/* --------------------- Validazione + Riepilogo --------------------- */
 function formIsValid() {
   const email = qs("#customer-email")?.value?.trim();
   const validity = qs("#quote-validity")?.value;
   const opts = readOptions().filter(isOptionComplete);
   return !!(email && validity && opts.length >= 1);
 }
-// Validazione per preview (basta ≥1 opzione completa)
 function previewIsValid() {
   return readOptions().some(isOptionComplete);
 }
-
 function refreshSummary() {
   text(qs("#sum-customer"), qs("#customer-email")?.value?.trim() || "—");
   text(qs("#sum-validity"), fmtDate(qs("#quote-validity")?.value));
@@ -102,14 +98,13 @@ function refreshSummary() {
   text(qs("#sum-best"), best ? `Opzione ${best}` : "—");
 }
 
-// === Anteprima cliente locale (in nuova tab via Blob, niente popup-blocker)
+/* ------------------------ Anteprima cliente ------------------------ */
 function money(n, curr='EUR'){
   if (typeof n !== 'number') return '—';
   try { return new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n); }
   catch { return `${n.toFixed(2)} ${curr}`; }
 }
 const escapeHtml = s => String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-
 function buildPreviewHtml(model){
   const { customerEmail, currency, validUntil, notes, sender, recipient, options } = model;
   const best = getBestIndex(options) || options[0]?.index;
@@ -197,14 +192,14 @@ h1{margin:0;font-size:22px}
   </div>
 </div></body></html>`;
 }
-
 function openHtmlInNewTab(html) {
   const blob = new Blob([html], { type: "text/html" });
   const url  = URL.createObjectURL(blob);
   window.open(url, "_blank", "noopener");
-  // (verrà rilasciato quando la tab si chiude)
 }
 
+/* ---------------------- Crea preventivo (API) ---------------------- */
+// ALT-click su "Crea preventivo" => ?debug=1 (dry-run)
 let creating = false;
 async function handleCreate(ev) {
   ev.preventDefault();
@@ -238,7 +233,8 @@ async function handleCreate(ev) {
       options: readOptions().filter(isOptionComplete),
     };
 
-    const resp = await fetch(`${API_BASE}/api/quotes/create`, {
+    const endpoint = `${API_BASE}/api/quotes/create${ev?.altKey ? '?debug=1' : ''}`;
+    const resp = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type":"application/json" },
       body: JSON.stringify(body),
@@ -247,18 +243,28 @@ async function handleCreate(ev) {
     let json=null; try{ json=await resp.json(); }catch{}
     if (!resp.ok || json?.ok === false) {
       console.error("CREATE FAILED →", { status: resp.status, json });
-      const msg = json?.error?.message || json?.error || `HTTP ${resp.status}`;
-      alert(`Errore durante la creazione del preventivo:\n${msg}`);
+      const pretty =
+        json?.error?.message ||
+        json?.error?.type ||
+        (json?.error ? JSON.stringify(json.error, null, 2) : `HTTP ${resp.status}`);
+      alert(`Errore durante la creazione del preventivo:\n${pretty}`);
       return;
     }
 
-    // Successo: apri il link e copialo negli appunti
+    // Dry-run? Mostra cosa sarebbe stato creato.
+    if (json?.debug) {
+      console.log("[DEBUG create] wouldCreate:", json.wouldCreate);
+      alert("Modalità debug: nessun record creato.\nControlla la console per il payload inviato.");
+      return;
+    }
+
+    // Successo reale: apri il link e copialo negli appunti
     if (json?.url) {
       try { await navigator.clipboard.writeText(json.url); } catch {}
       window.open(json.url, "_blank", "noopener");
       alert(`Preventivo creato!\nID: ${json.id}\nIl link pubblico è stato aperto in una nuova scheda e copiato negli appunti.`);
     } else {
-      alert("Preventivo creato! ID: " + json.id);
+      alert("Preventivo creato! ID: " + (json?.id || "—"));
     }
   } catch (err) {
     console.error("[quotes-admin] network error:", err);
@@ -269,7 +275,7 @@ async function handleCreate(ev) {
   }
 }
 
-// === Anteprima (locale)
+/* ------------------------- Anteprima locale ------------------------ */
 function handlePreview(ev){
   ev.preventDefault();
   if (!previewIsValid()) {
@@ -289,7 +295,21 @@ function handlePreview(ev){
   openHtmlInNewTab(html);
 }
 
-// ========== Wiring ==========
+/* ---------------------- UI: consigliata (pill) --------------------- */
+function wireRecommendedUI(container){
+  const radios = qsa('input[name="bestOption"]', container);
+  const apply = () => {
+    const val = document.querySelector('input[name="bestOption"]:checked')?.value;
+    qsa('.qa-option', container).forEach(wrap => {
+      if (!val) { wrap.classList.remove('is-recommended'); return; }
+      wrap.classList.toggle('is-recommended', String(wrap.getAttribute('data-option')) === String(val));
+    });
+  };
+  radios.forEach(r => r.addEventListener('change', () => { apply(); refreshSummary(); }));
+  apply();
+}
+
+/* ----------------------------- Wiring ------------------------------ */
 function wireup(){
   const view = qs("#view-preventivi");
   if (!view) return;
@@ -316,7 +336,7 @@ function wireup(){
     if (el.name === "bestOption") el.addEventListener("change", () => { refreshSummary(); syncButtons(); });
   });
 
-  // Event delegation
+  // Event delegation (clic su bottoni)
   container.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="create"], #btn-create, #btn-preview');
     if (!btn) return;
@@ -324,13 +344,14 @@ function wireup(){
     if (btn.matches('[data-action="create"]') || btn.id === "btn-create") return handleCreate(e);
   });
 
-  // Bind diretto (fallback)
+  // Fallback binding diretto
   qsa('[data-action="create"]', container).forEach(b => b.addEventListener("click", handleCreate));
   const btnCreateBottom = qs("#btn-create", container);
   if (btnCreateBottom) btnCreateBottom.addEventListener("click", handleCreate);
   const btnPreview = qs("#btn-preview", container);
   if (btnPreview) btnPreview.addEventListener("click", handlePreview);
 
+  wireRecommendedUI(container);
   refreshSummary();
   syncButtons();
 }
