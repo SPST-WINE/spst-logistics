@@ -1,7 +1,6 @@
 // api/quotes/create.js
 
 // ===== CORS allowlist =====
-// ===== CORS allowlist =====
 const DEFAULT_ALLOW = [
   'https://spst.it',
   'https://www.spst.it',
@@ -18,28 +17,18 @@ function isAllowed(origin) {
     if (item.includes('*')) {
       const esc = item.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('\\*', '.*');
       if (new RegExp('^' + esc + '$').test(origin)) return true;
-    } else if (item === origin) {
-      return true;
-    }
+    } else if (item === origin) return true;
   }
   return false;
 }
-
 function setCors(res, origin) {
   const allowed = isAllowed(origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
-
-  // Se consentito, echo dell’origine. Niente wildcard + credentials.
   if (allowed) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-    // metti questo solo se usi cookie/sessione:
-    // res.setHeader('Access-Control-Allow-Credentials', 'true');
-  } else {
-    // fallback DEV utile se l'ENV è momentaneamente errata
-    // (lasciare commentato in produzione)
-    // res.setHeader('Access-Control-Allow-Origin', '*');
+    // res.setHeader('Access-Control-Allow-Credentials', 'true'); // se usi cookie/sessione
   }
 }
 
@@ -59,7 +48,6 @@ async function atCreate(table, records) {
   });
   const json = await resp.json();
   if (!resp.ok) {
-    // LOG dettagliato per debug
     console.error(`[AT CREATE FAIL] table=${table} status=${resp.status}`);
     console.error(`[AT PAYLOAD] ${JSON.stringify(payload, null, 2)}`);
     console.error(`[AT ERROR] ${JSON.stringify(json, null, 2)}`);
@@ -195,9 +183,8 @@ export default async function handler(req, res) {
     if (rawOptions.length) {
       const optRecords = rawOptions.map(o => ({
         fields: {
-          // FIX: Airtable REST v0 accetta l'array di record IDs (stringhe)
+          // Linked record: array di record IDs (stringhe)
           Preventivo     : [ quoteId ],
-          r.fields.Preventivo_Id = quoteId;  
           Indice         : toNumber(o.index),
           Corriere       : o.carrier || undefined,
           Servizio       : o.service || undefined,
