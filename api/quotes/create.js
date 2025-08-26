@@ -1,16 +1,16 @@
 // api/quotes/create.js
 
-// ===== CORS allowlist (domini autorizzati a chiamare l'API) =====
+// ===== CORS allowlist (domini autorizzati a chiamare questa API) ==========
 const allowlist = (process.env.ORIGIN_ALLOWLIST || '')
   .split(',')
   .map(s => s.trim())
   .filter(Boolean);
 
-// supporta wildcard tipo https://*.webflow.io
 function isAllowed(origin) {
   if (!origin) return false;
   for (const item of allowlist) {
     if (item.includes('*')) {
+      // wildcard: https://*.webflow.io
       const esc = item
         .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
         .replace('\\*', '.*');
@@ -33,15 +33,20 @@ function setCors(res, origin) {
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 }
 
-// ====== ENV / Airtable ======
-const AT_BASE  = process.env.AIRTABLE_BASE_ID; // es: appXXXX
-const AT_PAT   = process.env.AIRTABLE_PAT;     // token PAT
-const TB_QUOTE = process.env.TB_PREVENTIVI;    // tabella preventivi
-const TB_OPT   = process.env.TB_OPZIONI;       // tabella opzioni
+// ===== ENV / Airtable ======================================================
+const AT_BASE  = process.env.AIRTABLE_BASE_ID;
+const AT_PAT   = process.env.AIRTABLE_PAT;
+const TB_QUOTE = process.env.TB_PREVENTIVI;      // es. "Preventivi"
+const TB_OPT   = process.env.TB_OPZIONI;         // es. "OpzioniPreventivo"
 
+// Base pubblica per i link del preventivo (senza trailing slash)
+const PUBLIC_QUOTE_BASE_URL =
+  (process.env.PUBLIC_QUOTE_BASE_URL || 'https://spst-logistics.vercel.app/quote').replace(/\/$/, '');
+
+// === helpers fetch Airtable =================================================
 async function atCreate(table, records) {
   const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
-  const resp = await fetch(url, {
+  const r = await fetch(url, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${AT_PAT}`,
@@ -49,67 +54,39 @@ async function atCreate(table, records) {
     },
     body: JSON.stringify({ records }),
   });
-  const json = await resp.json();
-  if (!resp.ok) {
-    const msg  = json?.error?.message || JSON.stringify(json);
-    const name = json?.error?.type    || 'AirtableError';
-    const err  = new Error(msg);
-    err.name   = name;
-    err.status = resp.status;
+  const json = await r.json();
+  if (!r.ok) {
+    const err = new Error(json?.error?.message || 'Airtable error');
+    err.status = r.status;
     err.payload = json;
     throw err;
   }
   return json;
 }
 
-// ===== Helpers =====
-function toNumber(x){
-  const n = Number(x);
-  return Number.isFinite(n) ? n : undefined;
-}
-
-function mapVisibility(v){
-  // nel FE usiamo "Immediata" | "Solo_Bozza" (ma dall’UI può arrivare "Subito")
+// === helpers vari ==========================================================
+function mapVisibility(v) {
   if (!v) return undefined;
   const s = String(v).toLowerCase();
-  if (s.includes('subito') || s.includes('immediat')) return 'Immediata';
+  if (s.includes('immed') || s === 'subito') return 'Immediata';
   if (s.includes('bozza')) return 'Solo_Bozza';
   return v;
 }
+function mapIncoterm(v) { return v || undefined; }
+function mapPayer(v) { return v || undefined; }
+function toNumber(x) { const n = Number(x); return Number.isFinite(n) ? n : undefined; }
+function fmtISODate(d) { try { return new Date(d).toISOString().slice(0,10); } catch { return undefined; } }
 
-function mapIncoterm(v){
-  // consenti valori tipo EXW/DAP/DDP senza validazione rigida
-  return v ? String(v).trim() : undefined;
+function makeSlug() {
+  const d = new Date();
+  const y = String(d.getFullYear()).slice(2);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const rand = Math.random().toString(36).slice(2, 7);
+  return `q-${y}${m}${dd}-${rand}`;
 }
 
-function mapPayer(v){
-  // 'Mittente' | 'Destinatario'
-  return v ? String(v).trim() : undefined;
-}
-
-function yyyyMMdd(d){
-  return d.toISOString().slice(0,10).replaceAll('-','');
-}
-
-function buildSlug(validUntil){
-  // es: q-250826-2w95l
-  const now = new Date();
-  const y = String(now.getFullYear()).slice(-2);
-  const m = String(now.getMonth()+1).padStart(2,'0');
-  const d = String(now.getDate()).padStart(2,'0');
-  const alpha = '23456789abcdefghjkmnpqrstuvwxyz'; // niente 0/1/il confusi
-  let rnd = '';
-  for (let i=0;i<5;i++) rnd += alpha[Math.floor(Math.random()*alpha.length)];
-  return `q-${y}${m}${d}-${rnd}`;
-}
-
-function addDays(date, days){
-  const d = new Date(date);
-  d.setDate(d.getDate() + (Number(days)||0));
-  return d;
-}
-
-// ===== Handler =====
+// ===== handler =============================================================
 export default async function handler(req, res) {
   setCors(res, req.headers.origin);
 
@@ -122,69 +99,59 @@ export default async function handler(req, res) {
       throw new Error('Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI');
     }
 
-    // body
-    const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
+    // parse body
+    const body = req.body && typeof req.body === 'object'
+      ? req.body
+      : JSON.parse(req.body || '{}');
 
-    // calcoli termini/link
-    const terms     = body.terms || {};
-    const slug      = terms.slug && String(terms.slug).trim() ? terms.slug.trim() : buildSlug(body.validUntil);
-    const visibility= mapVisibility(terms.visibility || 'Immediata');
+    // ======= CREA RECORD PREVENTIVO =======================================
+    const slug = makeSlug();
 
-    let linkExpiryDate = undefined;
-    if (toNumber(terms.linkExpiryDays)) {
-      const base = new Date(); // ora
-      linkExpiryDate = addDays(base, terms.linkExpiryDays).toISOString().slice(0,10); // YYYY-MM-DD
-    } else if (terms.linkExpiryDate) {
-      // se il FE la calcola già
-      try { linkExpiryDate = new Date(terms.linkExpiryDate).toISOString().slice(0,10); } catch {}
-    }
-
-    // ====== Creazione Preventivo ======
     const qFields = {
-      // meta
-      Email_Cliente    : body.customerEmail || undefined,
-      Valuta           : body.currency || undefined,
-      Valido_Fino_Al   : body.validUntil || undefined,
-      Note_Globali     : body.notes || undefined,
+      // Anagrafica cliente / intestazione
+      Email_Cliente   : body.customerEmail || undefined,
+      Valuta          : body.currency || undefined,
+      Valido_Fino_Al  : body.validUntil ? fmtISODate(body.validUntil) : undefined,
+      Note_Globali    : body.notes || undefined,
 
-      // mittente
-      Mittente_Nome       : body.sender?.name,
-      Mittente_Paese      : body.sender?.country,
-      Mittente_Citta      : body.sender?.city,
-      Mittente_CAP        : body.sender?.zip,
-      Mittente_Indirizzo  : body.sender?.address,
-      Mittente_Telefono   : body.sender?.phone,
-      Mittente_Tax        : body.sender?.tax,   // <-- NOME CAMPO usato nella tua base
+      // Mittente
+      Mittente_Nome      : body.sender?.name || undefined,
+      Mittente_Paese     : body.sender?.country || undefined,
+      Mittente_Citta     : body.sender?.city || undefined,
+      Mittente_CAP       : body.sender?.zip || undefined,
+      Mittente_Indirizzo : body.sender?.address || undefined,
+      Mittente_Telefono  : body.sender?.phone || undefined,
+      Mittente_Tax       : body.sender?.tax || undefined,     // <- nome campo in base
 
-      // destinatario
-      Destinatario_Nome       : body.recipient?.name,
-      Destinatario_Paese      : body.recipient?.country,
-      Destinatario_Citta      : body.recipient?.city,
-      Destinatario_CAP        : body.recipient?.zip,
-      Destinatario_Indirizzo  : body.recipient?.address,
-      Destinatario_Telefono   : body.recipient?.phone,
-      Destinatario_Tax        : body.recipient?.tax, // <-- NOME CAMPO usato nella tua base
+      // Destinatario
+      Destinatario_Nome      : body.recipient?.name || undefined,
+      Destinatario_Paese     : body.recipient?.country || undefined,
+      Destinatario_Citta     : body.recipient?.city || undefined,
+      Destinatario_CAP       : body.recipient?.zip || undefined,
+      Destinatario_Indirizzo : body.recipient?.address || undefined,
+      Destinatario_Telefono  : body.recipient?.phone || undefined,
+      Destinatario_Tax       : body.recipient?.tax || undefined,
 
-      // termini / pubblicazione
-      Versione_Termini  : terms.version || 'v1.0',
-      Visibilita        : visibility,
+      // Termini & pubblicazione
+      Versione_Termini  : body.terms?.version || 'v1.0',
+      Visibilita        : mapVisibility(body.terms?.visibility) || 'Immediata',
       Slug_Pubblico     : slug,
-      Scadenza_Link     : linkExpiryDate, // YYYY-MM-DD
+      Scadenza_Link     : toNumber(body.terms?.linkExpiryDays), // (giorni) se esiste il campo numerico
+      // Se aveste anche una data calcolata, aggiungete un campo tipo 'Link_Expiry_Data'
+      // Link_Expiry_Data  : body.terms?.linkExpiryDate ? fmtISODate(body.terms.linkExpiryDate) : undefined,
     };
 
-    const created = await atCreate(TB_QUOTE, [{ fields: qFields }]);
-    const quoteId = created?.records?.[0]?.id;
+    const qResp = await atCreate(TB_QUOTE, [{ fields: qFields }]);
+    const quoteId = qResp.records?.[0]?.id;
     if (!quoteId) throw new Error('Quote created but no record id returned');
 
-    // ====== Opzioni: link al preventivo appena creato ======
+    // ======= CREA OPZIONI (collegandole al preventivo) ====================
     const rawOptions = Array.isArray(body.options) ? body.options : [];
     if (rawOptions.length) {
-      const records = rawOptions.map(o => ({
+      const optRecords = rawOptions.map(o => ({
         fields: {
-          // Link record: **array di ID string**, non oggetti {id:...}
-          Preventivo     : [quoteId],
-
-          // NB: se "Indice" è un Autonumber in Airtable, NON inviarlo.
+          Preventivo     : [quoteId],                 // link record id
+          Indice         : toNumber(o.index),
           Corriere       : o.carrier || undefined,
           Servizio       : o.service || undefined,
           Tempo_Resa     : o.transit || undefined,
@@ -198,18 +165,18 @@ export default async function handler(req, res) {
         }
       }));
 
-      // Airtable consente max 10 record per chiamata: qui in genere sono 1–2
-      await atCreate(TB_OPT, records);
+      // Airtable: max 10 per batch (qui di solito 1–2)
+      await atCreate(TB_OPT, optRecords);
     }
 
-    // URL pubblico (la pagina Webflow dovrà esistere /quote/[slug])
-    const publicUrl = `https://www.spst.it/quote/${encodeURIComponent(slug)}`;
+    // ======= URL pubblico (pagina cliente) =================================
+    const publicUrl = `${PUBLIC_QUOTE_BASE_URL}/${encodeURIComponent(slug)}`;
 
     return res.status(200).json({ ok:true, id: quoteId, slug, url: publicUrl });
   } catch (err) {
     const status  = err.status || 500;
     const details = err.payload || { name: err.name, message: err.message, stack: err.stack };
-    console.error('[api/quotes/create] error:', details);
+    console.error('[api/quotes/create] error →', details);
     return res.status(status).json({ ok:false, error: details });
   }
 }
