@@ -1,137 +1,138 @@
 // api/quotes/create.js
 
 // ===== CORS allowlist =====
-const allowlist = (process.env.ORIGIN_ALLOWLIST || "")
-  .split(",")
-  .map(s => s.trim())
-  .filter(Boolean);
+const allowlist = (process.env.ORIGIN_ALLOWLIST || '')
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 function isAllowed(origin) {
   if (!origin) return false;
   for (const item of allowlist) {
-    if (item.includes("*")) {
-      const esc = item.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace("\\*", ".*");
-      if (new RegExp("^" + esc + "$").test(origin)) return true;
-    } else if (item === origin) {
-      return true;
-    }
+    if (item.includes('*')) {
+      const esc = item.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('\\*', '.*');
+      if (new RegExp('^' + esc + '$').test(origin)) return true;
+    } else if (item === origin) return true;
   }
   return false;
 }
-
 function setCors(res, origin) {
-  if (isAllowed(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-  res.setHeader("Access-Control-Allow-Credentials", "true");
+  if (isAllowed(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
 }
 
-// ===== Helpers =====
-const AT_BASE = process.env.AIRTABLE_BASE_ID;       // es. appxxxx
-const AT_PAT  = process.env.AIRTABLE_PAT;           // PAT
-const TB_QUO  = process.env.TB_PREVENTIVI;          // nome tabella Preventivi
-const TB_OPT  = process.env.TB_OPZIONI;             // nome tabella OpzioniPreventivo
+// ===== Airtable env =====
+const AT_BASE  = process.env.AIRTABLE_BASE_ID;     // es: appXXXX
+const AT_PAT   = process.env.AIRTABLE_PAT;         // token PAT
+const TB_QUOTE = process.env.TB_PREVENTIVI;        // "Preventivi"
+const TB_OPT   = process.env.TB_OPZIONI;           // "OpzioniPreventivo"
 
-function toNumber(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : undefined;
-}
+// URL pubblico (dove serviremo /quote/[slug])
+const PUBLIC_BASE = process.env.PUBLIC_BASE || 'https://spst-logistics.vercel.app';
 
-function mapVisibility(v) {
-  if (!v) return undefined;
-  const s = String(v).toLowerCase();
-  if (s.includes("immediat") || s === "subito") return "Immediata";
-  if (s.includes("bozza")) return "Solo_Bozza";
-  return v; // già valido
-}
-
-function addDaysUTC(days) {
-  const d = new Date();
-  d.setUTCHours(0, 0, 0, 0);
-  d.setUTCDate(d.getUTCDate() + (Number(days) || 0));
-  // Airtable gradisce YYYY-MM-DD per i campi Date non timezoned
-  return d.toISOString().slice(0, 10);
-}
-
-function genSlug() {
-  // q-YYMMDD-xxxxx
-  const d = new Date();
-  const yymmdd = d.toISOString().slice(2, 10).replace(/-/g, "");
-  const rand = Math.random().toString(36).slice(2, 7);
-  return `q-${yymmdd}-${rand}`;
-}
-
-// chiamata generica Airtable (creazione)
-async function atCreate(table, records) {
-  const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
-  const resp = await fetch(url, {
-    method: "POST",
+async function atFetch(path, init={}) {
+  const resp = await fetch(`https://api.airtable.com/v0/${AT_BASE}/${path}`, {
+    ...init,
     headers: {
       Authorization: `Bearer ${AT_PAT}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ records }),
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+    }
   });
   const json = await resp.json();
   if (!resp.ok) {
-    const err = new Error(json?.error?.message || "AirtableError");
-    err.status  = resp.status;
-    err.payload = json;
-    err.table   = table;
-    err.records = records;
-    throw err;
+    const e = new Error(json?.error?.message || `Airtable ${resp.status}`);
+    e.status = resp.status; e.payload = json;
+    throw e;
   }
   return json;
 }
+async function atCreate(table, records) {
+  return atFetch(encodeURIComponent(table), {
+    method: 'POST',
+    body: JSON.stringify({ records })
+  });
+}
 
-// ===== Handler =====
+// ===== utils =====
+function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : undefined; }
+function mapVisibility(v) {
+  if (!v) return undefined;
+  const s = String(v).toLowerCase();
+  if (s.includes('immed') || s === 'subito') return 'Immediata';
+  if (s.includes('bozza')) return 'Solo_Bozza';
+  return v;
+}
+function generateSlug(d=new Date()){
+  const yy = String(d.getFullYear()).slice(-2);
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  const dd = String(d.getDate()).padStart(2,'0');
+  const rand = Math.random().toString(36).slice(2,7).toLowerCase();
+  return `q-${yy}${mm}${dd}-${rand}`;
+}
+async function slugExists(slug){
+  const ff = encodeURIComponent(`{Slug_Pubblico}="${slug}"`);
+  const data = await atFetch(`${encodeURIComponent(TB_QUOTE)}?maxRecords=1&filterByFormula=${ff}`);
+  return (data.records || []).length > 0;
+}
+async function uniqueSlug() {
+  for (let i=0;i<6;i++){
+    const s = generateSlug();
+    if (!(await slugExists(s))) return s;
+  }
+  // estremo: aggiungi più entropia
+  return generateSlug(new Date(Date.now()+Math.random()*1e6));
+}
+
+function addDays(dateStr, days){
+  if (!dateStr && typeof days!=='number') return undefined;
+  const base = dateStr ? new Date(dateStr) : new Date();
+  if (Number.isNaN(+base)) return undefined;
+  base.setDate(base.getDate() + (days||0));
+  return base.toISOString().slice(0,10);
+}
+
+// ===== handler =====
 export default async function handler(req, res) {
   const origin = req.headers.origin;
   setCors(res, origin);
 
-  if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST")   return res.status(405).json({ ok: false, error: "Method Not Allowed" });
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST')  return res.status(405).json({ ok:false, error:'Method Not Allowed' });
 
   try {
-    // sanity env
-    if (!AT_BASE || !AT_PAT || !TB_QUO || !TB_OPT) {
-      throw new Error("Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI");
+    if (!AT_BASE || !AT_PAT || !TB_QUOTE || !TB_OPT) {
+      throw new Error('Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI');
     }
 
-    const body = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
+    const body = typeof req.body === 'object' ? req.body : JSON.parse(req.body || '{}');
 
-    // ===== Mappatura campi Preventivo (frontend -> Airtable) =====
-    // Attesi dal FE:
-    // customerEmail, currency, validUntil, notes,
-    // sender{name,country,city,zip,address,phone,tax},
-    // recipient{name,country,city,zip,address,phone,tax},
-    // terms{version,visibility,slug,linkExpiryDays,linkExpiryDate},
-    // options[ {index,carrier,service,transit,incoterm,payer,price,currency,weight,notes,recommended} ]
+    // slug unico (se non passato dal FE)
+    const slug = (body?.terms?.slug && String(body.terms.slug).trim()) || await uniqueSlug();
 
-    const expiryDate =
-      body.terms?.linkExpiryDate ||
-      (body.terms?.linkExpiryDays ? addDaysUTC(body.terms.linkExpiryDays) : undefined);
+    // calcola scadenza link: se passi days → data; se passi già la data, la usiamo
+    const linkExpiryDate =
+      body?.terms?.linkExpiryDate ||
+      (typeof body?.terms?.linkExpiryDays === 'number'
+        ? addDays(undefined, body.terms.linkExpiryDays)
+        : undefined);
 
-    const slug = (body.terms?.slug && String(body.terms.slug).trim()) || genSlug();
-
+    // campi Preventivo
     const qFields = {
-      // dati generali
-      Email_Cliente    : body.customerEmail || undefined,
-      Valuta           : body.currency || undefined,
-      Valido_Fino_Al   : body.validUntil || undefined,
-      Note_Globali     : body.notes || undefined,
+      Email_Cliente      : body.customerEmail || undefined,
+      Valuta             : body.currency || undefined,
+      Valido_Fino_Al     : body.validUntil || undefined,
+      Note_Globali       : body.notes || undefined,
 
-      // mittente
       Mittente_Nome      : body.sender?.name,
       Mittente_Paese     : body.sender?.country,
       Mittente_Citta     : body.sender?.city,
       Mittente_CAP       : body.sender?.zip,
       Mittente_Indirizzo : body.sender?.address,
       Mittente_Telefono  : body.sender?.phone,
-      Mittente_Tax       : body.sender?.tax,        // <- IMPORTANTE: *_Tax (non *_TaxID)
+      Mittente_Tax       : body.sender?.tax,
 
-      // destinatario
       Destinatario_Nome      : body.recipient?.name,
       Destinatario_Paese     : body.recipient?.country,
       Destinatario_Citta     : body.recipient?.city,
@@ -140,61 +141,45 @@ export default async function handler(req, res) {
       Destinatario_Telefono  : body.recipient?.phone,
       Destinatario_Tax       : body.recipient?.tax,
 
-      // termini / visibilità
-      Versione_Termini : body.terms?.version,
-      Visibilita       : mapVisibility(body.terms?.visibility), // "Immediata" | "Solo_Bozza"
-      Slug_Pubblico    : slug,
-      Scadenza_Link    : expiryDate, // YYYY-MM-DD opzionale
+      Versione_Termini   : body.terms?.version,
+      Visibilita         : mapVisibility(body.terms?.visibility), // Immediata / Solo_Bozza
+      Slug_Pubblico      : slug,
+      Scadenza_Link      : linkExpiryDate, // YYYY-MM-DD
     };
 
-    // 1) Crea il Preventivo
-    const qResp   = await atCreate(TB_QUO, [{ fields: qFields }]);
+    // crea Preventivo
+    const qResp = await atCreate(TB_QUOTE, [{ fields: qFields }]);
     const quoteId = qResp.records?.[0]?.id;
-if (!quoteId || !quoteId.startsWith('rec')) {
-  throw new Error(`Invalid quoteId from Airtable: ${quoteId}`);
-}
+    if (!quoteId) throw new Error('Quote created but no record id returned');
 
-    // 2) Crea le Opzioni col link inverso al preventivo
+    // crea Opzioni col link inverso
     const rawOptions = Array.isArray(body.options) ? body.options : [];
     if (rawOptions.length) {
       const optRecords = rawOptions.map(o => ({
         fields: {
-          Preventivo     : [ quoteId ], 
+          Preventivo     : [ { id: quoteId } ],
           Indice         : toNumber(o.index),
-          Corriere       : o.carrier || undefined,
-          Servizio       : o.service || undefined,
-          Tempo_Resa     : o.transit || undefined,
-          Incoterm       : o.incoterm || undefined, // EXW/DAP/DDP; must match single select
-          Oneri_A_Carico : o.payer || undefined,    // Mittente/Destinatario
+          Corriere       : o.carrier,
+          Servizio       : o.service,
+          Tempo_Resa     : o.transit,
+          Incoterm       : o.incoterm || undefined,
+          Oneri_A_Carico : o.payer || undefined,
           Prezzo         : toNumber(o.price),
-          Valuta         : o.currency || body.currency || undefined,
+          Valuta         : o.currency || body.currency,
           Peso_Kg        : toNumber(o.weight),
-          Note_Operative : o.notes || undefined,
+          Note_Operative : o.notes,
           Consigliata    : !!o.recommended,
         }
       }));
-
-      // (Airtable max 10/req – qui siamo ben sotto)
       await atCreate(TB_OPT, optRecords);
     }
 
-    return res.status(200).json({ ok: true, id: quoteId, slug });
+    const url = `${PUBLIC_BASE}/quote/${encodeURIComponent(slug)}`;
+    return res.status(200).json({ ok:true, id: quoteId, slug, url });
   } catch (err) {
-    const status  = err.status || 500;
+    const status = err.status || 500;
     const details = err.payload || { message: err.message, name: err.name };
-    // log esteso lato server
-    console.error("[quotes/create] error:", {
-      table: err.table,
-      details,
-      fields: err.records?.[0]?.fields,
-    });
-
-    // se ?debug=1 includo tabella e campi per aiutare dal FE
-    const debug = (req.query?.debug === "1");
-    return res.status(status).json({
-      ok   : false,
-      error: details,
-      ...(debug ? { table: err.table, fields: err.records?.[0]?.fields } : {})
-    });
+    console.error('[quotes/create] error:', details);
+    return res.status(status).json({ ok:false, error: details });
   }
 }
