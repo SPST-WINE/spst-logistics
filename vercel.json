@@ -1,6 +1,7 @@
 {
   "rewrites": [
-    { "source": "/back-office/:path*", "destination": "/assets/esm/:path*" }
+    { "source": "/back-office/:path*", "destination": "/assets/esm/:path*" },
+    { "source": "/quote/:slug", "destination": "/api/quote/:slug" }
   ],
   "headers": [
     {
@@ -23,9 +24,5 @@
       ]
     }
   ]
-},
-{
-  "rewrites": [
-    { "source": "/quote/:slug", "destination": "/api/quote/:slug" }
-  ]
 }
+
