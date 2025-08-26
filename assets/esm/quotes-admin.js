@@ -36,58 +36,71 @@ function money(n, curr='EUR'){
 }
 const escapeHtml = s => String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
-/* ------------------------- Sezione COLLI -------------------------- */
-function pkgRowTemplate(idx, v={qty:1,length:'',width:'',height:'',weight:''}){
-  return `
-  <div class="qa-pkg-row" data-row="${idx}" style="display:grid;grid-template-columns:80px repeat(3,1fr) 120px 80px;gap:8px;margin:6px 0">
-    <input type="number" min="1" class="qa-pkg-qty"    value="${v.qty||1}"    placeholder="Q.tà">
-    <input type="number" min="0" step="0.1"  class="qa-pkg-l"  value="${v.length||''}" placeholder="L">
-    <input type="number" min="0" step="0.1"  class="qa-pkg-w"  value="${v.width||''}"  placeholder="W">
-    <input type="number" min="0" step="0.1"  class="qa-pkg-h"  value="${v.height||''}" placeholder="H">
-    <input type="number" min="0" step="0.01" class="qa-pkg-weight" value="${v.weight||''}" placeholder="kg">
-    <button type="button" class="qa-pkg-del">✕</button>
-  </div>`;
+/* --------------------------- Colli (Packages) --------------------------- */
+// markup per una riga collo
+function pkgRowTemplate(p={qty:1,l:'',w:'',h:'',kg:''}){
+  const row = document.createElement('div');
+  row.className = 'pkg-row';
+  row.innerHTML = `
+    <input type="number" min="1" step="1"   class="pkg-qty" value="${p.qty ?? 1}" />
+    <input type="number" min="0" step="0.1" class="pkg-l"   placeholder="lunghezza" value="${p.l ?? ''}" />
+    <input type="number" min="0" step="0.1" class="pkg-w"   placeholder="larghezza" value="${p.w ?? ''}" />
+    <input type="number" min="0" step="0.1" class="pkg-h"   placeholder="altezza"   value="${p.h ?? ''}" />
+    <input type="number" min="0" step="0.01" class="pkg-kg"  placeholder="kg"        value="${p.kg ?? ''}" />
+    <button type="button" class="pkg-remove">Elimina</button>
+  `;
+  return row;
 }
+function addPackageRow(p){ const rows = qs('#qa-pkg-rows'); rows.appendChild(pkgRowTemplate(p)); }
+
 function readPackages(){
-  return qsa('#qa-pkg-rows .qa-pkg-row').map(row => ({
-    qty    : Number(qs('.qa-pkg-qty',    row)?.value)||1,
-    length : Number(qs('.qa-pkg-l',      row)?.value)||0,
-    width  : Number(qs('.qa-pkg-w',      row)?.value)||0,
-    height : Number(qs('.qa-pkg-h',      row)?.value)||0,
-    weight : Number(qs('.qa-pkg-weight', row)?.value)||0,
-  })).filter(p => p.qty>0);
+  const wrap = qs('#qa-packages');
+  if (!wrap) return [];
+  return qsa('.pkg-row', wrap).map(r => ({
+    qty: toNumber(qs('.pkg-qty', r)?.value) || 0,
+    l  : toNumber(qs('.pkg-l',   r)?.value),
+    w  : toNumber(qs('.pkg-w',   r)?.value),
+    h  : toNumber(qs('.pkg-h',   r)?.value),
+    kg : toNumber(qs('.pkg-kg',  r)?.value),
+  })).filter(p => p.qty > 0);
 }
-function refreshPkgTotals(){
-  const arr = readPackages();
-  const pieces = arr.reduce((a,b)=>a+(b.qty||1),0);
-  const weight = arr.reduce((a,b)=>a+((b.weight||0)*(b.qty||1)),0);
-  const el = qs('#qa-pkg-totals');
-  if (el) el.textContent = `Totale colli: ${pieces} · Peso reale totale: ${weight.toFixed(2)} kg`;
-  // Aggiorna riepilogo rapido se presente
-  text(qs('#sum-packages'), pieces ? `${pieces} colli • ${weight.toFixed(2)} kg` : "—");
+
+function refreshPackages(){
+  const pkgs = readPackages();
+  const totQty = pkgs.reduce((s,p)=> s + (p.qty||0), 0);
+  const totKg  = pkgs.reduce((s,p)=> s + (p.kg||0) * (p.qty||1), 0);
+  text(qs('#qa-pkg-totals'), `Totale colli: ${totQty} · Peso reale totale: ${totKg.toFixed(2)} kg`);
+  // riepilogo
+  const sumPk = qs('#sum-packages');
+  if (sumPk) text(sumPk, totQty ? `${totQty} collo${totQty===1?'':'i'} (${totKg.toFixed(2)} kg)` : '—');
 }
-function wirePackagesUI(){
+
+// attacca gli handler ai controlli dei colli
+function wirePackages(onChange){
   const rows = qs('#qa-pkg-rows');
   const add  = qs('#qa-pkg-add');
-  if (!rows) return; // la card colli potrebbe non esserci in alcune viste
+  const changed = () => { refreshPackages(); onChange && onChange(); };
 
-  const addRow = (v={}) => {
-    const idx = rows.children.length + 1;
-    rows.insertAdjacentHTML('beforeend', pkgRowTemplate(idx, v));
-    refreshPkgTotals();
-  };
-  add?.addEventListener('click', () => addRow());
+  // Add
+  add?.addEventListener('click', () => { addPackageRow({ qty:1 }); changed(); });
 
+  // Edit
+  rows?.addEventListener('input', (e) => {
+    if (e.target.closest('.pkg-row')) changed();
+  });
+
+  // Remove
   rows?.addEventListener('click', (e) => {
-    if (e.target.classList.contains('qa-pkg-del')) {
-      e.target.closest('.qa-pkg-row')?.remove();
-      refreshPkgTotals();
+    if (e.target.matches('.pkg-remove')) {
+      e.preventDefault();
+      const r = e.target.closest('.pkg-row');
+      if (r) r.remove();
+      changed();
     }
   });
-  rows?.addEventListener('input', refreshPkgTotals);
 
-  // una riga di default
-  if (!rows.children.length) addRow();
+  // Prima riga
+  if (!rows?.children.length) { addPackageRow({ qty:1 }); changed(); }
 }
 
 /* -------------------------- Lettura form -------------------------- */
@@ -138,67 +151,6 @@ function getBestIndex(opts){
   return valid[0]?.index;
 }
 
-/* --------------------------- Colli (Packages) --------------------------- */
-function pkgRowTemplate(p={qty:1,l:'',w:'',h:'',kg:''}){
-  const row = document.createElement('div');
-  row.className = 'pkg-row';
-  row.innerHTML = `
-    <input type="number" min="1" step="1"   class="pkg-qty" value="${p.qty ?? 1}" />
-    <input type="number" min="0" step="0.1" class="pkg-l"   placeholder="lunghezza" value="${p.l ?? ''}" />
-    <input type="number" min="0" step="0.1" class="pkg-w"   placeholder="larghezza" value="${p.w ?? ''}" />
-    <input type="number" min="0" step="0.1" class="pkg-h"   placeholder="altezza"   value="${p.h ?? ''}" />
-    <input type="number" min="0" step="0.01" class="pkg-kg"  placeholder="kg"        value="${p.kg ?? ''}" />
-    <button type="button" class="pkg-remove">Elimina</button>
-  `;
-  return row;
-}
-function addPackageRow(p){ const rows = qs('#qa-pkg-rows'); rows.appendChild(pkgRowTemplate(p)); refreshPackages(); }
-
-function readPackages(){
-  const wrap = qs('#qa-packages');
-  if (!wrap) return [];
-  return qsa('.pkg-row', wrap).map(r => ({
-    qty: toNumber(qs('.pkg-qty', r)?.value) || 0,
-    l  : toNumber(qs('.pkg-l',   r)?.value),
-    w  : toNumber(qs('.pkg-w',   r)?.value),
-    h  : toNumber(qs('.pkg-h',   r)?.value),
-    kg : toNumber(qs('.pkg-kg',  r)?.value),
-  })).filter(p => p.qty > 0);
-}
-
-function refreshPackages(){
-  const pkgs = readPackages();
-  const totQty = pkgs.reduce((s,p)=> s + (p.qty||0), 0);
-  const totKg  = pkgs.reduce((s,p)=> s + (p.kg||0) * (p.qty||1), 0);
-  text(qs('#qa-pkg-totals'), `Totale colli: ${totQty} · Peso reale totale: ${totKg.toFixed(2)} kg`);
-  text(qs('#sum-packages'), totQty ? `${totQty} collo${totQty===1?'':'i'} (${totKg.toFixed(2)} kg)` : '—');
-}
-
-function wirePackages(){
-  const rows = qs('#qa-pkg-rows');
-  const add  = qs('#qa-pkg-add');
-
-  // Add row
-  add?.addEventListener('click', () => addPackageRow({ qty:1 }));
-
-  // Recalc on input
-  rows?.addEventListener('input', (e) => { if (e.target.closest('.pkg-row')) refreshPackages(); });
-
-  // Remove
-  rows?.addEventListener('click', (e) => {
-    if (e.target.matches('.pkg-remove')) {
-      e.preventDefault();
-      const r = e.target.closest('.pkg-row');
-      if (r) r.remove();
-      refreshPackages();
-    }
-  });
-
-  // Prima riga
-  if (!rows?.children.length) addPackageRow({ qty:1 });
-}
-
-
 /* --------------------- Validazione + Riepilogo --------------------- */
 function formIsValid() {
   const email = qs("#customer-email")?.value?.trim();
@@ -217,15 +169,6 @@ function refreshSummary() {
   refreshPackages();
   const best = getBestIndex(readOptions());
   text(qs("#sum-best"), best ? `Opzione ${best}` : "—");
-}
-
-
-  const opts = readOptions();
-  text(qs("#sum-options"), `${opts.length} opzioni`);
-  const best = getBestIndex(opts);
-  text(qs("#sum-best"), best ? `Opzione ${best}` : "—");
-
-  refreshPkgTotals();
 }
 
 /* ------------------------ Anteprima cliente ------------------------ */
@@ -253,7 +196,7 @@ function buildPreviewHtml(model){
 
   const pkgs = Array.isArray(packages) ? packages : [];
   const pieces = pkgs.reduce((a,b)=>a+(b.qty||1),0);
-  const weight = pkgs.reduce((a,b)=>a+((b.weight||0)*(b.qty||1)),0);
+  const weight = pkgs.reduce((a,b)=>a+((b.kg||b.weight||0)*(b.qty||1)),0);
 
   const pkgCard = `
     <div class="card">
@@ -266,7 +209,7 @@ function buildPreviewHtml(model){
         <div style="overflow:auto">
           <table style="width:100%;border-collapse:collapse">
             <thead><tr>
-              <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Q.tà</th>
+              <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>
               <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>
               <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>
             </tr></thead>
@@ -274,8 +217,8 @@ function buildPreviewHtml(model){
               ${pkgs.map(p=>`
                 <tr>
                   <td style="padding:6px 8px">${p.qty||1}</td>
-                  <td style="padding:6px 8px">${[p.length,p.width,p.height].map(n=>Number(n||0).toFixed(1)).join(' × ')}</td>
-                  <td style="padding:6px 8px">${Number(p.weight||0).toFixed(2)}</td>
+                  <td style="padding:6px 8px">${[p.l??p.length,p.w??p.width,p.h??p.height].map(n=>Number(n||0).toFixed(1)).join(' × ')}</td>
+                  <td style="padding:6px 8px">${Number(p.kg??p.weight||0).toFixed(2)}</td>
                 </tr>`).join('')}
             </tbody>
           </table>
@@ -361,7 +304,6 @@ function openHtmlInNewTab(html) {
 }
 
 /* ---------------------- Crea preventivo (API) ---------------------- */
-// ALT-click su "Crea preventivo" => ?debug=1 (dry-run)
 let creating = false;
 async function handleCreate(ev) {
   ev.preventDefault();
@@ -386,7 +328,7 @@ async function handleCreate(ev) {
       sender       : readSender(),
       recipient    : readRecipient(),
       packages     : readPackages(),
-shipmentNotes: qs("#shipment-notes")?.value?.trim() || "",
+      shipmentNotes: qs("#shipment-notes")?.value?.trim() || "",
       terms: {
         version       : qs("#terms-version")?.value || "v1.0",
         visibility    : qs("#link-visibility")?.value || "Immediata",
@@ -487,9 +429,7 @@ function wireup(){
     buildOptions(qs(".qa-incoterm", wrap), incoterms, "Seleziona incoterm");
   });
 
-  // Sezione colli
-  wirePackagesUI();
-
+  // Pulsanti
   const syncButtons = () => {
     const okCreate  = formIsValid();
     const okPreview = previewIsValid();
@@ -497,22 +437,22 @@ function wireup(){
     qsa("#btn-preview", container).forEach(b => b.disabled = !okPreview);
   };
 
-  // Ricalcola riepilogo e stato bottoni
+  // Sezione colli
+  wirePackages(() => { refreshSummary(); syncButtons(); });
+
+  // Ricalcola riepilogo e stato bottoni per gli altri input
   qsa("input,select,textarea", container).forEach(el => {
     el.addEventListener("input", () => { refreshSummary(); syncButtons(); });
     if (el.name === "bestOption") el.addEventListener("change", () => { refreshSummary(); syncButtons(); });
   });
 
-  // Event delegation (clic su bottoni)
+  // Event delegation (clic su bottoni top)
   container.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="create"], #btn-create, #btn-preview');
     if (!btn) return;
     if (btn.id === "btn-preview") return handlePreview(e);
     if (btn.matches('[data-action="create"]') || btn.id === "btn-create") return handleCreate(e);
   });
-
-    wirePackages();
-  refreshPackages();
 
   // Fallback binding diretto
   qsa('[data-action="create"]', container).forEach(b => b.addEventListener("click", handleCreate));
