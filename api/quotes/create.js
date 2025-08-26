@@ -28,11 +28,11 @@ function setCors(res, origin) {
   res.setHeader("Access-Control-Allow-Credentials", "true");
 }
 
-// ===== helpers Airtable =====
-const AT_BASE  = process.env.AIRTABLE_BASE_ID; // es: appXXXXXXXXXXXXXX
+// ===== Airtable =====
+const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;    // nome tab Preventivi
-const TB_OPT   = process.env.TB_OPZIONI;       // nome tab OpzioniPreventivo
+const TB_QUOTE = process.env.TB_PREVENTIVI;   // "Preventivi"
+const TB_OPT   = process.env.TB_OPZIONI;      // "OpzioniPreventivo"
 
 async function atCreate(table, records) {
   const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
@@ -93,12 +93,10 @@ export default async function handler(req, res) {
       throw new Error("Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI");
     }
 
-    // supporta body già parsato (Vercel) o stringa JSON
-    const body = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
-    const urlStr = typeof req.url === "string" ? req.url : "";
-    const debug  = urlStr.includes("debug=1");
+    const body  = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
+    const debug = (typeof req.url === "string") && req.url.includes("debug=1");
 
-    // ---------- genera slug + scadenza link
+    // ---- slug + scadenza
     const now  = new Date();
     const slug = `q-${now.toISOString().slice(2,10).replace(/-/g,"")}-${Math.random().toString(36).slice(2,7)}`;
 
@@ -110,52 +108,47 @@ export default async function handler(req, res) {
       expiryDate = addDays(now, body.terms.linkExpiryDays);
     }
 
-    // base URL pubblico (configurabile da env)
+    // base URL pubblico
     const PUBLIC_QUOTE_BASE_URL =
       (process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote").replace(/\/$/,"");
     const publicUrl = `${PUBLIC_QUOTE_BASE_URL}/${encodeURIComponent(slug)}`;
 
-    // ---------- campi PREVENTIVO (mappa ai nomi della tua base)
+    // ---- campi Preventivo
     const qFields = {
-      // meta
       Email_Cliente   : body.customerEmail || undefined,
       Valuta          : body.currency || undefined,
-      Valido_Fino_Al  : body.validUntil || undefined,     // "YYYY-MM-DD" dall'input date
+      Valido_Fino_Al  : body.validUntil || undefined, // "YYYY-MM-DD"
       Note_Globali    : body.notes || undefined,
 
-      // mittente
-      Mittente_Nome       : body.sender?.name || undefined,
-      Mittente_Paese      : body.sender?.country || undefined,
-      Mittente_Citta      : body.sender?.city || undefined,
-      Mittente_CAP        : body.sender?.zip || undefined,
-      Mittente_Indirizzo  : body.sender?.address || undefined,
-      Mittente_Telefono   : body.sender?.phone || undefined,
-      Mittente_Tax        : body.sender?.tax || undefined,
+      Mittente_Nome      : body.sender?.name || undefined,
+      Mittente_Paese     : body.sender?.country || undefined,
+      Mittente_Citta     : body.sender?.city || undefined,
+      Mittente_CAP       : body.sender?.zip || undefined,
+      Mittente_Indirizzo : body.sender?.address || undefined,
+      Mittente_Telefono  : body.sender?.phone || undefined,
+      Mittente_Tax       : body.sender?.tax || undefined,
 
-      // destinatario
-      Destinatario_Nome       : body.recipient?.name || undefined,
-      Destinatario_Paese      : body.recipient?.country || undefined,
-      Destinatario_Citta      : body.recipient?.city || undefined,
-      Destinatario_CAP        : body.recipient?.zip || undefined,
-      Destinatario_Indirizzo  : body.recipient?.address || undefined,
-      Destinatario_Telefono   : body.recipient?.phone || undefined,
-      Destinatario_Tax        : body.recipient?.tax || undefined,
+      Destinatario_Nome      : body.recipient?.name || undefined,
+      Destinatario_Paese     : body.recipient?.country || undefined,
+      Destinatario_Citta     : body.recipient?.city || undefined,
+      Destinatario_CAP       : body.recipient?.zip || undefined,
+      Destinatario_Indirizzo : body.recipient?.address || undefined,
+      Destinatario_Telefono  : body.recipient?.phone || undefined,
+      Destinatario_Tax       : body.recipient?.tax || undefined,
 
-      // termini / link pubblico
-      Versione_Termini : body.terms?.version || "v1.0",
-      Visibilita       : mapVisibility(body.terms?.visibility) || "Immediata",
-      Slug_Pubblico    : slug,          // <- SOLO questo: niente campo "Slug"
-      Scadenza_Link    : expiryDate ? expiryDate.toISOString() : undefined,
+      Versione_Termini  : body.terms?.version || "v1.0",
+      Visibilita        : mapVisibility(body.terms?.visibility) || "Immediata",
+      Slug_Pubblico     : slug,                                  // NON scrivere URL_Pubblico (formula)
+      Scadenza_Link     : expiryDate ? expiryDate.toISOString() : undefined,
 
-      // opzionale: numero opzione consigliata
       Opzione_Consigliata: getBestIndex(Array.isArray(body.options) ? body.options : []),
     };
 
-    // ---------- payload Opzioni
-    const rawOptions = Array.isArray(body.options) ? body.options : [];
-    const optRecords = rawOptions.map(o => ({
-      fields: {
-        Preventivo     : [ quoteId ],
+    // ---- DEBUG (dry-run)
+    if (debug) {
+      const rawOptions = Array.isArray(body.options) ? body.options : [];
+      const wouldOptions = rawOptions.map(o => ({
+        Preventivo     : "<record id created after>",
         Indice         : toNumber(o.index),
         Corriere       : o.carrier || undefined,
         Servizio       : o.service || undefined,
@@ -167,33 +160,36 @@ export default async function handler(req, res) {
         Peso_Kg        : toNumber(o.weight),
         Note_Operative : o.notes || undefined,
         Consigliata    : !!o.recommended,
-      }
-    }));
-
-    // ---------- modalità DEBUG (dry-run, nessuna write su Airtable)
-    if (debug) {
-      return res.status(200).json({
-        ok: true,
-        debug: true,
-        wouldCreate: {
-          preventivo: qFields,
-          opzioni: optRecords.map(r => r.fields),
-          slug,
-          url: publicUrl,
-        }
-      });
+      }));
+      return res.status(200).json({ ok:true, debug:true, wouldCreate:{ preventivo:qFields, opzioni:wouldOptions, slug, url: publicUrl } });
     }
 
-    // ---------- crea Preventivo
+    // ---- crea Preventivo
     const qResp   = await atCreate(TB_QUOTE, [{ fields: qFields }]);
     const quoteId = qResp.records?.[0]?.id;
-if (!quoteId || typeof quoteId !== 'string') {
-  throw new Error('Quote created but no valid record id returned');
-}
+    if (!quoteId || typeof quoteId !== "string") {
+      throw new Error("Quote created but no valid record id returned");
+    }
 
-    // ---------- crea Opzioni (collega al preventivo)
-    if (optRecords.length) {
-      optRecords.forEach(r => { r.fields.Preventivo = [{ id: quoteId }]; });
+    // ---- crea Opzioni (dopo avere quoteId!)
+    const rawOptions = Array.isArray(body.options) ? body.options : [];
+    if (rawOptions.length) {
+      const optRecords = rawOptions.map(o => ({
+        fields: {
+          Preventivo     : [{ id: quoteId }],          // array di record-link objects
+          Indice         : toNumber(o.index),
+          Corriere       : o.carrier || undefined,
+          Servizio       : o.service || undefined,
+          Tempo_Resa     : o.transit || undefined,
+          Incoterm       : mapIncoterm(o.incoterm),
+          Oneri_A_Carico : mapPayer(o.payer),
+          Prezzo         : toNumber(o.price),
+          Valuta         : o.currency || body.currency || undefined,
+          Peso_Kg        : toNumber(o.weight),
+          Note_Operative : o.notes || undefined,
+          Consigliata    : !!o.recommended,
+        }
+      }));
       await atCreate(TB_OPT, optRecords);
     }
 
