@@ -142,20 +142,25 @@ async function handleCreate(ev) {
   btn.textContent = 'Creo…';
 
   try {
-    const resp = await fetch(`${API_BASE}/api/quotes/create`, {
+    const resp = await fetch(`${API_BASE}/api/quotes/create?debug=1`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    let json = null;
-    try { json = await resp.json(); } catch {}
-
+    
+    let json=null; try{ json=await resp.json(); }catch{}
     if (!resp.ok || json?.ok === false) {
-      console.error('CREATE FAILED →', { status: resp.status, json });
-      const msg = json?.error?.message || json?.error || `HTTP ${resp.status}`;
-      alert(`Errore durante la creazione del preventivo:\n${msg}`);
-      return;
-    }
+   console.error('CREATE FAILED →', { status: resp.status, json });
+   // superficie il dettaglio Airtable + tabella + campi inviati
+   const msg = [
+     json?.error?.message || json?.error?.error?.message || `HTTP ${resp.status}`,
+     json?.error?.type ? `type: ${json.error.type}` : null,
+     json?.table ? `table: ${json.table}` : null,
+     json?.fields ? `fields: ${Object.keys(json.fields).join(', ')}` : null,
+     ].filter(Boolean).join('\n');
+     alert(`Airtable ha rifiutato la richiesta:\n${msg}`);
+     return;
+  }
     alert('Preventivo creato! ID: ' + json.id);
   } catch (err) {
     console.error('[quotes-admin] network error:', err);
