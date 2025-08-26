@@ -5,7 +5,7 @@ const AT_PAT   = process.env.AIRTABLE_PAT;
 const TB_QUOTE = process.env.TB_PREVENTIVI;
 const TB_OPT   = process.env.TB_OPZIONI;
 
-/* --------------------------- Utils di formattazione --------------------------- */
+/* --------------------------- Utils --------------------------- */
 function money(n, curr = "EUR") {
   const num = Number(n);
   if (!Number.isFinite(num)) return "—";
@@ -17,30 +17,23 @@ function esc(s = "") {
 }
 function fmtDate(val) {
   if (!val) return "—";
-  try {
-    const d = new Date(val);
-    if (Number.isNaN(+d)) return "—";
-    return d.toISOString().slice(0, 10);
-  } catch { return "—"; }
+  try { const d = new Date(val); if (Number.isNaN(+d)) return "—"; return d.toISOString().slice(0, 10); }
+  catch { return "—"; }
 }
-function parseDate(val) {
-  const d = new Date(val);
-  return Number.isNaN(+d) ? null : d;
-}
-function isExpired(scadenza) {
-  if (!scadenza) return false;
-  const d = parseDate(scadenza);
-  if (!d) return false;                 // se il campo è vuoto/1970/invalid -> NON scaduto
-  return d.getTime() < Date.now();
-}
+function parseDate(val){ const d=new Date(val); return Number.isNaN(+d)?null:d; }
+function isExpired(scad){ if(!scad) return false; const d=parseDate(scad); if(!d) return false; return d.getTime() < Date.now(); }
 
-/* ------------------------------ Helpers HTTP/Airtable ------------------------------ */
-async function fetchJson(url) {
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${AT_PAT}` } });
+async function fetchJson(url){
+  const r = await fetch(url, { headers:{ Authorization:`Bearer ${AT_PAT}` }});
   const j = await r.json();
-  if (!r.ok) throw new Error(j?.error?.message || "Airtable error");
+  if (!r.ok) {
+    const err = new Error(j?.error?.message || 'Airtable error');
+    err.status = r.status; err.payload = j;
+    throw err;
+  }
   return j;
 }
+
 function htmlPage(title, body) {
   return `<!doctype html><html lang="it"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -71,57 +64,52 @@ a{color:#a9c6ff}
 </style></head><body>${body}</body></html>`;
 }
 
-/* ------------------------------ Fetch opzioni robuste ------------------------------ */
+/* --------- Opzioni: doppio filtro (formula Preventivo_Id -> fallback ARRAYJOIN) --------- */
 async function fetchOptionsForQuote(quoteId) {
   const base = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_OPT)}`;
   const sort = `&sort[0][field]=Indice&sort[0][direction]=asc`;
 
-  // 1) Tentativo con campo di servizio "Preventivo_Id" (testo)
-  let url = `${base}?filterByFormula=${encodeURIComponent(`{Preventivo_Id}='${quoteId}'`)}${sort}`;
+  // A) campo formula testuale 'Preventivo_Id' == recId
+  const urlA = `${base}?filterByFormula=${encodeURIComponent(`{Preventivo_Id}='${quoteId}'`)}${sort}`;
   try {
-    const j = await fetchJson(url);
-    if (Array.isArray(j.records) && j.records.length > 0) return j;
-  } catch { /* ignora e prova fallback */ }
+    const ja = await fetchJson(urlA);
+    if (Array.isArray(ja.records) && ja.records.length) return { data: ja, formula: `{Preventivo_Id}='${quoteId}'` };
+  } catch {/* ignora */}
 
-  // 2) Fallback: formula sul linked record (meno affidabile ma compatibile)
-  url = `${base}?filterByFormula=${encodeURIComponent(`FIND('${quoteId}', ARRAYJOIN({Preventivo}))`)}${sort}`;
-  return await fetchJson(url);
+  // B) fallback su linked record: SEARCH su ARRAYJOIN del campo link 'Preventivo'
+  const formulaB = `SEARCH('${quoteId}', ARRAYJOIN({Preventivo}))`;
+  const urlB = `${base}?filterByFormula=${encodeURIComponent(formulaB)}${sort}`;
+  const jb = await fetchJson(urlB);
+  return { data: jb, formula: formulaB };
 }
 
-/* ------------------------------------ Handler ------------------------------------ */
-export default async function handler(req, res) {
-  try {
+/* -------------------------------- Handler -------------------------------- */
+export default async function handler(req,res){
+  const debug = String(req.url||"").includes("debug=1");
+  try{
     const slug = req.query?.slug;
     if (!slug) return res.status(400).send("Missing slug");
 
-    // 1) Carica il Preventivo per slug
+    // Preventivo
     const qUrl = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_QUOTE)}?filterByFormula=${encodeURIComponent(`{Slug_Pubblico}='${slug}'`)}`;
     const q = await fetchJson(qUrl);
     const rec = q.records?.[0];
-    if (!rec) {
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
+    if (!rec){
+      res.setHeader("Content-Type","text/html; charset=utf-8");
       return res.status(404).send(htmlPage("Preventivo non trovato",
-        `<div class="wrap center"><div>
-           <h1>Preventivo non trovato</h1>
-           <p class="small">Verifica il link ricevuto o contatta SPST.</p>
-         </div></div>`));
+        `<div class="wrap center"><div><h1>Preventivo non trovato</h1><p class="small">Verifica il link o contatta SPST.</p></div></div>`));
     }
-
     const f = rec.fields;
 
-    // 2) Scadenza link (se indicata e valida)
+    // Scadenza link
     if (isExpired(f.Scadenza_Link)) {
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Content-Type","text/html; charset=utf-8");
       return res.status(410).send(htmlPage("Link scaduto",
-        `<div class="wrap center"><div>
-           <h1>Link scaduto</h1>
-           <p class="small">Questo link non è più attivo. Richiedi un nuovo preventivo a SPST.</p>
-         </div></div>`));
+        `<div class="wrap center"><div><h1>Link scaduto</h1><p class="small">Richiedi un nuovo preventivo a SPST.</p></div></div>`));
     }
 
-    // 3) Opzioni collegate al preventivo (robusto con fallback)
-    const o = await fetchOptionsForQuote(rec.id);
-
+    // Opzioni
+    const { data: o, formula: usedFormula } = await fetchOptionsForQuote(rec.id);
     const options = (o.records || []).map(r => ({
       index: r.fields.Indice,
       carrier: r.fields.Corriere,
@@ -136,7 +124,7 @@ export default async function handler(req, res) {
       recommended: !!r.fields.Consigliata,
     }));
 
-    // calcolo “consigliata”
+    // Consigliata
     let best = f.Opzione_Consigliata;
     if (!best) {
       best = options.find(x => x.recommended)?.index;
@@ -165,7 +153,11 @@ export default async function handler(req, res) {
       </div>
     `).join("");
 
-    // 4) Pagina HTML
+    const debugNote = debug
+      ? `<div class="small" style="margin-top:8px;opacity:.8">DEBUG: formula usata = <code>${esc(usedFormula||'—')}</code>, opzioni trovate = <strong>${options.length}</strong></div>`
+      : "";
+
+    // HTML
     const html = htmlPage("Preventivo SPST", `
       <div class="wrap">
         <div class="header">
@@ -202,6 +194,7 @@ export default async function handler(req, res) {
         <div class="card">
           <div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>
           ${rows || '<div class="small">Nessuna opzione.</div>'}
+          ${debugNote}
         </div>
 
         <div class="small" style="margin-top:8px">
@@ -215,8 +208,9 @@ export default async function handler(req, res) {
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     return res.status(200).send(html);
   } catch (err) {
-    console.error("[view/[slug]] error:", err);
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    return res.status(500).send(htmlPage("Errore", `<div class="wrap center"><div><h1>Errore</h1><p class="small">Si è verificato un errore inatteso.</p></div></div>`));
+    console.error("[view/[slug]] error:", err?.status, err?.payload || err);
+    res.setHeader("Content-Type","text/html; charset=utf-8");
+    return res.status(500).send(htmlPage("Errore",
+      `<div class="wrap center"><div><h1>Errore</h1><p class="small">Si è verificato un errore inatteso.</p></div></div>`));
   }
 }
