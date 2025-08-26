@@ -1,22 +1,26 @@
 {
   "rewrites": [
-    { "source": "/quote/:slug",  "destination": "/api/quotes/view/:slug" },
-    { "source": "/quotes/:slug", "destination": "/api/quotes/view/:slug" }
+    { "source": "/back-office/:path*", "destination": "/assets/esm/:path*" },
+    { "source": "/quote/:slug", "destination": "/api/quotes/view/:slug" }
   ],
   "headers": [
     {
-      "source": "/quote/:slug",
+      "source": "/back-office/:path*",
       "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "*" },
+        { "key": "Cross-Origin-Resource-Policy", "value": "cross-origin" },
         { "key": "Cache-Control", "value": "no-store" }
       ]
     },
     {
-      "source": "/api/airtable/:path*",
+      "source": "/api/quotes/:path*",
       "headers": [
-        { "key": "Access-Control-Allow-Origin",  "value": "*" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET,POST,PATCH,OPTIONS" },
+        { "key": "Access-Control-Allow-Origin", "value": "*" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET,POST,OPTIONS" },
         { "key": "Access-Control-Allow-Headers", "value": "Content-Type, Authorization, x-requested-with" },
-        { "key": "Access-Control-Max-Age",      "value": "86400" }
+        { "key": "Access-Control-Max-Age", "value": "86400" }
       ]
     }
   ]
