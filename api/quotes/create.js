@@ -2,33 +2,30 @@
 
 // ===== CORS allowlist =====
 const DEFAULT_ALLOW = [
-  "https://spst.it",
-  "https://www.spst.it",
-  "https://spst-logistics.vercel.app",
-  "http://localhost:3000",
-  "http://localhost:8888",
+  'https://spst.it',
+  'https://www.spst.it',
+  'https://spst-logistics.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:8888',
 ];
-const allowlist = (process.env.ORIGIN_ALLOWLIST || DEFAULT_ALLOW.join(","))
-  .split(",").map(s => s.trim()).filter(Boolean);
+const allowlist = (process.env.ORIGIN_ALLOWLIST || DEFAULT_ALLOW.join(','))
+  .split(',').map(s => s.trim()).filter(Boolean);
 
 function isAllowed(origin) {
   if (!origin) return false;
   for (const item of allowlist) {
-    if (item.includes("*")) {
-      const esc = item.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace("\\*", ".*");
-      if (new RegExp("^" + esc + "$").test(origin)) return true;
+    if (item.includes('*')) {
+      const esc = item.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('\\*', '.*');
+      if (new RegExp('^' + esc + '$').test(origin)) return true;
     } else if (item === origin) return true;
   }
   return false;
 }
 function setCors(res, origin) {
-  const allowed = isAllowed(origin);
-  res.setHeader("Vary", "Origin");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
-  if (allowed) {
-    res.setHeader("Access-Control-Allow-Origin", origin);
-  }
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (isAllowed(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
 }
 
 // ===== Airtable =====
@@ -87,6 +84,37 @@ function getBestIndex(options) {
   return toNumber(priced[0].index);
 }
 
+// ---- pacchi (colli)
+function round2(x){ return Math.round(Number(x||0)*100)/100; }
+function computePackages(raw){
+  const rows = [];
+  let pieces = 0, weightKg = 0;
+  for (const p of Array.isArray(raw) ? raw : []) {
+    const qty = Math.max(1, Number(p.qty)||1);
+    const L = Number(p.length)||0;
+    const W = Number(p.width)||0;
+    const H = Number(p.height)||0;
+    const w = Number(p.weight)||0; // kg
+    rows.push({
+      qty,
+      length: round2(L),
+      width : round2(W),
+      height: round2(H),
+      unit  : 'cm',
+      weightKg: round2(w)
+    });
+    pieces   += qty;
+    weightKg += (w * qty);
+  }
+  return {
+    rows,
+    totals: {
+      pieces,
+      weightKg: round2(weightKg),
+    }
+  };
+}
+
 // ===== handler =====
 export default async function handler(req, res) {
   setCors(res, req.headers.origin);
@@ -119,11 +147,14 @@ export default async function handler(req, res) {
       (process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote").replace(/\/$/,"");
     const publicUrl = `${PUBLIC_QUOTE_BASE_URL}/${encodeURIComponent(slug)}`;
 
+    // ---- colli
+    const pkg = computePackages(Array.isArray(body.packages) ? body.packages : []);
+
     // ---- campi Preventivo
     const qFields = {
       Email_Cliente   : body.customerEmail || undefined,
       Valuta          : body.currency || undefined,
-      Valido_Fino_Al  : body.validUntil || undefined, // YYYY-MM-DD
+      Valido_Fino_Al  : body.validUntil || undefined, // "YYYY-MM-DD"
       Note_Globali    : body.notes || undefined,
 
       Mittente_Nome      : body.sender?.name || undefined,
@@ -142,12 +173,18 @@ export default async function handler(req, res) {
       Destinatario_Telefono  : body.recipient?.phone || undefined,
       Destinatario_Tax       : body.recipient?.tax || undefined,
 
-      Versione_Termini  : body.terms?.version || "v1.0",
-      Visibilita        : mapVisibility(body.terms?.visibility) || "Immediata",
-      Slug_Pubblico     : slug,
-      Scadenza_Link     : expiryDate ? expiryDate.toISOString() : undefined,
+      Versione_Termini      : body.terms?.version || "v1.0",
+      Visibilita            : mapVisibility(body.terms?.visibility) || "Immediata",
+      Slug_Pubblico         : slug,
+      Scadenza_Link         : expiryDate ? expiryDate.toISOString() : undefined,
 
-      Opzione_Consigliata : getBestIndex(Array.isArray(body.options) ? body.options : []),
+      Opzione_Consigliata   : getBestIndex(Array.isArray(body.options) ? body.options : []),
+
+      // --- NUOVO: colli
+      Tot_Colli         : pkg.totals.pieces || undefined,
+      Tot_Peso_Reale_Kg : pkg.totals.weightKg || undefined,
+      UM_Dimensioni     : pkg.rows.length ? 'cm/kg' : undefined,
+      Colli_JSON        : pkg.rows.length ? JSON.stringify(pkg.rows) : undefined,
     };
 
     // ---- DEBUG (dry-run)
@@ -155,7 +192,6 @@ export default async function handler(req, res) {
       const rawOptions = Array.isArray(body.options) ? body.options : [];
       const wouldOptions = rawOptions.map(o => ({
         Preventivo     : "<record id created after>",
-        Preventivo_Id  : "<record id created after>",
         Indice         : toNumber(o.index),
         Corriere       : o.carrier || undefined,
         Servizio       : o.service || undefined,
@@ -164,11 +200,14 @@ export default async function handler(req, res) {
         Oneri_A_Carico : mapPayer(o.payer),
         Prezzo         : toNumber(o.price),
         Valuta         : o.currency || body.currency || undefined,
-        Peso_Kg        : toNumber(o.weight),
         Note_Operative : o.notes || undefined,
         Consigliata    : !!o.recommended,
       }));
-      return res.status(200).json({ ok:true, debug:true, wouldCreate:{ preventivo:qFields, opzioni:wouldOptions, slug, url: publicUrl } });
+      return res.status(200).json({
+        ok:true, debug:true,
+        wouldCreate:{ preventivo:qFields, opzioni:wouldOptions, slug, url: publicUrl },
+        packages: pkg
+      });
     }
 
     // ---- crea Preventivo
@@ -178,16 +217,12 @@ export default async function handler(req, res) {
       throw new Error("Quote created but no valid record id returned");
     }
 
-    // ---- crea Opzioni collegate + campo di appoggio Preventivo_Id
+    // ---- crea Opzioni (senza peso per opzione)
     const rawOptions = Array.isArray(body.options) ? body.options : [];
     if (rawOptions.length) {
       const optRecords = rawOptions.map(o => ({
         fields: {
-          // linked record: array di record IDs (stringhe)
           Preventivo     : [ quoteId ],
-          // supporto per ricerche veloci lato viewer
-          Preventivo_Id  : quoteId,
-
           Indice         : toNumber(o.index),
           Corriere       : o.carrier || undefined,
           Servizio       : o.service || undefined,
@@ -196,7 +231,6 @@ export default async function handler(req, res) {
           Oneri_A_Carico : mapPayer(o.payer),
           Prezzo         : toNumber(o.price),
           Valuta         : o.currency || body.currency || undefined,
-          Peso_Kg        : toNumber(o.weight),
           Note_Operative : o.notes || undefined,
           Consigliata    : !!o.recommended,
         }
