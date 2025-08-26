@@ -155,7 +155,7 @@ export default async function handler(req, res) {
     const rawOptions = Array.isArray(body.options) ? body.options : [];
     const optRecords = rawOptions.map(o => ({
       fields: {
-        Preventivo     : [], // lo compiliamo dopo con l'ID
+        Preventivo     : [ quoteId ],
         Indice         : toNumber(o.index),
         Corriere       : o.carrier || undefined,
         Servizio       : o.service || undefined,
@@ -187,7 +187,9 @@ export default async function handler(req, res) {
     // ---------- crea Preventivo
     const qResp   = await atCreate(TB_QUOTE, [{ fields: qFields }]);
     const quoteId = qResp.records?.[0]?.id;
-    if (!quoteId) throw new Error("Quote created but no record id returned");
+if (!quoteId || typeof quoteId !== 'string') {
+  throw new Error('Quote created but no valid record id returned');
+}
 
     // ---------- crea Opzioni (collega al preventivo)
     if (optRecords.length) {
