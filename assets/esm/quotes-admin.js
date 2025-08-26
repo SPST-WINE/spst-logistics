@@ -163,7 +163,7 @@ function money(n, curr="EUR"){
   try { return new Intl.NumberFormat("it-IT",{style:"currency",currency:curr}).format(n); }
   catch { return `${n.toFixed(2)} ${curr}`; }
 }
-function escapeHtml(s=""){
+function escapeHtml(s=''){
   return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 function buildPreviewHtml(model){
@@ -280,7 +280,7 @@ function buildPreviewHtml(model){
 function handlePreview(ev){
   ev.preventDefault();
   if (!previewIsValid()) {
-    alert('Per l’anteprima serve almeno 1 opzione compilata (corriere, servizio, incoterm, oneri, prezzo).');
+    alert('Per l’anteprima serve almeno 1 opzione completa (corriere, servizio, incoterm, oneri, prezzo).');
     return;
   }
 
@@ -295,9 +295,10 @@ function handlePreview(ev){
   };
 
   const html = buildPreviewHtml(model);
-  const w = window.open('', '_blank', 'noopener,noreferrer');
-  if (!w) return;  // niente popup d’errore: se è bloccato, silenzio
-  w.document.open(); w.document.write(html); w.document.close();
+  const blob = new Blob([html], { type: 'text/html' });
+  const url  = URL.createObjectURL(blob);
+  window.open(url, '_blank', 'noopener');           // apre il nuovo tab con contenuto
+  setTimeout(() => URL.revokeObjectURL(url), 15000); // pulizia URL temporaneo
 }
 
 
