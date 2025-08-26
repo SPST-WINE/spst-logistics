@@ -14,40 +14,28 @@
 #quotes-admin .qa-label{display:block;font-size:12px;color:var(--muted);margin:6px 0}
 
 /* Date picker in tema scuro: icona del calendario bianca */
-/* ==== Icona bianca per input[type=date] ================================== */
-#quotes-admin input[type="date"] {
-  /* lasciamo il tema dark del controllo */
-  color-scheme: dark;
 
-  /* icona custom bianca come background dell’input */
-  background-image:
-    url("data:image/svg+xml;utf8,\
-<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'>\
-<rect x='3' y='4' width='18' height='18' rx='2' ry='2'/>\
-<line x1='16' y1='2' x2='16' y2='6'/>\
-<line x1='8'  y1='2' x2='8'  y2='6'/>\
-<line x1='3'  y1='10' x2='21' y2='10'/>\
-</svg>");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  background-size: 18px 18px;
-
-  /* spazio per l’icona */
-  padding-right: 40px;
+/* ==== Input [type=date]: icon white, clickable, no layout shifts ==== */
+#quotes-admin input[type="date"]{
+  color-scheme: dark;           /* dark-friendly popup & controls */
+  padding-right: 12px;          /* keep normal padding (no fake icon) */
 }
 
-/* Nasconde l’icona nera nativa ma lascia cliccabile l’area del picker
-   (il click continua ad aprire il calendario) */
-#quotes-admin input[type="date"]::-webkit-calendar-picker-indicator {
-  opacity: 0;               /* invisibile */
-  width: 28px;              /* area click comoda */
-  height: 100%;
-  cursor: pointer;
+/* WebKit/Blink (Chrome/Edge/Safari) — recolor native icon to white */
+#quotes-admin input[type="date"]::-webkit-calendar-picker-indicator{
+  background: transparent;
+  filter: invert(1) grayscale(1) brightness(1.6);  /* -> white icon */
+  opacity: .95;
+  cursor: pointer;              /* clickable */
+  pointer-events: auto;         /* make sure clicks go through */
+}
+#quotes-admin input[type="date"]::-webkit-calendar-picker-indicator:hover{
+  opacity: 1;
 }
 
-/* opzionale: rimuovi la X/stepper su WebKit se comparissero scuri */
-#quotes-admin input[type="date"]::-webkit-clear-button,
-#quotes-admin input[type="date"]::-webkit-inner-spin-button {
+/* Optional: hide spin/clear if they show up dark */
+#quotes-admin input[type="date"]::-webkit-inner-spin-button,
+#quotes-admin input[type="date"]::-webkit-clear-button{
   display: none;
 }
 
