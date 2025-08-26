@@ -183,3 +183,46 @@
 @media (min-width: 1024px){
   .qa-option .qa-recommend{ margin-top:12px; }  /* un filo più giù su desktop */
 }
+
+/* === Packages (Colli) ============================================= */
+:root{
+  /* col1 quantità, col2-4 lati, col5 peso, col6 azione */
+  --pkg-grid: 110px 1fr 1fr 1fr 120px 90px;
+}
+
+#qa-packages .pkg-head{
+  display:grid;
+  grid-template-columns:var(--pkg-grid);
+  gap:8px;
+  padding:6px 0;
+}
+#qa-packages .pkg-head > div{ text-align:left; }
+
+#qa-packages .pkg-row{
+  display:grid;
+  grid-template-columns:var(--pkg-grid);
+  gap:8px;
+  margin:6px 0;
+  align-items:center;
+}
+
+#qa-packages .pkg-row input{
+  height:36px;
+  border-radius:10px;
+}
+
+/* Bottone “Elimina” coerente con tema */
+#qa-packages .pkg-remove{
+  width:100%; height:36px; border-radius:10px;
+  border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.06);
+  color:#e7ecf5; font-weight:600; cursor:pointer;
+}
+#qa-packages .pkg-remove:hover{ background:rgba(255,255,255,.10); }
+
+/* Se Webflow o qualche widget inietta bottoni di remove “propri”, li nascondiamo */
+#qa-packages .pkg-row .w-remove,
+#qa-packages .pkg-row .remove,
+#qa-packages .pkg-row button[aria-label="Remove"]{
+  display:none !important;
+}
