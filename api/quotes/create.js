@@ -177,6 +177,7 @@ export default async function handler(req, res) {
         fields: {
           // FIX: Airtable REST v0 accetta l'array di record IDs (stringhe)
           Preventivo     : [ quoteId ],
+          r.fields.Preventivo_Id = quoteId;  
           Indice         : toNumber(o.index),
           Corriere       : o.carrier || undefined,
           Servizio       : o.service || undefined,
