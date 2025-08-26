@@ -4,8 +4,8 @@
 const API_BASE = new URL(import.meta.url).origin;
 
 // Helpers
-const qs  = (sel, el = document) => el.querySelector(sel);
-const qsa = (sel, el = document) => Array.from(el.querySelectorAll(sel));
+const qs  = (sel, el=document) => el.querySelector(sel);
+const qsa = (sel, el=document) => Array.from(el.querySelectorAll(sel));
 const text = (el, v) => { if (el) el.textContent = v ?? '—'; };
 
 function fmtDate(value) {
@@ -13,22 +13,16 @@ function fmtDate(value) {
   try {
     const d = new Date(value);
     if (Number.isNaN(+d)) return '—';
-    return d.toISOString().slice(0, 10); // YYYY-MM-DD
-  } catch {
-    return '—';
-  }
+    return d.toISOString().slice(0,10); // YYYY-MM-DD
+  } catch { return '—'; }
 }
-function toNumber(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : undefined;
-}
-function buildOptions(select, items, placeholder = 'Seleziona…') {
+function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : undefined; }
+
+function buildOptions(select, items, placeholder='Seleziona…') {
   if (!select) return;
   select.innerHTML = '';
   const ph = document.createElement('option');
-  ph.value = '';
-  ph.textContent = placeholder;
-  select.appendChild(ph);
+  ph.value = ''; ph.textContent = placeholder; select.appendChild(ph);
   items.forEach(v => {
     const opt = document.createElement('option');
     opt.value = v;
@@ -62,7 +56,7 @@ function readRecipient() {
 
 function readOptions() {
   return qsa('.qa-option').map((wrap, i) => {
-    const index     = Number(wrap.getAttribute('data-option')) || i + 1;
+    const index     = Number(wrap.getAttribute('data-option')) || i+1;
     const carrier   = qs('.qa-carrier',  wrap)?.value || '';
     const service   = qs('.qa-service',  wrap)?.value?.trim() || '';
     const transit   = qs('.qa-transit',  wrap)?.value?.trim() || '';
@@ -76,25 +70,27 @@ function readOptions() {
     return { index, carrier, service, transit, incoterm, payer, price, currency, weight, notes, recommended };
   });
 }
-function isOptionComplete(o) {
-  return !!(o.carrier && o.service && o.transit && o.incoterm && o.payer && typeof o.price === 'number' && o.price > 0);
+function isOptionComplete(o){
+  return !!(o.carrier && o.service && o.transit && o.incoterm && o.payer && typeof o.price==='number' && o.price>0);
 }
-function getBestIndex(opts) {
+
+function getBestIndex(opts){
   const chosen = document.querySelector('input[name="bestOption"]:checked')?.value;
   if (chosen) return Number(chosen);
-  const valid = opts.filter(o => typeof o.price === 'number');
+  const valid = opts.filter(o => typeof o.price==='number');
   if (!valid.length) return undefined;
-  valid.sort((a, b) => a.price - b.price);
+  valid.sort((a,b)=>a.price-b.price);
   return valid[0]?.index;
 }
 
-// ===== Validazioni
+// Validazione per creare (richiede email, validità e ≥1 opzione completa)
 function formIsValid() {
   const email = qs('#customer-email')?.value?.trim();
   const validity = qs('#quote-validity')?.value;
   const opts = readOptions().filter(isOptionComplete);
   return !!(email && validity && opts.length >= 1);
 }
+// Validazione per preview (basta ≥1 opzione completa)
 function previewIsValid() {
   return readOptions().some(isOptionComplete);
 }
@@ -109,16 +105,19 @@ function refreshSummary() {
   text(qs('#sum-best'), best ? `Opzione ${best}` : '—');
 }
 
-// ===== Create
+// ====== CREATE ======
+let creating = false;
 async function handleCreate(ev) {
   ev.preventDefault();
-  const btn = ev.currentTarget;
-  if (btn.disabled) return;
-
+  const btn = ev.currentTarget.closest('button');
+  if (btn?.disabled) return;
   if (!formIsValid()) {
     alert('Compila i campi obbligatori (email, validità e almeno 1 opzione completa).');
     return;
   }
+  if (creating) return;
+  creating = true;
+  if (btn) { btn.disabled = true; btn.dataset.busy = '1'; var prev = btn.textContent; btn.textContent = 'Creo…'; }
 
   const body = {
     customerEmail: qs('#customer-email')?.value?.trim(),
@@ -137,76 +136,65 @@ async function handleCreate(ev) {
     options: readOptions().filter(isOptionComplete),
   };
 
-  btn.disabled = true;
-  const prev = btn.textContent;
-  btn.textContent = 'Creo…';
-
   try {
-    const resp = await fetch(`${API_BASE}/api/quotes/create?debug=1`, {
+    const resp = await fetch(`${API_BASE}/api/quotes/create`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type':'application/json' },
       body: JSON.stringify(body),
     });
-    
     let json=null; try{ json=await resp.json(); }catch{}
     if (!resp.ok || json?.ok === false) {
-   console.error('CREATE FAILED →', { status: resp.status, json });
-   // superficie il dettaglio Airtable + tabella + campi inviati
-   const msg = [
-     json?.error?.message || json?.error?.error?.message || `HTTP ${resp.status}`,
-     json?.error?.type ? `type: ${json.error.type}` : null,
-     json?.table ? `table: ${json.table}` : null,
-     json?.fields ? `fields: ${Object.keys(json.fields).join(', ')}` : null,
-     ].filter(Boolean).join('\n');
-     alert(`Airtable ha rifiutato la richiesta:\n${msg}`);
-     return;
-  }
+      console.error('CREATE FAILED →', { status: resp.status, json });
+      const msg = json?.error?.message || json?.error || `HTTP ${resp.status}`;
+      alert(`Errore durante la creazione del preventivo:\n${msg}`);
+      return;
+    }
     alert('Preventivo creato! ID: ' + json.id);
   } catch (err) {
     console.error('[quotes-admin] network error:', err);
     alert('Errore di rete durante la creazione del preventivo.');
   } finally {
-    btn.disabled = false;
-    btn.textContent = prev || 'Crea preventivo';
+    creating = false;
+    if (btn) { btn.disabled = false; btn.textContent = prev || 'Crea preventivo'; btn.removeAttribute('data-busy'); }
   }
 }
 
-// ===== Anteprima cliente (statica locale)
-function money(n, curr = 'EUR') {
+// ====== PREVIEW (in nuova tab con Blob URL) ======
+function money(n, curr='EUR'){
   if (typeof n !== 'number') return '—';
-  try {
-    return new Intl.NumberFormat('it-IT', { style: 'currency', currency: curr }).format(n);
-  } catch {
-    return `${n.toFixed(2)} ${curr}`;
-  }
+  try { return new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n); }
+  catch { return `${n.toFixed(2)} ${curr}`; }
 }
-function escapeHtml(s = '') {
-  return s.replace(/[&<>"']/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m]));
+function escapeHtml(s=''){
+  return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
-function buildPreviewHtml(model) {
+function buildPreviewHtml(model){
   const { customerEmail, currency, validUntil, notes, sender, recipient, options } = model;
-  const best = getBestIndex(options) || options[0]?.index;
+  const best = (function(){
+    const chosen = document.querySelector('input[name="bestOption"]:checked')?.value;
+    return chosen ? Number(chosen) : (options[0]?.index);
+  })();
 
   const rows = options.map(o => `
-    <div class="opt ${o.index === best ? 'is-best' : ''}">
+    <div class="opt ${o.index===best?'is-best':''}">
       <div class="opt-head">
         <div class="badge">OPZIONE ${o.index}</div>
-        ${o.index === best ? '<span class="pill">Consigliata</span>' : ''}
+        ${o.index===best ? '<span class="pill">Consigliata</span>' : ''}
       </div>
       <div class="grid">
-        <div><div class="k">Corriere</div><div class="v">${escapeHtml(o.carrier || '—')}</div></div>
-        <div><div class="k">Servizio</div><div class="v">${escapeHtml(o.service || '—')}</div></div>
-        <div><div class="k">Tempo di resa</div><div class="v">${escapeHtml(o.transit || '—')}</div></div>
-        <div><div class="k">Incoterm</div><div class="v">${escapeHtml(o.incoterm || '—')}</div></div>
-        <div><div class="k">Oneri a carico</div><div class="v">${escapeHtml(o.payer || '—')}</div></div>
-        <div><div class="k">Prezzo</div><div class="v">${money(o.price, o.currency || currency)}</div></div>
-        <div><div class="k">Peso reale</div><div class="v">${typeof o.weight === 'number' ? o.weight.toFixed(2) + ' kg' : '—'}</div></div>
+        <div><div class="k">Corriere</div><div class="v">${escapeHtml(o.carrier||'—')}</div></div>
+        <div><div class="k">Servizio</div><div class="v">${escapeHtml(o.service||'—')}</div></div>
+        <div><div class="k">Tempo di resa</div><div class="v">${escapeHtml(o.transit||'—')}</div></div>
+        <div><div class="k">Incoterm</div><div class="v">${escapeHtml(o.incoterm||'—')}</div></div>
+        <div><div class="k">Oneri a carico</div><div class="v">${escapeHtml(o.payer||'—')}</div></div>
+        <div><div class="k">Prezzo</div><div class="v">${money(o.price, o.currency||currency)}</div></div>
+        <div><div class="k">Peso reale</div><div class="v">${typeof o.weight==='number' ? o.weight.toFixed(2)+' kg' : '—'}</div></div>
       </div>
-      ${o.notes ? `<div class="notes"><div class="k" style="margin-bottom:2px">Note aggiuntive</div>${escapeHtml(o.notes)}</div>` : ''}
+      ${o.notes ? `<div class="notes"><span class="k">Note aggiuntive</span><br/>${escapeHtml(o.notes)}</div>` : ''}
     </div>
   `).join('');
 
-  const html = `<!doctype html>
+  return `<!doctype html>
 <html lang="it"><head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
@@ -217,7 +205,7 @@ function buildPreviewHtml(model) {
   .wrap{max-width:960px;margin:24px auto;padding:0 16px}
   .header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
   .brand{display:flex;align-items:center;gap:10px}
-  .brand img{width:28px;height:28px;object-fit:contain}
+  .brand img{width:28px;height:28px}
   h1{margin:0;font-size:22px}
   .card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
@@ -230,7 +218,7 @@ function buildPreviewHtml(model) {
   .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
   .notes{margin-top:8px;color:var(--muted)}
   .small{font-size:12px;color:var(--muted)}
-  .small a{color:#bcd3ff}
+  a{color:#9ec1ff;text-decoration:none} a:hover{text-decoration:underline}
   @media (max-width:900px){ .grid{grid-template-columns:1fr 1fr} .grid2{grid-template-columns:1fr} }
   @media print{ body{background:#fff;color:#000} .card{border-color:#ddd} .opt{background:#fff;border-color:#ddd} .small{color:#444} }
 </style>
@@ -253,22 +241,22 @@ function buildPreviewHtml(model) {
         </div>
         <div>
           <div class="k">Valuta</div>
-          <div class="v">${escapeHtml(currency || 'EUR')}</div>
+          <div class="v">${escapeHtml(currency||'EUR')}</div>
         </div>
       </div>
-      ${notes ? `<div style="margin-top:10px"><div class="k">Note</div><div class="v">${escapeHtml(notes)}</div></div>` : ''}
+      ${notes ? `<div style="margin-top:10px"><div class="k">Note</div><div class="v">${escapeHtml(notes)}</div></div>`:''}
     </div>
 
     <div class="card">
       <div class="grid2">
         <div>
           <div class="k">Mittente</div>
-          <div class="v">${escapeHtml(sender?.name || '—')}</div>
+          <div class="v">${escapeHtml(sender?.name||'—')}</div>
           <div class="small">${escapeHtml([sender?.address, sender?.zip, sender?.city, sender?.country].filter(Boolean).join(', '))}</div>
         </div>
         <div>
           <div class="k">Destinatario</div>
-          <div class="v">${escapeHtml(recipient?.name || '—')}</div>
+          <div class="v">${escapeHtml(recipient?.name||'—')}</div>
           <div class="small">${escapeHtml([recipient?.address, recipient?.zip, recipient?.city, recipient?.country].filter(Boolean).join(', '))}</div>
         </div>
       </div>
@@ -285,18 +273,9 @@ function buildPreviewHtml(model) {
     </div>
   </div>
 </body></html>`;
-  return html;
 }
 
-function openPreviewWindow(html) {
-  // usa Blob -> blob: URL (evita blocco popup)
-  const blob = new Blob([html], { type: 'text/html' });
-  const url = URL.createObjectURL(blob);
-  const w = window.open(url, '_blank');
-  if (w) w.focus?.();
-}
-
-function handlePreview(ev) {
+function handlePreview(ev){
   ev.preventDefault();
   if (!previewIsValid()) {
     alert('Per l’anteprima serve almeno 1 opzione compilata (corriere, servizio, incoterm, oneri, prezzo).');
@@ -311,19 +290,22 @@ function handlePreview(ev) {
     recipient    : readRecipient(),
     options      : readOptions().filter(isOptionComplete),
   };
+
   const html = buildPreviewHtml(model);
-  openPreviewWindow(html);
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url  = URL.createObjectURL(blob);
+  window.open(url, '_blank', 'noopener'); // niente document.write sulla pagina corrente
 }
 
-// ===== Wiring
-function wireup() {
+// ========== Wiring ==========
+function wireup(){
   const view = qs('#view-preventivi');
   if (!view) return;
   const container = qs('#quotes-admin', view);
 
   // Popola select da config
-  const carriers  = (window.BACK_OFFICE_CONFIG?.CARRIERS  || ['DHL', 'UPS', 'FedEx', 'TNT', 'Privato']);
-  const incoterms = (window.BACK_OFFICE_CONFIG?.INCOTERMS || ['EXW', 'DAP', 'DDP']);
+  const carriers  = (window.BACK_OFFICE_CONFIG?.CARRIERS  || ['DHL','UPS','FedEx','TNT','Privato']);
+  const incoterms = (window.BACK_OFFICE_CONFIG?.INCOTERMS || ['EXW','DAP','DDP']);
   qsa('.qa-option', container).forEach(wrap => {
     buildOptions(qs('.qa-carrier',  wrap), carriers,  'Seleziona corriere');
     buildOptions(qs('.qa-incoterm', wrap), incoterms, 'Seleziona incoterm');
@@ -332,8 +314,8 @@ function wireup() {
   const syncButtons = () => {
     const okCreate  = formIsValid();
     const okPreview = previewIsValid();
-    qsa('[data-action="create"], #btn-create', container).forEach(b => { if (b) b.disabled = !okCreate; });
-    qsa('#btn-preview', container).forEach(b => { if (b) b.disabled = !okPreview; });
+    qsa('[data-action="create"], #btn-create', container).forEach(b => b.disabled = !okCreate);
+    qsa('#btn-preview', container).forEach(b => b.disabled = !okPreview);
   };
 
   // Ricalcola riepilogo e stato bottoni
@@ -342,20 +324,13 @@ function wireup() {
     if (el.name === 'bestOption') el.addEventListener('change', () => { refreshSummary(); syncButtons(); });
   });
 
-  // Delegation (funziona per entrambi i bottoni "crea")
+  // **UNICO** event listener (delegation) per bottoni top + bottom
   container.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-action="create"], #btn-create, #btn-preview');
-    if (!btn) return;
-    if (btn.id === 'btn-preview') return handlePreview(e);
-    if (btn.matches('[data-action="create"]') || btn.id === 'btn-create') return handleCreate(e);
+    const createBtn  = e.target.closest('[data-action="create"], #btn-create');
+    const previewBtn = e.target.closest('#btn-preview');
+    if (createBtn)  return handleCreate(e);
+    if (previewBtn) return handlePreview(e);
   });
-
-  // Fallback binding diretto
-  qsa('[data-action="create"]', container).forEach(b => b.addEventListener('click', handleCreate));
-  const btnCreateBottom = qs('#btn-create', container);
-  if (btnCreateBottom) btnCreateBottom.addEventListener('click', handleCreate);
-  const btnPreview = qs('#btn-preview', container);
-  if (btnPreview) btnPreview.addEventListener('click', handlePreview);
 
   refreshSummary();
   syncButtons();
