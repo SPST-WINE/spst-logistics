@@ -41,12 +41,12 @@ async function fetchJson(url) {
   if (!r.ok) throw new Error(j?.error?.message || "Airtable error");
   return j;
 }
-function htmlPage(title, body, extraHead='') {
+function htmlPage(title, body) {
   return `<!doctype html><html lang="it"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${esc(title)}</title>
 <style>
-:root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff;--ok:#42c17a}
+:root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
 .wrap{max-width:960px;margin:24px auto;padding:0 16px}
 .header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
@@ -60,20 +60,17 @@ h1{margin:0;font-size:22px}
 .pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.4);font-size:11px}
 .opt{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}
 .opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}
-.opt-head{display:flex;gap:8px;align-items:center;justify-content:space-between;margin-bottom:8px}
+.opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}
 .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
 .notes{margin-top:8px;color:var(--muted)}
 .small{font-size:12px;color:var(--muted)}
 a{color:#a9c6ff}
-.btn{appearance:none;border:1px solid rgba(255,255,255,.2);background:#101a32;color:#fff;border-radius:10px;padding:8px 12px;cursor:pointer}
-.btn[disabled]{opacity:.6;cursor:not-allowed}
-.ok{color:var(--ok);border-color:rgba(66,193,122,.5);background:rgba(66,193,122,.1)}
 @media (max-width:900px){ .grid{grid-template-columns:1fr 1fr} .grid2{grid-template-columns:1fr} }
-@media print{ body{background:#fff;color:#000} .card{border-color:#ddd} .opt{background:#fff;border-color:#ddd} .small{color:#444} .btn{display:none} }
+@media print{ body{background:#fff;color:#000} .card{border-color:#ddd} .opt{background:#fff;border-color:#ddd} .small{color:#444} }
 .center{display:flex;min-height:60vh;align-items:center;justify-content:center;text-align:center}
-</style>
-${extraHead}
-</head><body>${body}</body></html>`;
+table{border-collapse:collapse;width:100%}
+th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}
+</style></head><body>${body}</body></html>`;
 }
 
 /* ------------------------------ Fetch opzioni robuste ------------------------------ */
@@ -85,7 +82,7 @@ async function fetchOptionsForQuote(quoteId) {
   try {
     const j = await fetchJson(url);
     if (Array.isArray(j.records) && j.records.length > 0) return j;
-  } catch { /* ignore */ }
+  } catch {}
 
   url = `${base}?filterByFormula=${encodeURIComponent(`FIND('${quoteId}', ARRAYJOIN({Preventivo}))`)}${sort}`;
   return await fetchJson(url);
@@ -95,10 +92,9 @@ async function fetchOptionsForQuote(quoteId) {
 export default async function handler(req, res) {
   try {
     const slug = req.query?.slug;
-    const debug = String(req.query?.debug || '') === '1';
     if (!slug) return res.status(400).send("Missing slug");
 
-    // 1) Preventivo
+    // Preventivo
     const qUrl = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_QUOTE)}?filterByFormula=${encodeURIComponent(`{Slug_Pubblico}='${slug}'`)}`;
     const q = await fetchJson(qUrl);
     const rec = q.records?.[0];
@@ -110,9 +106,8 @@ export default async function handler(req, res) {
            <p class="small">Verifica il link ricevuto o contatta SPST.</p>
          </div></div>`));
     }
-    const f = rec.fields;
 
-    // blocco link scaduto
+    const f = rec.fields;
     if (isExpired(f.Scadenza_Link)) {
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.status(410).send(htmlPage("Link scaduto",
@@ -122,10 +117,9 @@ export default async function handler(req, res) {
          </div></div>`));
     }
 
-    // 2) Opzioni
+    // Opzioni
     const o = await fetchOptionsForQuote(rec.id);
     const options = (o.records || []).map(r => ({
-      id: r.id,
       index: r.fields.Indice,
       carrier: r.fields.Corriere,
       service: r.fields.Servizio,
@@ -134,15 +128,11 @@ export default async function handler(req, res) {
       payer: r.fields.Oneri_A_Carico,
       price: Number(r.fields.Prezzo),
       currency: r.fields.Valuta || f.Valuta,
-      weight: Number(r.fields.Peso_Kg),
       notes: r.fields.Note_Operative,
       recommended: !!r.fields.Consigliata,
-      accepted: !!r.fields.Accettata,
     }));
 
-    // consigliata / accettata
-    const acceptedIndex = Number(f.Opzione_Accettata) || null;
-    let best = acceptedIndex || f.Opzione_Consigliata;
+    let best = f.Opzione_Consigliata;
     if (!best) {
       best = options.find(x => x.recommended)?.index;
       if (!best) {
@@ -151,21 +141,11 @@ export default async function handler(req, res) {
       }
     }
 
-    const rows = options.map(o => {
-      const isBest = String(o.index) === String(best);
-      const isAccepted = acceptedIndex && String(o.index) === String(acceptedIndex);
-      const acceptUI = !acceptedIndex
-        ? `<button class="btn" data-accept="${esc(String(o.index))}">Accetta questa opzione</button>`
-        : (isAccepted ? `<span class="pill ok">Accettata</span>` : '');
-
-      return `
-      <div class="opt ${isBest ? "is-best" : ""}">
+    const rows = options.map(o => `
+      <div class="opt ${String(o.index) === String(best) ? "is-best" : ""}">
         <div class="opt-head">
-          <div>
-            <span class="badge">OPZIONE ${esc(o.index ?? "")}</span>
-            ${isBest ? '<span class="pill">Consigliata</span>' : ''}
-          </div>
-          ${acceptUI}
+          <div class="badge">OPZIONE ${esc(o.index ?? "")}</div>
+          ${String(o.index) === String(best) ? '<span class="pill">Consigliata</span>' : ''}
         </div>
         <div class="grid">
           <div><div class="k">Corriere</div><div class="v">${esc(o.carrier||"—")}</div></div>
@@ -174,60 +154,45 @@ export default async function handler(req, res) {
           <div><div class="k">Incoterm</div><div class="v">${esc(o.incoterm||"—")}</div></div>
           <div><div class="k">Oneri a carico</div><div class="v">${esc(o.payer||"—")}</div></div>
           <div><div class="k">Prezzo</div><div class="v">${money(o.price, o.currency||f.Valuta)}</div></div>
-          <div><div class="k">Peso reale</div><div class="v">${Number.isFinite(o.weight) ? o.weight.toFixed(2)+" kg" : "—"}</div></div>
         </div>
         ${o.notes ? `<div class="notes"><div class="k" style="margin-bottom:4px">Note aggiuntive</div>${esc(o.notes)}</div>` : ""}
-      </div>`;
-    }).join("");
+      </div>
+    `).join("");
 
-    // script accettazione
-    const extraHead = `
-<script>
-(function(){
-  function qs(s,el){return (el||document).querySelector(s)}
-  function qsa(s,el){return Array.from((el||document).querySelectorAll(s))}
-  const slug = ${JSON.stringify(slug)};
+    // Colli (card)
+    let pkgs = [];
+    try { pkgs = JSON.parse(f.Colli_JSON || '[]'); } catch {}
+    const pkgCard = `
+      <div class="card">
+        <div class="k" style="margin-bottom:6px">Colli</div>
+        <div class="small" style="margin-bottom:8px">
+          Totale colli: <strong>${Number(f.Tot_Colli||0)}</strong> ·
+          Peso reale totale: <strong>${Number(f.Tot_Peso_Reale_Kg||0).toFixed(2)} kg</strong>
+        </div>
+        ${pkgs.length ? `
+          <div style="overflow:auto">
+            <table>
+              <thead>
+                <tr>
+                  <th class="k">Q.tà</th>
+                  <th class="k">L × W × H (cm)</th>
+                  <th class="k">Peso (kg)</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${pkgs.map(p => `
+                  <tr>
+                    <td>${p.qty||1}</td>
+                    <td>${[p.length,p.width,p.height].map(n=>Number(n||0).toFixed(1)).join(' × ')}</td>
+                    <td>${Number(p.weightKg||0).toFixed(2)}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>
+          </div>` : ``}
+      </div>
+    `;
 
-  async function acceptOption(idx, btn){
-    if (!idx) return;
-    try{
-      btn && (btn.disabled = true, btn.textContent = "Invio…");
-      const r = await fetch("/api/quotes/accept", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ slug, option: Number(idx) })
-      });
-      const j = await r.json().catch(()=>null);
-      if (!r.ok || j?.ok===false) {
-        const msg = j?.error?.message || j?.error || ("HTTP "+r.status);
-        alert("Non è stato possibile accettare il preventivo.\\n" + msg);
-        btn && (btn.disabled = false, btn.textContent = "Accetta questa opzione");
-        return;
-      }
-      // ricarica per aggiornare lo stato UI
-      location.reload();
-    }catch(err){
-      alert("Errore di rete. Riprova.");
-      btn && (btn.disabled = false, btn.textContent = "Accetta questa opzione");
-    }
-  }
-
-  document.addEventListener("click", (e)=>{
-    const b = e.target.closest("[data-accept]");
-    if (!b) return;
-    e.preventDefault();
-    const idx = b.getAttribute("data-accept");
-    if (!idx) return;
-    if (!confirm("Confermi di accettare l'opzione "+idx+"?")) return;
-    acceptOption(idx, b);
-  });
-})();
-</script>`;
-
-    const debugTail = debug
-      ? `<div class="small" style="margin-top:8px">DEBUG: quoteId=${esc(rec.id)}, options=${(options||[]).length}</div>`
-      : '';
-
+    // HTML
     const html = htmlPage("Preventivo SPST", `
       <div class="wrap">
         <div class="header">
@@ -261,6 +226,8 @@ export default async function handler(req, res) {
           </div>
         </div>
 
+        ${pkgCard}
+
         <div class="card">
           <div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>
           ${rows || '<div class="small">Nessuna opzione.</div>'}
@@ -270,10 +237,8 @@ export default async function handler(req, res) {
           Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente.
           Per maggiori informazioni consulta i <a href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.
         </div>
-
-        ${debugTail}
       </div>
-    `, extraHead);
+    `);
 
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/html; charset=utf-8");
