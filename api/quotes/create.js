@@ -152,27 +152,29 @@ export default async function handler(req, res) {
     const quoteId = qResp.records?.[0]?.id;
     if (!quoteId) throw new Error('Quote created but no record id returned');
 
-    // crea Opzioni col link inverso
-    const rawOptions = Array.isArray(body.options) ? body.options : [];
-    if (rawOptions.length) {
-      const optRecords = rawOptions.map(o => ({
-        fields: {
-          Preventivo     : [ { id: quoteId } ],
-          Indice         : toNumber(o.index),
-          Corriere       : o.carrier,
-          Servizio       : o.service,
-          Tempo_Resa     : o.transit,
-          Incoterm       : o.incoterm || undefined,
-          Oneri_A_Carico : o.payer || undefined,
-          Prezzo         : toNumber(o.price),
-          Valuta         : o.currency || body.currency,
-          Peso_Kg        : toNumber(o.weight),
-          Note_Operative : o.notes,
-          Consigliata    : !!o.recommended,
-        }
-      }));
-      await atCreate(TB_OPT, optRecords);
+  // crea Opzioni col link inverso
+const rawOptions = Array.isArray(body.options) ? body.options : [];
+if (rawOptions.length) {
+  const optRecords = rawOptions.map(o => ({
+    fields: {
+      Preventivo     : [quoteId],                 // <— array di ID (stringhe)
+      // Indice       : toNumber(o.index),        // <— NON INVIARE se è Autonumber
+      Corriere       : o.carrier || undefined,
+      Servizio       : o.service || undefined,
+      Tempo_Resa     : o.transit || undefined,
+      Incoterm       : mapIncoterm(o.incoterm),
+      Oneri_A_Carico : mapPayer(o.payer),
+      Prezzo         : toNumber(o.price),
+      Valuta         : o.currency || body.currency,
+      Peso_Kg        : toNumber(o.weight),
+      Note_Operative : o.notes || undefined,
+      Consigliata    : !!o.recommended,
     }
+  }));
+
+  await atCreate(TB_OPT, optRecords);
+}
+
 
     const url = `${PUBLIC_BASE}/quote/${encodeURIComponent(slug)}`;
     return res.status(200).json({ ok:true, id: quoteId, slug, url });
