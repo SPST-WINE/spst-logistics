@@ -145,7 +145,6 @@ export default async function handler(req, res) {
       Versione_Termini : body.terms?.version || "v1.0",
       Visibilita       : mapVisibility(body.terms?.visibility) || "Immediata",
       Slug_Pubblico    : slug,          // <- SOLO questo: niente campo "Slug"
-      URL_Pubblico     : publicUrl,     // salva anche l'URL completo (se la colonna c'è)
       Scadenza_Link    : expiryDate ? expiryDate.toISOString() : undefined,
 
       // opzionale: numero opzione consigliata
