@@ -71,6 +71,23 @@ a{color:#a9c6ff}
 </style></head><body>${body}</body></html>`;
 }
 
+/* ------------------------------ Fetch opzioni robuste ------------------------------ */
+async function fetchOptionsForQuote(quoteId) {
+  const base = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_OPT)}`;
+  const sort = `&sort[0][field]=Indice&sort[0][direction]=asc`;
+
+  // 1) Tentativo con campo di servizio "Preventivo_Id" (testo)
+  let url = `${base}?filterByFormula=${encodeURIComponent(`{Preventivo_Id}='${quoteId}'`)}${sort}`;
+  try {
+    const j = await fetchJson(url);
+    if (Array.isArray(j.records) && j.records.length > 0) return j;
+  } catch { /* ignora e prova fallback */ }
+
+  // 2) Fallback: formula sul linked record (meno affidabile ma compatibile)
+  url = `${base}?filterByFormula=${encodeURIComponent(`FIND('${quoteId}', ARRAYJOIN({Preventivo}))`)}${sort}`;
+  return await fetchJson(url);
+}
+
 /* ------------------------------------ Handler ------------------------------------ */
 export default async function handler(req, res) {
   try {
@@ -102,12 +119,8 @@ export default async function handler(req, res) {
          </div></div>`));
     }
 
-    // 3) Opzioni collegate al preventivo
-    const optUrl =
-      `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_OPT)}?` +
-      `filterByFormula=${encodeURIComponent(`SEARCH('${rec.id}', ARRAYJOIN({Preventivo}))`)}&` +
-      `sort[0][field]=Indice&sort[0][direction]=asc`;
-    const o = await fetchJson(optUrl);
+    // 3) Opzioni collegate al preventivo (robusto con fallback)
+    const o = await fetchOptionsForQuote(rec.id);
 
     const options = (o.records || []).map(r => ({
       index: r.fields.Indice,
