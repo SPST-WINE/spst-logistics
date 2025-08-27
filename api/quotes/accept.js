@@ -1,4 +1,9 @@
 // api/quotes/accept.js
+// ———————————————————————————————————————————————————————————————
+// Accetta un preventivo + invia email (Resend) con i dettagli opzione.
+// Aggiunti fallback robusti e LOG estesi per capire perché i campi
+// dell’opzione in email risultavano vuoti.
+// ———————————————————————————————————————————————————————————————
 
 /* =================== CORS =================== */
 const DEFAULT_ALLOW = [
@@ -62,6 +67,7 @@ async function atUpdate(table, records) {
 
 /* =================== Utils =================== */
 const toNumber = (x) => {
+  if (x === null || x === undefined) return undefined;
   const n = Number(x);
   return Number.isFinite(n) ? n : undefined;
 };
@@ -78,7 +84,7 @@ const pick = (obj, keys, fallback="") => {
   return fallback;
 };
 
-/** Ritorna le opzioni per un preventivo (prima per campo testo Preventivo_Id, poi linked {Preventivo}) */
+/** Legge opzioni per un preventivo (1: campo testo Preventivo_Id, 2: linked {Preventivo}, 3: full scan) */
 async function fetchOptionsForQuote(quoteId) {
   const base = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_OPT)}`;
   const sort = `&sort[0][field]=Indice&sort[0][direction]=asc`;
@@ -92,20 +98,31 @@ async function fetchOptionsForQuote(quoteId) {
 
   // 2) fallback linked
   url = `${base}?filterByFormula=${encodeURIComponent(`FIND('${quoteId}', ARRAYJOIN({Preventivo}))`)}${sort}`;
-  const j = await atFetch(url);
-  return j.records || [];
+  try {
+    const j = await atFetch(url);
+    if (j?.records?.length) return j.records;
+  } catch {}
+
+  // 3) last resort: carico (max 100) e filtro client-side
+  const all = await atFetch(`${base}?pageSize=100${sort}`);
+  return (all.records || []).filter(r => {
+    const f = r.fields || {};
+    const link = f.Preventivo;
+    const txt  = f.Preventivo_Id;
+    return (Array.isArray(link) && link.includes(quoteId)) || (txt === quoteId);
+  });
 }
 
 /** Normalizza i campi dell'opzione in un oggetto coerente per email */
 function normalizeOption(fields, quoteCurrency) {
-  const priceRaw = pick(fields, ["Prezzo","Price"]);
-  const currency = pick(fields, ["Valuta","Currency"], quoteCurrency || "EUR");
+  const priceRaw = pick(fields, ["Prezzo","Price","prezzo"], undefined);
+  const currency = pick(fields, ["Valuta","Currency","valuta"], quoteCurrency || "EUR");
   return {
-    index   : toNumber(pick(fields, ["Indice","Index","Opzione","Option"])),
-    carrier : pick(fields, ["Corriere","Carrier"], "—"),
-    service : pick(fields, ["Servizio","Service"], "—"),
-    incoterm: pick(fields, ["Incoterm","INCOTERM"], "—"),
-    payer   : pick(fields, ["Oneri_A_Carico","Oneri a carico di","Payer"], "—"),
+    index   : toNumber(pick(fields, ["Indice","Index","Opzione","Option","opzione"], undefined)),
+    carrier : pick(fields, ["Corriere","Carrier","corriere"], "—"),
+    service : pick(fields, ["Servizio","Service","servizio"], "—"),
+    incoterm: pick(fields, ["Incoterm","INCOTERM","incoterm"], "—"),
+    payer   : pick(fields, ["Oneri_A_Carico","Oneri a carico di","Payer","oneri a carico di"], "—"),
     price   : toNumber(priceRaw),
     currency,
   };
@@ -200,6 +217,7 @@ function buildEmailHtml({ fields, optionIdx, opt, quoteUrl }) {
 }
 
 async function sendAcceptanceEmail({ slug, fields, optionIdx, opt }) {
+  const RESEND_API_KEY = process.env.RESEND_API_KEY;
   if (!RESEND_API_KEY) {
     console.warn("[accept] RESEND_API_KEY mancante: salto invio email");
     return { sent:false, reason:"missing api key" };
@@ -237,10 +255,7 @@ async function sendAcceptanceEmail({ slug, fields, optionIdx, opt }) {
 
   const resp = await fetch("https://api.resend.com/emails", {
     method: "POST",
-    headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ from: MAIL_FROM, to, subject, html, text: textLines }),
   });
   const json = await resp.json().catch(()=>null);
@@ -294,20 +309,57 @@ export default async function handler(req, res) {
       },
     }]);
 
-    // 3) Carica opzioni e trova la scelta → normalizza per email
-    let optNorm = { index: optionIdx, carrier:"—", service:"—", incoterm:"—", payer:"—", price: undefined, currency: f?.Valuta || "EUR" };
-    try {
-      const options = await fetchOptionsForQuote(rec.id);
-      const chosen  = options.find(r => {
-        const idx = toNumber(pick(r.fields || {}, ["Indice","Index","Opzione","Option"]));
-        return idx === optionIdx;
+    // 3) Carica opzioni e scegli quella giusta (con fallback + LOG)
+    const options = await fetchOptionsForQuote(rec.id);
+    console.log("[accept] options.count:", options?.length, "for quote:", rec.id, "slug:", slug);
+
+    let chosen = null;
+    if (Array.isArray(options) && options.length) {
+      // a) match numerico su Indice
+      chosen = options.find(r => {
+        const idxNum = toNumber(pick(r.fields || {}, ["Indice","Index","Opzione","Option"]));
+        return idxNum === optionIdx;
       });
-      if (chosen?.fields) optNorm = normalizeOption(chosen.fields, f?.Valuta);
-    } catch (e) {
-      console.warn("[accept] could not load options:", e?.payload?.error || e.message);
+      // b) match stringa su Indice (es. "1")
+      if (!chosen) {
+        chosen = options.find(r => {
+          const raw = pick(r.fields || {}, ["Indice","Index","Opzione","Option"]);
+          return String(raw).trim() === String(optionIdx);
+        });
+      }
+      // c) consigliata
+      if (!chosen) {
+        chosen = options.find(r => !!pick(r.fields || {}, ["Consigliata","Recommended","consigliata"], false));
+      }
+      // d) min prezzo
+      if (!chosen) {
+        chosen = [...options].sort((a,b)=>{
+          const pa = toNumber(pick(a.fields || {}, ["Prezzo","Price"]));
+          const pb = toNumber(pick(b.fields || {}, ["Prezzo","Price"]));
+          if (pa == null && pb == null) return 0;
+          if (pa == null) return 1;
+          if (pb == null) return -1;
+          return pa - pb;
+        })[0];
+      }
+      // e) prima disponibile
+      if (!chosen) chosen = options[0];
     }
 
-    // 4) Email (best-effort)
+    if (!chosen) {
+      console.warn("[accept] no option record found. Will send email with defaults.", { optionIdx, quoteId: rec.id });
+    } else {
+      console.log("[accept] chosen.option.fields:", chosen.fields);
+    }
+
+    // Normalizza per email (se non c’è chosen, opt con default e valuta del preventivo)
+    const optNorm = chosen?.fields
+      ? normalizeOption(chosen.fields, f?.Valuta || f?.Currency)
+      : { index: optionIdx, carrier:"—", service:"—", incoterm:"—", payer:"—", price: undefined, currency: f?.Valuta || "EUR" };
+
+    console.log("[accept] normalized option used in email:", optNorm);
+
+    // 4) Email (best-effort, non blocca il 200)
     let emailResult = null;
     try {
       emailResult = await sendAcceptanceEmail({
