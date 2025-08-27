@@ -34,6 +34,7 @@ const AT_PAT   = process.env.AIRTABLE_PAT;
 const TB_QUOTE = process.env.TB_PREVENTIVI;     // Preventivi
 const TB_OPT   = process.env.TB_OPZIONI;        // OpzioniPreventivo
 const TB_COLLI = process.env.TB_COLLI;          // Colli (tabella nuova)
+const COLLI_WEIGHT_FIELD = process.env.COLLI_WEIGHT_FIELD || 'Peso'; // <- NEW
 
 async function atCreate(table, records) {
   const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
@@ -223,20 +224,26 @@ export default async function handler(req, res) {
     }
 
     // ---- crea Colli (se richiesti e se TB_COLLI configurata)
-    if (TB_COLLI && pkg.rows.length) {
-      const pkgRecords = pkg.rows.map(p => ({
-        fields: {
-          Preventivo    : [ quoteId ],
-          Preventivo_Id : quoteId,
-          Quantita : toNumber(p.qty) || 1,
-          L_cm     : toNumber(p.l),
-          W_cm     : toNumber(p.w),
-          H_cm     : toNumber(p.h),
-          Peso_Kg  : toNumber(p.kg),
-        }
-      }));
-      await atCreate(TB_COLLI, pkgRecords);
-    }
+if (TB_COLLI && pkg.rows.length) {
+  const pkgRecords = pkg.rows.map(p => {
+    const f = {
+      Preventivo    : [ quoteId ],
+      Preventivo_Id : quoteId,
+      Quantita : toNumber(p.qty) || 1,
+      L_cm     : toNumber(p.l),
+      W_cm     : toNumber(p.w),
+      H_cm     : toNumber(p.h),
+    };
+    // peso dinamico (Peso o Peso_Kg a seconda dell'env)
+    const kg = toNumber(p.kg);
+    if (typeof kg === 'number') f[COLLI_WEIGHT_FIELD] = kg;
+
+    return { fields: f };
+  });
+
+  await atCreate(TB_COLLI, pkgRecords);
+}
+
 
     return res.status(200).json({ ok:true, id: quoteId, slug, url: publicUrl });
   } catch (err) {
