@@ -31,8 +31,9 @@ function setCors(res, origin) {
 // ===== Airtable =====
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;    // Preventivi
-const TB_OPT   = process.env.TB_OPZIONI;       // OpzioniPreventivo
+const TB_QUOTE = process.env.TB_PREVENTIVI;     // Preventivi
+const TB_OPT   = process.env.TB_OPZIONI;        // OpzioniPreventivo
+const TB_COLLI = process.env.TB_COLLI;          // Colli (tabella nuova)
 
 async function atCreate(table, records) {
   const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
@@ -42,7 +43,7 @@ async function atCreate(table, records) {
     headers: { Authorization: `Bearer ${AT_PAT}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  const json = await resp.json();
+  const json = await resp.json().catch(() => null);
   if (!resp.ok) {
     console.error(`[AT CREATE FAIL] table=${table} status=${resp.status}`);
     console.error(`[AT PAYLOAD] ${JSON.stringify(payload, null, 2)}`);
@@ -84,31 +85,25 @@ function getBestIndex(options) {
   return toNumber(priced[0].index);
 }
 
-// ---- crea Colli (se definiti) ----
-const pkgs = Array.isArray(body.packages) ? body.packages : [];
-
-if (pkgs.length) {
-  if (!process.env.TB_COLLI) {
-    console.warn('[create] TB_COLLI non configurata: salto scrittura colli');
-  } else {
-    const pkgRecords = pkgs.map(p => ({
-      fields: {
-        // link corretto: Airtable REST v0 vuole un array di record IDs
-        Preventivo     : [ quoteId ],
-        Preventivo_Id  : quoteId,
-
-        Quantita : toNumber(p.qty) || 1,
-        L_cm     : toNumber(p.l ?? p.length),
-        W_cm     : toNumber(p.w ?? p.width),
-        H_cm     : toNumber(p.h ?? p.height),
-        Peso_Kg  : toNumber(p.kg ?? p.weight),
-      }
-    }));
-
-    await atCreate(process.env.TB_COLLI, pkgRecords);
+// Sanifica i colli dal body (accetta chiavi l/w/h/kg o length/width/height/weight)
+function computePackages(arr = []) {
+  const rows = [];
+  let pieces = 0;
+  let weightKg = 0;
+  for (const p of arr) {
+    const qty = toNumber(p?.qty) || 0;
+    const l   = toNumber(p?.l ?? p?.length);
+    const w   = toNumber(p?.w ?? p?.width);
+    const h   = toNumber(p?.h ?? p?.height);
+    const kg  = toNumber(p?.kg ?? p?.weight);
+    if (qty > 0) {
+      rows.push({ qty, l, w, h, kg });
+      pieces  += qty;
+      weightKg += (kg || 0) * qty;
+    }
   }
+  return { rows, totals: { pieces, weightKg: Number.isFinite(weightKg) ? Number(weightKg) : 0 } };
 }
-
 
 // ===== handler =====
 export default async function handler(req, res) {
@@ -137,7 +132,7 @@ export default async function handler(req, res) {
       expiryDate = addDays(now, body.terms.linkExpiryDays);
     }
 
-    // base URL pubblico
+    // base URL pubblico (senza slash finale)
     const PUBLIC_QUOTE_BASE_URL =
       (process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote").replace(/\/$/,"");
     const publicUrl = `${PUBLIC_QUOTE_BASE_URL}/${encodeURIComponent(slug)}`;
@@ -145,7 +140,7 @@ export default async function handler(req, res) {
     // ---- colli
     const pkg = computePackages(Array.isArray(body.packages) ? body.packages : []);
 
-    // ---- campi Preventivo
+    // ---- campi Preventivo (solo campi esistenti e sicuri)
     const qFields = {
       Email_Cliente   : body.customerEmail || undefined,
       Valuta          : body.currency || undefined,
@@ -174,12 +169,6 @@ export default async function handler(req, res) {
       Scadenza_Link         : expiryDate ? expiryDate.toISOString() : undefined,
 
       Opzione_Consigliata   : getBestIndex(Array.isArray(body.options) ? body.options : []),
-
-      // --- NUOVO: colli
-      Tot_Colli         : pkg.totals.pieces || undefined,
-      Tot_Peso_Reale_Kg : pkg.totals.weightKg || undefined,
-      UM_Dimensioni     : pkg.rows.length ? 'cm/kg' : undefined,
-      Colli_JSON        : pkg.rows.length ? JSON.stringify(pkg.rows) : undefined,
     };
 
     // ---- DEBUG (dry-run)
@@ -231,6 +220,22 @@ export default async function handler(req, res) {
         }
       }));
       await atCreate(TB_OPT, optRecords);
+    }
+
+    // ---- crea Colli (se richiesti e se TB_COLLI configurata)
+    if (TB_COLLI && pkg.rows.length) {
+      const pkgRecords = pkg.rows.map(p => ({
+        fields: {
+          Preventivo    : [ quoteId ],
+          Preventivo_Id : quoteId,
+          Quantita : toNumber(p.qty) || 1,
+          L_cm     : toNumber(p.l),
+          W_cm     : toNumber(p.w),
+          H_cm     : toNumber(p.h),
+          Peso_Kg  : toNumber(p.kg),
+        }
+      }));
+      await atCreate(TB_COLLI, pkgRecords);
     }
 
     return res.status(200).json({ ok:true, id: quoteId, slug, url: publicUrl });
