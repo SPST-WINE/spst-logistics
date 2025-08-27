@@ -1,6 +1,6 @@
 // api/quotes/accept.js
 
-// ===== CORS (stessa logica di create.js) =====
+/* ====================== CORS ====================== */
 const DEFAULT_ALLOW = [
   "https://spst.it",
   "https://www.spst.it",
@@ -28,93 +28,115 @@ function setCors(res, origin) {
   if (isAllowed(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
 }
 
-// ===== Airtable =====
-// api/quotes/accept.js
-
-/* ---------- ENV ---------- */
+/* =================== Airtable ENV ================== */
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;   // "Preventivi"
+const TB_QUOTE = process.env.TB_PREVENTIVI;   // es. "Preventivi"
+const TB_OPT   = process.env.TB_OPZIONI;      // es. "OpzioniPreventivo"
 
-/* ---------- Helpers ---------- */
-async function atList(table, { filterByFormula, maxRecords = 1 } = {}) {
-  const url = new URL(`https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`);
-  if (filterByFormula) url.searchParams.set('filterByFormula', filterByFormula);
-  if (maxRecords) url.searchParams.set('maxRecords', String(maxRecords));
-  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${AT_PAT}` } });
+/* =================== Airtable utils =================== */
+async function atFetch(url) {
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${AT_PAT}` } });
   const j = await r.json().catch(() => null);
   if (!r.ok) {
-    const err = new Error(j?.error?.message || `Airtable ${r.status}`);
-    err.status = r.status; err.payload = j; throw err;
+    const e = new Error(j?.error?.message || "Airtable error");
+    e.status = r.status; e.payload = j; throw e;
   }
   return j;
 }
-
-async function atPatch(table, id, fields) {
-  const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}/${id}`;
-  const r = await fetch(url, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${AT_PAT}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ fields })
+async function atUpdate(table, records) {
+  const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
+  const resp = await fetch(url, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${AT_PAT}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ records }),
   });
-  const j = await r.json().catch(() => null);
-  if (!r.ok) {
-    const err = new Error(j?.error?.message || `Airtable ${r.status}`);
-    err.status = r.status; err.payload = j; throw err;
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok) {
+    const err = new Error(json?.error?.message || "Airtable error");
+    err.status = resp.status; err.payload = json; throw err;
   }
-  return j;
+  return json;
 }
+const toNumber = (x) => { const n = Number(x); return Number.isFinite(n) ? n : undefined; };
+function money(n, curr="EUR"){
+  const num = Number(n);
+  if (!Number.isFinite(num)) return "—";
+  try { return new Intl.NumberFormat("it-IT", { style:"currency", currency:curr }).format(num); }
+  catch { return `${num.toFixed(2)} ${curr}`; }
+}
+const escapeHtml = (s="") => String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m]));
 
-/* ---------- Handler ---------- */
-export default async function handler(req, res) {
+/* -------- Opzioni del preventivo collegate al record -------- */
+async function fetchOptionsForQuote(quoteId) {
+  const base = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_OPT)}`;
+  const sort = `&sort[0][field]=Indice&sort[0][direction]=asc`;
+
+  // 1) via campo testo Preventivo_Id
+  let url = `${base}?filterByFormula=${encodeURIComponent(`{Preventivo_Id}='${quoteId}'`)}${sort}`;
   try {
-    if (req.method !== 'POST') {
-      res.setHeader('Allow', 'POST');
-      return res.status(405).json({ ok: false, error: { type: 'METHOD_NOT_ALLOWED' } });
-    }
-    if (!AT_BASE || !AT_PAT || !TB_QUOTE) {
-      return res.status(500).json({ ok: false, error: { type: 'CONFIG', message: 'Missing Airtable env vars' } });
-    }
+    const j = await atFetch(url);
+    if (Array.isArray(j.records) && j.records.length) return j.records;
+  } catch {}
 
-    const { slug, optionIndex } = req.body || {};
-    const idxNum = Number(optionIndex);
-    if (!slug || !Number.isFinite(idxNum)) {
-      return res.status(400).json({ ok: false, error: { type: 'INVALID_PARAM', message: 'Missing slug or optionIndex' } });
-    }
-
-    // Trova il preventivo per slug pubblico
-    const q = await atList(TB_QUOTE, { filterByFormula: `{Slug_Pubblico} = "${slug}"`, maxRecords: 1 });
-    const rec = q.records?.[0];
-    if (!rec) return res.status(404).json({ ok: false, error: { type: 'NOT_FOUND', message: 'Preventivo non trovato' } });
-
-    const fields = rec.fields || {};
-    const stato  = String(fields.Stato || '').toLowerCase();
-
-    // Se già accettato, rispondi idempotente
-    if (stato === 'accettato' && Number(fields.Opzione_Accettata) === idxNum) {
-      return res.status(200).json({ ok: true, already: true, id: rec.id, slug });
-    }
-
-    // IP & UA dal proxy
-    const fwd = req.headers['x-forwarded-for'];
-    const ip  = Array.isArray(fwd) ? fwd[0] : (fwd || req.headers['x-real-ip'] || '').split(',')[0].trim();
-    const ua  = req.headers['user-agent'] || '';
-
-    // Aggiorna i campi richiesti (nessun requisito sui "termini")
-    await atPatch(TB_QUOTE, rec.id, {
-      Opzione_Accettata: idxNum,          // number
-      Accettato_Il     : new Date().toISOString(), // date
-      Accettato_IP     : ip || '',        // text
-      Accettato_UA     : ua || '',        // text
-      Stato            : 'Accettato'      // single select by name
-    });
-
-    return res.status(200).json({ ok: true, id: rec.id, slug, acceptedIndex: idxNum });
-  } catch (err) {
-    console.error('[quotes/accept]', { status: err.status, msg: err.message, payload: err.payload });
-    return res.status(err.status || 500).json({ ok: false, error: { message: err.message || 'Server error' } });
-  }
+  // 2) fallback su linked record {Preventivo}
+  url = `${base}?filterByFormula=${encodeURIComponent(`FIND('${quoteId}', ARRAYJOIN({Preventivo}))`)}${sort}`;
+  const j = await atFetch(url);
+  return j.records || [];
 }
+
+/* =================== Email (Resend) =================== */
+const RESEND_API_KEY = process.env.RESEND_API_KEY;
+const MAIL_FROM = process.env.MAIL_FROM || "SPST Notifications <notification@spst.it>";
+const PUBLIC_QUOTE_BASE_URL = (process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote").replace(/\/$/,"");
+
+function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
+  const brand  = "#f7911e";
+  const label  = "#6b7280";
+  const text   = "#111111";
+  const border = "#e8e8e8";
+  const bg     = "#ffffff";
+  const outerBg= "#f6f7fb";
+
+  const row = (k, v) => `
+    <tr>
+      <td style="padding:10px 12px;border-bottom:1px solid ${border};color:${label};width:34%;font:500 13px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial">${escapeHtml(k)}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid ${border};color:${text};font:600 13px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial">${v}</td>
+    </tr>`;
+
+  const rows = [
+    row("Opzione", escapeHtml(String(optionIdx))),
+    row("Cliente", `<a style="color:${text};text-decoration:underline" href="mailto:${escapeHtml(fields?.Email_Cliente||"")}">${escapeHtml(fields?.Email_Cliente||"—")}</a>`),
+    row("Corriere", escapeHtml(optionFields?.Corriere || "—")),
+    row("Servizio", escapeHtml(optionFields?.Servizio || "—")),
+    row("Incoterm", escapeHtml(optionFields?.Incoterm || "—")),
+    row("Oneri a carico", escapeHtml(optionFields?.Oneri_A_Carico || "—")),
+    row("Prezzo", escapeHtml(money(optionFields?.Prezzo, optionFields?.Valuta || fields?.Valuta))),
+    row("Link preventivo", `<a style="color:${text};text-decoration:underline" href="${quoteUrl}" target="_blank" rel="noopener">${escapeHtml(quoteUrl)}</a>`),
+  ].join("");
+
+  return `
+  <div style="background:${outerBg};padding:24px">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:640px;margin:0 auto;background:${bg};border:1px solid ${border};border-radius:14px">
+      <tr>
+        <td style="padding:18px 20px 0 20px">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            <tr>
+              <td style="vertical-align:middle;padding-right:10px">
+                <img src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png"
+                     alt="SPST" width="28" height="28" style="display:block;border:0;outline:0;margin:0 10px 0 0" />
+              </td>
+              <td style="vertical-align:middle">
+                <div style="font:700 18px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:${brand};margin:0 0 6px">Preventivo accettato!</div>
+                <div style="font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:${text}">
+                  Gentile Cliente,<br/>il tuo preventivo è stato accettato. Evaderemo la tua spedizione al più presto.
+                </div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+
+      <tr>
+        <td style="padding:16px 20px 8px 20px">
+          <div style="font:600 
