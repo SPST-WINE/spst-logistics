@@ -1,5 +1,4 @@
 // assets/esm/quotes-admin.js
-// Base API: stesso origin dello script (spst-logistics.vercel.app)
 const API_BASE = new URL(import.meta.url).origin;
 
 /* ------------------------- Helpers di base ------------------------- */
@@ -9,11 +8,8 @@ const text = (el, v) => { if (el) el.textContent = v ?? "—"; };
 
 function fmtDate(value) {
   if (!value) return "—";
-  try {
-    const d = new Date(value);
-    if (Number.isNaN(+d)) return "—";
-    return d.toISOString().slice(0,10); // YYYY-MM-DD
-  } catch { return "—"; }
+  try { const d = new Date(value); if (Number.isNaN(+d)) return "—"; return d.toISOString().slice(0,10); }
+  catch { return "—"; }
 }
 function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : undefined; }
 
@@ -22,11 +18,7 @@ function buildOptions(select, items, placeholder="Seleziona…") {
   select.innerHTML = "";
   const ph = document.createElement("option");
   ph.value = ""; ph.textContent = placeholder; select.appendChild(ph);
-  items.forEach(v => {
-    const opt = document.createElement("option");
-    opt.value = v; opt.textContent = v;
-    select.appendChild(opt);
-  });
+  items.forEach(v => { const opt = document.createElement("option"); opt.value = v; opt.textContent = v; select.appendChild(opt); });
 }
 
 function money(n, curr='EUR'){
@@ -53,12 +45,7 @@ function pkgRowElement(p={qty:1,l:'',w:'',h:'',kg:''}){
     '<span class="pkg-remove" style="align-self:center;cursor:pointer;color:#f66;user-select:none">Elimina</span>';
   return row;
 }
-
-function addPackageRow(p){
-  const rows = qs('#qa-pkg-rows');
-  if (!rows) return;
-  rows.appendChild(pkgRowElement(p));
-}
+function addPackageRow(p){ const rows = qs('#qa-pkg-rows'); if (rows) rows.appendChild(pkgRowElement(p)); }
 
 function readPackages(){
   const rows = qs('#qa-pkg-rows');
@@ -71,7 +58,6 @@ function readPackages(){
     kg : toNumber(qs('.pkg-kg',  r)?.value),
   })).filter(p => p.qty > 0);
 }
-
 function refreshPackages(){
   const pkgs = readPackages();
   const totQty = pkgs.reduce((s,p)=> s + (p.qty||0), 0);
@@ -79,25 +65,15 @@ function refreshPackages(){
   text(qs('#qa-pkg-totals'), `Totale colli: ${totQty} · Peso reale totale: ${totKg.toFixed(2)} kg`);
   text(qs('#sum-packages'), totQty ? `${totQty} collo${totQty===1?'':'i'} (${totKg.toFixed(2)} kg)` : '—');
 }
-
 function wirePackages(onChange){
   const rows = qs('#qa-pkg-rows');
   const add  = qs('#qa-pkg-add');
   const changed = () => { refreshPackages(); if (onChange) onChange(); };
 
   add?.addEventListener('click', () => { addPackageRow({ qty:1 }); changed(); });
-
-  rows?.addEventListener('input', (e) => {
-    if (e.target.closest('.pkg-row')) changed();
-  });
-
+  rows?.addEventListener('input', (e) => { if (e.target.closest('.pkg-row')) changed(); });
   rows?.addEventListener('click', (e) => {
-    if (e.target.matches('.pkg-remove')) {
-      e.preventDefault();
-      const r = e.target.closest('.pkg-row');
-      if (r) r.remove();
-      changed();
-    }
+    if (e.target.matches('.pkg-remove')) { e.preventDefault(); e.target.closest('.pkg-row')?.remove(); changed(); }
   });
 
   if (!rows?.children.length) { addPackageRow({ qty:1 }); changed(); }
@@ -173,130 +149,119 @@ function refreshSummary() {
 
 /* ------------------------ Anteprima cliente ------------------------ */
 function buildPreviewHtml(model){
-  const { customerEmail, currency, validUntil, notes, sender, recipient, options, packages } = model;
-  const best = getBestIndex(options) || options[0]?.index;
+  const customerEmail = model.customerEmail || '';
+  const currency      = model.currency || 'EUR';
+  const validUntil    = model.validUntil || '';
+  const notes         = model.notes || '';
+  const sender        = model.sender || {};
+  const recipient     = model.recipient || {};
+  const options       = Array.isArray(model.options) ? model.options : [];
+  const packages      = Array.isArray(model.packages) ? model.packages : [];
 
-  const optRows = options.map(o =>
-    '<div class="opt '+(o.index===best?'is-best':'')+'">'+
-      '<div class="opt-head">'+
-        '<div class="badge">OPZIONE '+o.index+'</div>'+
-        (o.index===best ? '<span class="pill">Consigliata</span>' : '')+
-      '</div>'+
-      '<div class="grid">'+
-        '<div><div class="k">Corriere</div><div class="v">'+escapeHtml(o.carrier||'—')+'</div></div>'+
-        '<div><div class="k">Servizio</div><div class="v">'+escapeHtml(o.service||'—')+'</div></div>'+
-        '<div><div class="k">Tempo di resa</div><div class="v">'+escapeHtml(o.transit||'—')+'</div></div>'+
-        '<div><div class="k">Incoterm</div><div class="v">'+escapeHtml(o.incoterm||'—')+'</div></div>'+
-        '<div><div class="k">Oneri a carico</div><div class="v">'+escapeHtml(o.payer||'—')+'</div></div>'+
-        '<div><div class="k">Prezzo</div><div class="v">'+money(o.price, o.currency||currency)+'</div></div>'+
-      '</div>'+
-      (o.notes ? '<div class="notes"><strong>Note aggiuntive:</strong> '+escapeHtml(o.notes)+'</div>' : '')+
-    '</div>'
-  ).join("");
+  const best = getBestIndex(options) || (options[0] ? options[0].index : null);
 
-  const pkgs = Array.isArray(packages) ? packages : [];
-  const pieces = pkgs.reduce((a,b)=>a+(b.qty||1),0);
-  const weight = pkgs.reduce((a,b)=>a+((b.kg??b.weight??0)*(b.qty||1)),0);
+  // Opzioni → blocchi HTML concatenati (niente backtick annidati)
+  const optRows = options.map(function(o){
+    return ''
+      + '<div class="opt '+(o.index===best?'is-best':'')+'">'
+      +   '<div class="opt-head">'
+      +     '<div class="badge">OPZIONE '+escapeHtml(String(o.index||''))+'</div>'
+      +     (o.index===best ? '<span class="pill">Consigliata</span>' : '')
+      +   '</div>'
+      +   '<div class="grid">'
+      +     '<div><div class="k">Corriere</div><div class="v">'+escapeHtml(o.carrier||'—')+'</div></div>'
+      +     '<div><div class="k">Servizio</div><div class="v">'+escapeHtml(o.service||'—')+'</div></div>'
+      +     '<div><div class="k">Tempo di resa</div><div class="v">'+escapeHtml(o.transit||'—')+'</div></div>'
+      +     '<div><div class="k">Incoterm</div><div class="v">'+escapeHtml(o.incoterm||'—')+'</div></div>'
+      +     '<div><div class="k">Oneri a carico</div><div class="v">'+escapeHtml(o.payer||'—')+'</div></div>'
+      +     '<div><div class="k">Prezzo</div><div class="v">'+money(o.price, o.currency||currency)+'</div></div>'
+      +   '</div>'
+      +   (o.notes ? '<div class="notes"><strong>Note aggiuntive:</strong> '+escapeHtml(o.notes)+'</div>' : '')
+      + '</div>';
+  }).join('');
 
+  // Packages → tabella
+  const pieces = packages.reduce((a,b)=>a+(b.qty||1),0);
+  const weight = packages.reduce((a,b)=>a+((b.kg??b.weight??0)*(b.qty||1)),0);
   let pkgTable = '';
-  if (pkgs.length){
-    const rows = pkgs.map(p => {
-      const dims = [p.l??p.length, p.w??p.width, p.h??p.height].map(n => Number(n||0).toFixed(1)).join(' × ');
+  if (packages.length){
+    const rows = packages.map(function(p){
+      const dims = [p.l??p.length, p.w??p.width, p.h??p.height].map(n=>Number(n||0).toFixed(1)).join(' × ');
       const kg = Number(p.kg??p.weight||0).toFixed(2);
       return '<tr><td style="padding:6px 8px">'+(p.qty||1)+'</td><td style="padding:6px 8px">'+dims+'</td><td style="padding:6px 8px">'+kg+'</td></tr>';
     }).join('');
     pkgTable =
-      '<div style="overflow:auto">'+
-        '<table style="width:100%;border-collapse:collapse">'+
-          '<thead><tr>'+
-            '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>'+
-            '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>'+
-            '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>'+
-          '</tr></thead>'+
-          '<tbody>'+rows+'</tbody>'+
-        '</table>'+
-      '</div>';
+      '<div style="overflow:auto">'
+      +  '<table style="width:100%;border-collapse:collapse">'
+      +    '<thead><tr>'
+      +      '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>'
+      +      '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>'
+      +      '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>'
+      +    '</tr></thead>'
+      +    '<tbody>'+rows+'</tbody>'
+      +  '</table>'
+      +'</div>';
   }
 
-  return (
-`<!doctype html>
-<html lang="it"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Anteprima Preventivo • SPST</title>
-<style>
-:root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
-.wrap{max-width:960px;margin:24px auto;padding:0 16px}
-.header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
-.brand{display:flex;align-items:center;gap:10px}
-.logo{width:26px;height:26px}
-h1{margin:0;font-size:22px}
-.card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.k{font-size:12px;color:var(--muted)}.v{font-weight:600}
-.badge{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid var(--brand);color:var(--brand);background:rgba(247,145,30,.12);font-size:10px}
-.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.4);font-size:11px}
-.opt{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}
-.opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}
-.opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}
-.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-.notes{margin-top:8px;color:var(--muted)}
-.small{font-size:12px;color:var(--muted)}
-@media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
-table{border-collapse:collapse;width:100%}
-th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}
-</style></head>
-<body><div class="wrap">
-  <div class="header">
-    <div class="brand">
-      <img class="logo" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png" alt="SPST logo" />
-      <h1>Preventivo SPST</h1>
-    </div>
-    <div class="small">Valido fino al <strong>${fmtDate(validUntil)}</strong></div>
-  </div>
+  // HTML finale (no nested backticks)
+  const html =
+'<!doctype html>'
++ '<html lang="it"><head>'
++ '<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>'
++ '<title>Anteprima Preventivo • SPST</title>'
++ '<style>'
++ ':root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}'
++ '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}'
++ '.wrap{max-width:960px;margin:24px auto;padding:0 16px}'
++ '.header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}'
++ '.brand{display:flex;align-items:center;gap:10px}.logo{width:26px;height:26px}'
++ 'h1{margin:0;font-size:22px}'
++ '.card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}'
++ '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}'
++ '.k{font-size:12px;color:var(--muted)}.v{font-weight:600}'
++ '.badge{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid var(--brand);color:var(--brand);background:rgba(247,145,30,.12);font-size:10px}'
++ '.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.4);font-size:11px}'
++ '.opt{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}'
++ '.opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}'
++ '.opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}'
++ '.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}'
++ '.notes{margin-top:8px;color:var(--muted)}.small{font-size:12px;color:var(--muted)}'
++ '@media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}'
++ 'table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}'
++ '</style></head><body><div class="wrap">'
++   '<div class="header"><div class="brand">'
++     '<img class="logo" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png" alt="SPST logo" />'
++     '<h1>Preventivo SPST</h1>'
++   '</div>'
++   '<div class="small">Valido fino al <strong>'+escapeHtml(fmtDate(validUntil))+'</strong></div></div>'
 
-  <div class="card">
-    <div class="grid2">
-      <div><div class="k">Cliente</div><div class="v">${escapeHtml(customerEmail||"—")}</div></div>
-      <div><div class="k">Valuta</div><div class="v">${escapeHtml(currency||"EUR")}</div></div>
-    </div>
-    ${notes ? `<div style="margin-top:10px"><div class="k">Note</div><div class="v">${escapeHtml(notes)}</div></div>` : ""}
-  </div>
++   '<div class="card"><div class="grid2">'
++     '<div><div class="k">Cliente</div><div class="v">'+escapeHtml(customerEmail||'—')+'</div></div>'
++     '<div><div class="k">Valuta</div><div class="v">'+escapeHtml(currency||'EUR')+'</div></div>'
++   '</div>'
++   (notes ? '<div style="margin-top:10px"><div class="k">Note</div><div class="v">'+escapeHtml(notes)+'</div></div>' : '')
++   + '</div>'
 
-  <div class="card">
-    <div class="grid2">
-      <div>
-        <div class="k">Mittente</div>
-        <div class="v">${escapeHtml(sender?.name||"—")}</div>
-        <div class="small">${escapeHtml([sender?.address,sender?.zip,sender?.city,sender?.country].filter(Boolean).join(", "))}</div>
-      </div>
-      <div>
-        <div class="k">Destinatario</div>
-        <div class="v">${escapeHtml(recipient?.name||"—")}</div>
-        <div class="small">${escapeHtml([recipient?.address,recipient?.zip,recipient?.city,recipient?.country].filter(Boolean).join(", "))}</div>
-      </div>
-    </div>
-  </div>
++   '<div class="card"><div class="grid2">'
++     '<div><div class="k">Mittente</div><div class="v">'+escapeHtml(sender.name||'—')+'</div>'
++       '<div class="small">'+escapeHtml([sender.address,sender.zip,sender.city,sender.country].filter(Boolean).join(", "))+'</div></div>'
++     '<div><div class="k">Destinatario</div><div class="v">'+escapeHtml(recipient.name||'—')+'</div>'
++       '<div class="small">'+escapeHtml([recipient.address,recipient.zip,recipient.city,recipient.country].filter(Boolean).join(", "))+'</div></div>'
++   '</div></div>'
 
-  <div class="card">
-    <div class="k" style="margin-bottom:6px">Colli</div>
-    <div class="small" style="margin-bottom:8px">
-      Totale colli: <strong>${pieces}</strong> · Peso reale totale: <strong>${weight.toFixed(2)} kg</strong>
-    </div>
-    ${pkgTable}
-  </div>
++   '<div class="card"><div class="k" style="margin-bottom:6px">Colli</div>'
++     '<div class="small" style="margin-bottom:8px">Totale colli: <strong>'+pieces+'</strong> · Peso reale totale: <strong>'+weight.toFixed(2)+' kg</strong></div>'
++     + pkgTable +
++   '</div>'
 
-  <div class="card">
-    <div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>
-    ${optRows || '<div class="small">Nessuna opzione completa.</div>'}
-  </div>
++   '<div class="card"><div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>'
++     + (optRows || '<div class="small">Nessuna opzione completa.</div>')
++   + '</div>'
 
-  <div class="small" style="margin-top:8px">
-    Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente.
-    Per maggiori informazioni consulta i <a style="color:#9ec1ff" href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.
-  </div>
-</div></body></html>`
-  );
++   '<div class="small" style="margin-top:8px">Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente. Per maggiori informazioni consulta i <a style="color:#9ec1ff" href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.</div>'
++ '</div></body></html>';
+
+  return html;
 }
 
 function openHtmlInNewTab(html) {
@@ -312,10 +277,7 @@ async function handleCreate(ev) {
   const btn = ev.currentTarget.closest("button");
   if (btn?.disabled) return;
 
-  if (!formIsValid()) {
-    alert("Compila i campi obbligatori (email, validità, almeno 1 collo e almeno 1 opzione completa).");
-    return;
-  }
+  if (!formIsValid()) { alert("Compila i campi obbligatori (email, validità, almeno 1 collo e almeno 1 opzione completa)."); return; }
   if (creating) return;
   creating = true;
   const prev = btn?.textContent;
@@ -342,19 +304,12 @@ async function handleCreate(ev) {
     };
 
     const endpoint = `${API_BASE}/api/quotes/create${ev?.altKey ? '?debug=1' : ''}`;
-    const resp = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type":"application/json" },
-      body: JSON.stringify(body),
-    });
+    const resp = await fetch(endpoint, { method: "POST", headers: { "Content-Type":"application/json" }, body: JSON.stringify(body) });
 
     let json=null; try{ json=await resp.json(); }catch{}
     if (!resp.ok || json?.ok === false) {
       console.error("CREATE FAILED →", { status: resp.status, json });
-      const pretty =
-        json?.error?.message ||
-        json?.error?.type ||
-        (json?.error ? JSON.stringify(json.error, null, 2) : `HTTP ${resp.status}`);
+      const pretty = json?.error?.message || json?.error?.type || (json?.error ? JSON.stringify(json.error, null, 2) : `HTTP ${resp.status}`);
       alert(`Errore durante la creazione del preventivo:\n${pretty}`);
       return;
     }
@@ -385,10 +340,7 @@ async function handleCreate(ev) {
 /* ------------------------- Anteprima locale ------------------------ */
 function handlePreview(ev){
   ev.preventDefault();
-  if (!previewIsValid()) {
-    alert("Per l’anteprima serve almeno 1 collo e almeno 1 opzione (corriere, servizio, incoterm, oneri, prezzo).");
-    return;
-  }
+  if (!previewIsValid()) { alert("Per l’anteprima serve almeno 1 collo e almeno 1 opzione (corriere, servizio, incoterm, oneri, prezzo)."); return; }
   const model = {
     customerEmail: qs("#customer-email")?.value?.trim(),
     currency     : qs("#quote-currency")?.value || "EUR",
@@ -399,8 +351,7 @@ function handlePreview(ev){
     packages     : readPackages(),
     options      : readOptions().filter(isOptionComplete),
   };
-  const html = buildPreviewHtml(model);
-  openHtmlInNewTab(html);
+  openHtmlInNewTab(buildPreviewHtml(model));
 }
 
 /* ---------------------- UI: consigliata (pill) --------------------- */
@@ -423,16 +374,13 @@ function wireup(){
   if (!view) return;
   const container = qs("#quotes-admin", view);
 
-  // Popola select da config
+  // Popola select
   const carriers  = (window.BACK_OFFICE_CONFIG?.CARRIERS  || ["DHL","UPS","FedEx","TNT","Privato"]);
   const incoterms = (window.BACK_OFFICE_CONFIG?.INCOTERMS || ["EXW","DAP","DDP"]);
   qsa(".qa-option", container).forEach(wrap => {
     buildOptions(qs(".qa-carrier",  wrap), carriers,  "Seleziona corriere");
     buildOptions(qs(".qa-incoterm", wrap), incoterms, "Seleziona incoterm");
   });
-
-  // Sezione colli
-  wirePackages(() => { refreshSummary(); syncButtons(); });
 
   // Pulsanti
   const syncButtons = () => {
@@ -442,22 +390,22 @@ function wireup(){
     qsa("#btn-preview", container).forEach(b => b.disabled = !okPreview);
   };
 
-  // Ricalcola riepilogo e stato bottoni per gli altri input
+  // Sezione colli (definito dopo syncButtons per evitare ReferenceError)
+  wirePackages(() => { refreshSummary(); syncButtons(); });
+
+  // Ricalcolo riepilogo/stato bottoni su tutti gli input
   qsa("input,select,textarea", container).forEach(el => {
     el.addEventListener("input", () => { refreshSummary(); syncButtons(); });
     if (el.name === "bestOption") el.addEventListener("change", () => { refreshSummary(); syncButtons(); });
   });
 
-  // Event delegation (clic su bottoni top/bottom)
+  // Click bottoni
   container.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="create"], #btn-create, #btn-preview');
     if (!btn) return;
     if (btn.id === "btn-preview") return handlePreview(e);
     if (btn.matches('[data-action="create"]') || btn.id === "btn-create") return handleCreate(e);
   });
-
-  // Fallback binding diretto
-  qsa('[data-action="create"]', container).forEach(b => b.addEventListener("click", handleCreate));
   qs("#btn-create", container)?.addEventListener("click", handleCreate);
   qs("#btn-preview", container)?.addEventListener("click", handlePreview);
 
