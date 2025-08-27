@@ -239,9 +239,16 @@ if (TB_COLLI && pkg.rows.length) {
     return { fields: f };
   });
 
-  await atCreate(TB_COLLI, pkgRecords);
-}
-
+  await atCreate(process.env.TB_COLLI, pkgs.map(p => ({
+  fields: {
+    Preventivo : [quoteId],           // <— IMPORTANTISSIMO: crea il link
+    Quantita   : toNumber(p.qty) || 1,
+    L_cm       : toNumber(p.l ?? p.length),
+    W_cm       : toNumber(p.w ?? p.width),
+    H_cm       : toNumber(p.h ?? p.height),
+    Peso       : toNumber(p.kg ?? p.weight),
+  }
+})));
 
     return res.status(200).json({ ok:true, id: quoteId, slug, url: publicUrl });
   } catch (err) {
