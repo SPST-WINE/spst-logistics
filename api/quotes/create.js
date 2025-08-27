@@ -84,36 +84,31 @@ function getBestIndex(options) {
   return toNumber(priced[0].index);
 }
 
-// ---- pacchi (colli)
-function round2(x){ return Math.round(Number(x||0)*100)/100; }
-function computePackages(raw){
-  const rows = [];
-  let pieces = 0, weightKg = 0;
-  for (const p of Array.isArray(raw) ? raw : []) {
-    const qty = Math.max(1, Number(p.qty)||1);
-    const L = Number(p.length)||0;
-    const W = Number(p.width)||0;
-    const H = Number(p.height)||0;
-    const w = Number(p.weight)||0; // kg
-    rows.push({
-      qty,
-      length: round2(L),
-      width : round2(W),
-      height: round2(H),
-      unit  : 'cm',
-      weightKg: round2(w)
-    });
-    pieces   += qty;
-    weightKg += (w * qty);
+// ---- crea Colli (se definiti) ----
+const pkgs = Array.isArray(body.packages) ? body.packages : [];
+
+if (pkgs.length) {
+  if (!process.env.TB_COLLI) {
+    console.warn('[create] TB_COLLI non configurata: salto scrittura colli');
+  } else {
+    const pkgRecords = pkgs.map(p => ({
+      fields: {
+        // link corretto: Airtable REST v0 vuole un array di record IDs
+        Preventivo     : [ quoteId ],
+        Preventivo_Id  : quoteId,
+
+        Quantita : toNumber(p.qty) || 1,
+        L_cm     : toNumber(p.l ?? p.length),
+        W_cm     : toNumber(p.w ?? p.width),
+        H_cm     : toNumber(p.h ?? p.height),
+        Peso_Kg  : toNumber(p.kg ?? p.weight),
+      }
+    }));
+
+    await atCreate(process.env.TB_COLLI, pkgRecords);
   }
-  return {
-    rows,
-    totals: {
-      pieces,
-      weightKg: round2(weightKg),
-    }
-  };
 }
+
 
 // ===== handler =====
 export default async function handler(req, res) {
