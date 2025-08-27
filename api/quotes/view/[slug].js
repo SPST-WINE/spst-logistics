@@ -1,94 +1,150 @@
-// api/quotes/[slug].js
+// pages/api/quotes/[slug].js  (Next API route)
 
-/* ===================== Config & helpers ===================== */
+// ---------- CORS ----------
+const DEFAULT_ALLOW = [
+  'https://spst.it',
+  'https://www.spst.it',
+  'https://spst-logistics.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:8888',
+];
+const allowlist = (process.env.ORIGIN_ALLOWLIST || DEFAULT_ALLOW.join(','))
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+function isAllowed(origin) {
+  if (!origin) return false;
+  for (const pat of allowlist) {
+    if (pat.includes('*')) {
+      const esc = pat.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('\\*', '.*');
+      if (new RegExp('^' + esc + '$').test(origin)) return true;
+    } else if (pat === origin) return true;
+  }
+  return false;
+}
+function setCors(res, origin) {
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (isAllowed(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
+}
+
+// ---------- Airtable helpers ----------
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;     // "Preventivi"
-const TB_OPT   = process.env.TB_OPZIONI;        // "OpzioniPreventivo"
-const TB_COLLI = process.env.TB_COLLI;          // "Colli" (linkata a Preventivi)
+const TB_QUOTE = process.env.TB_PREVENTIVI;   // es. "Preventivi"
+const TB_OPT   = process.env.TB_OPZIONI;      // es. "OpzioniPreventivo"
+const TB_COLLI = process.env.TB_COLLI;        // es. "Colli"
 
-/** fetch wrapper Airtable */
-async function atFetch(path) {
-  const url = `https://api.airtable.com/v0/${AT_BASE}/${path}`;
+async function atList(table, params={}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (k === 'sort' && Array.isArray(v)) {
+      v.forEach((s, i) => {
+        if (!s) return;
+        qs.append(`sort[${i}][field]`, s.field);
+        qs.append(`sort[${i}][direction]`, s.direction || 'asc');
+      });
+    } else if (v !== undefined && v !== null) {
+      qs.append(k, String(v));
+    }
+  }
+  const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}?${qs}`;
   const resp = await fetch(url, { headers: { Authorization: `Bearer ${AT_PAT}` } });
   const json = await resp.json();
   if (!resp.ok) {
-    const err = new Error(json?.error?.message || `Airtable HTTP ${resp.status}`);
-    err.status = resp.status; err.payload = json;
+    const msg = json?.error?.message || `Airtable ${resp.status}`;
+    const err = new Error(msg);
+    err.status = resp.status;
+    err.payload = json;
     throw err;
   }
   return json;
 }
 
-const toNum = v => {
-  const n = Number(v); return Number.isFinite(n) ? n : undefined;
+const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+const money = (n, curr='EUR') => (typeof n === 'number'
+  ? new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n)
+  : '—');
+const fmtDate = (value) => {
+  if (!value) return '—';
+  const d = new Date(value);
+  return Number.isNaN(+d) ? '—' : d.toISOString().slice(0,10);
 };
-const z = s => (s == null ? "" : String(s)); // safe string
+const toNumber = x => {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : undefined;
+};
+function getBestIndex(options){
+  const chosen = options.find(o => !!o.recommended);
+  if (chosen) return toNumber(chosen.index);
+  const priced = options.filter(o => typeof o.price === 'number');
+  if (!priced.length) return undefined;
+  priced.sort((a,b)=>a.price-b.price);
+  return toNumber(priced[0].index);
+}
 
-/** HTML escape */
-const esc = s => String(s ?? "").replace(/[&<>"']/g, m => (
-  { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[m]
-));
+// ---------- HTML builder (stessa resa dell’anteprima locale) ----------
+function buildPreviewHtml(model){
+  const customerEmail = model.customerEmail || '';
+  const currency      = model.currency || 'EUR';
+  const validUntil    = model.validUntil || '';
+  const notes         = model.notes || '';
+  const shipmentNotes = model.shipmentNotes || '';
+  const sender        = model.sender || {};
+  const recipient     = model.recipient || {};
+  const options       = Array.isArray(model.options) ? model.options : [];
+  const packages      = Array.isArray(model.packages) ? model.packages : [];
 
-/* ===================== Build public HTML ===================== */
-function buildPublicHtml(model) {
-  const { customerEmail, currency, validUntil, notes, shipmentNotes,
-          sender={}, recipient={}, packages=[], options=[] } = model;
+  const best = getBestIndex(options) ?? (options[0]?.index);
 
-  // consigliata
-  const bestIdx = (() => {
-    const chosen = options.find(o => o.recommended);
-    if (chosen) return chosen.index;
-    const priced = options.filter(o => typeof o.price === "number")
-                          .sort((a,b)=>a.price-b.price);
-    return priced[0]?.index;
-  })();
-
-  // Colli: totali + righe
-  const pieces = packages.reduce((s,p)=> s + (Number(p.qty)||0), 0);
-  const weight = packages.reduce((s,p)=> s + (Number(p.kg ?? p.weight) || 0) * (Number(p.qty)||1), 0);
-
-  const pkgRows = packages.map(p => {
-    const qty = Number(p.qty) || 1;
-    const l = Number(p.l ?? p.length ?? 0);
-    const w = Number(p.w ?? p.width  ?? 0);
-    const h = Number(p.h ?? p.height ?? 0);
-    const kg = Number(p.kg ?? p.weight ?? 0);
-    const dims = [l,w,h].map(n => (Number.isFinite(n)?n:0).toFixed(1)).join(' × ');
-    return (
-      '<tr>'
-        + '<td style="padding:6px 8px">'+ qty +'</td>'
-        + '<td style="padding:6px 8px">'+ dims +'</td>'
-        + '<td style="padding:6px 8px">'+ (Number.isFinite(kg)?kg:0).toFixed(2) +'</td>'
-      + '</tr>'
-    );
-  }).join('');
-
-  const optBlocks = options.map(o => (
-    '<div class="opt '+(o.index===bestIdx?'is-best':'')+'">'
-      + '<div class="opt-head"><div class="badge">OPZIONE '+esc(String(o.index||''))+'</div>'
-      + (o.index===bestIdx ? '<span class="pill">Consigliata</span>' : '')
-      + '</div>'
-      + '<div class="grid">'
-        + '<div><div class="k">Corriere</div><div class="v">'+esc(o.carrier||'—')+'</div></div>'
-        + '<div><div class="k">Servizio</div><div class="v">'+esc(o.service||'—')+'</div></div>'
-        + '<div><div class="k">Tempo di resa previsto</div><div class="v">'+esc(o.transit||'—')+'</div></div>'
-        + '<div><div class="k">Incoterm</div><div class="v">'+esc(o.incoterm||'—')+'</div></div>'
-        + '<div><div class="k">Oneri a carico di</div><div class="v">'+esc(o.payer||'—')+'</div></div>'
-        + '<div><div class="k">Prezzo</div><div class="v">'+(
-              typeof o.price==='number'
-                ? new Intl.NumberFormat('it-IT',{style:'currency',currency:o.currency||currency||'EUR'}).format(o.price)
-                : '—'
-            )+'</div></div>'
-      + '</div>'
-      + (o.notes ? '<div class="notes"><strong>Note operative:</strong> '+esc(o.notes)+'</div>' : '')
+  const optRows = options.map(o =>
+    '<div class="opt ' + (o.index===best?'is-best':'') + '">'
+    + '<div class="opt-head"><div class="badge">OPZIONE ' + escapeHtml(String(o.index??'')) + '</div>'
+      + (o.index===best ? '<span class="pill">Consigliata</span>' : '') + '</div>'
+    + '<div class="grid">'
+      + '<div><div class="k">Corriere</div><div class="v">'+escapeHtml(o.carrier||'—')+'</div></div>'
+      + '<div><div class="k">Servizio</div><div class="v">'+escapeHtml(o.service||'—')+'</div></div>'
+      + '<div><div class="k">Tempo di resa previsto</div><div class="v">'+escapeHtml(o.transit||'—')+'</div></div>'
+      + '<div><div class="k">Incoterm</div><div class="v">'+escapeHtml(o.incoterm||'—')+'</div></div>'
+      + '<div><div class="k">Oneri a carico di</div><div class="v">'+escapeHtml(o.payer||'—')+'</div></div>'
+      + '<div><div class="k">Prezzo</div><div class="v">'+money(o.price, o.currency||currency)+'</div></div>'
     + '</div>'
-  )).join('');
+    + (o.notes ? '<div class="notes"><strong>Note operative:</strong> '+escapeHtml(o.notes)+'</div>' : '')
+    + '</div>'
+  ).join('');
+
+  const pkgPieces = packages.reduce((s,p)=> s + (Number(p.qty)||0), 0);
+  const pkgWeight = packages.reduce((s,p)=> s + (Number(p.kg ?? p.weight ?? 0) * (Number(p.qty)||1)), 0);
+
+  let pkgTable = '';
+  if (packages.length){
+    const rows = packages.map(p => {
+      const qty = Number(p.qty)||1;
+      const l   = Number(p.l ?? p.length ?? 0);
+      const w   = Number(p.w ?? p.width  ?? 0);
+      const h   = Number(p.h ?? p.height ?? 0);
+      const kg  = Number(p.kg ?? p.weight ?? 0);
+      const dims = [l,w,h].map(n => (Number.isFinite(n)?n:0).toFixed(1)).join(' × ');
+      return '<tr>'
+        + '<td style="padding:6px 8px">' + qty + '</td>'
+        + '<td style="padding:6px 8px">' + dims + '</td>'
+        + '<td style="padding:6px 8px">' + (Number.isFinite(kg)?kg:0).toFixed(2) + '</td>'
+      + '</tr>';
+    }).join('');
+    pkgTable =
+      '<div style="overflow:auto"><table style="width:100%;border-collapse:collapse">'
+      + '<thead><tr>'
+      +   '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>'
+      +   '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>'
+      +   '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>'
+      + '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+  }
 
   const parts = [];
   parts.push(
     '<!doctype html><html lang="it"><head>',
-    '<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>',
+    '<meta charset="utf-8"/>',
+    '<meta name="viewport" content="width=device-width,initial-scale=1"/>',
     '<title>Preventivo SPST</title>',
     '<style>',
       ':root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}',
@@ -107,8 +163,8 @@ function buildPublicHtml(model) {
       '.opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}',
       '.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}',
       '.notes{margin-top:8px;color:var(--muted)}.small{font-size:12px;color:var(--muted)}',
-      'table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}',
       '@media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}',
+      'table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}',
     '</style></head><body><div class="wrap">'
   );
 
@@ -117,65 +173,48 @@ function buildPublicHtml(model) {
       '<img class="logo" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png" alt="SPST logo" />',
       '<h1>Preventivo SPST</h1>',
     '</div>',
-    '<div class="small">Valido fino al <strong>', esc(validUntil || '—') ,'</strong></div>',
+    '<div class="small">Valido fino al <strong>', escapeHtml(fmtDate(validUntil)) ,'</strong></div>',
     '</div>'
   );
 
-  // Dati cliente
   parts.push(
     '<div class="card"><div class="grid2">',
-      '<div><div class="k">Cliente</div><div class="v">', esc(customerEmail || '—') ,'</div></div>',
-      '<div><div class="k">Valuta</div><div class="v">',   esc(currency || 'EUR') ,'</div></div>',
+      '<div><div class="k">Cliente</div><div class="v">', escapeHtml(customerEmail||'—') ,'</div></div>',
+      '<div><div class="k">Valuta</div><div class="v">',   escapeHtml(currency||'EUR') ,'</div></div>',
     '</div>',
-    (notes ? '<div style="margin-top:10px"><div class="k">Note</div><div class="v">'+esc(notes)+'</div></div>' : ''),
+    (notes ? '<div style="margin-top:10px"><div class="k">Note</div><div class="v">'+escapeHtml(notes)+'</div></div>' : ''),
     '</div>'
   );
 
-  // Mittente / Destinatario (con Tax)
-  const senderLine = [sender.address, sender.zip, sender.city, sender.country].filter(Boolean).join(', ');
-  const rcptLine   = [recipient.address, recipient.zip, recipient.city, recipient.country].filter(Boolean).join(', ');
-
   parts.push(
     '<div class="card"><div class="grid2">',
-      '<div><div class="k">Mittente</div><div class="v">', esc(sender.name || '—') ,'</div>',
-        '<div class="small">', esc(senderLine) ,'</div>',
-        (sender.tax ? '<div class="small">P. IVA / EORI: '+esc(sender.tax)+'</div>' : ''),
+      '<div>',
+        '<div class="k">Mittente</div><div class="v">', escapeHtml(sender.name||'—') ,'</div>',
+        '<div class="small">', escapeHtml([sender.address,sender.zip,sender.city,sender.country].filter(Boolean).join(', ')) ,'</div>',
+        (sender.tax ? '<div class="small">P. IVA / EORI: '+escapeHtml(sender.tax)+'</div>' : ''),
       '</div>',
-      '<div><div class="k">Destinatario</div><div class="v">', esc(recipient.name || '—') ,'</div>',
-        '<div class="small">', esc(rcptLine) ,'</div>',
-        (recipient.tax ? '<div class="small">Tax ID / EORI: '+esc(recipient.tax)+'</div>' : ''),
+      '<div>',
+        '<div class="k">Destinatario</div><div class="v">', escapeHtml(recipient.name||'—') ,'</div>',
+        '<div class="small">', escapeHtml([recipient.address,recipient.zip,recipient.city,recipient.country].filter(Boolean).join(', ')) ,'</div>',
+        (recipient.tax ? '<div class="small">Tax ID / EORI: '+escapeHtml(recipient.tax)+'</div>' : ''),
       '</div>',
     '</div></div>'
   );
 
-  // Note generiche spedizione
   if (shipmentNotes) {
-    parts.push(
-      '<div class="card">',
-        '<div class="k" style="margin-bottom:6px">Note generiche sulla spedizione</div>',
-        '<div class="v">', esc(shipmentNotes) ,'</div>',
-      '</div>'
-    );
+    parts.push('<div class="card"><div class="k">Note generiche sulla spedizione</div><div class="v">', escapeHtml(shipmentNotes) ,'</div></div>');
   }
 
-  // Colli
   parts.push(
     '<div class="card"><div class="k" style="margin-bottom:6px">Colli</div>',
-    '<div class="small" style="margin-bottom:8px">Totale colli: <strong>', String(pieces) ,'</strong> · Peso reale totale: <strong>', weight.toFixed(2) ,' kg</strong></div>',
-    packages.length
-      ? '<div style="overflow:auto"><table><thead><tr>'
-          + '<th class="k">Quantità</th>'
-          + '<th class="k">L × W × H (cm)</th>'
-          + '<th class="k">Peso (kg)</th>'
-        + '</tr></thead><tbody>'+pkgRows+'</tbody></table></div>'
-      : '',
+    '<div class="small" style="margin-bottom:8px">Totale colli: <strong>', String(pkgPieces) ,'</strong> · Peso reale totale: <strong>', pkgWeight.toFixed(2) ,' kg</strong></div>',
+    pkgTable || '',
     '</div>'
   );
 
-  // Opzioni
   parts.push(
     '<div class="card"><div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>',
-    (optBlocks || '<div class="small">Nessuna opzione.</div>'),
+    (optRows || '<div class="small">Nessuna opzione.</div>'),
     '</div>'
   );
 
@@ -189,139 +228,109 @@ function buildPublicHtml(model) {
   return parts.join('');
 }
 
-/* ===================== Handler ===================== */
+// ---------- handler ----------
 export default async function handler(req, res) {
+  setCors(res, req.headers.origin);
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'GET') return res.status(405).json({ ok:false, error:'Method Not Allowed' });
+
   try {
     if (!AT_BASE || !AT_PAT || !TB_QUOTE || !TB_OPT || !TB_COLLI) {
-      throw new Error('Missing env vars (Airtable config or table ids).');
+      throw new Error('Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI / TB_COLLI');
     }
 
-    const slug = decodeURIComponent((req.query?.slug || '') + '');
+    const slug = String(req.query.slug || '').trim();
     if (!slug) return res.status(400).json({ ok:false, error:'Missing slug' });
 
-    // 1) Preventivo per slug
-    const filt = encodeURIComponent(`LOWER({Slug_Pubblico})='${slug.toLowerCase()}'`);
-    const qResp = await atFetch(`${encodeURIComponent(TB_QUOTE)}?maxRecords=1&filterByFormula=${filt}`);
-    const rec = qResp.records?.[0];
-    if (!rec) return res.status(404).send('Not found');
+    // 1) record Preventivo
+    const qResp = await atList(TB_QUOTE, {
+      maxRecords: 1,
+      filterByFormula: `LOWER({Slug_Pubblico}) = "${slug.toLowerCase()}"`
+    });
+    const quote = qResp.records?.[0];
+    if (!quote) return res.status(404).send('Preventivo non trovato');
 
-    const f = rec.fields || {};
-    const quoteId = rec.id;
+    const qf = quote.fields;
+
+    // 2) figli: Opzioni + Colli (filtrati per link {Preventivo})
+    const [optResp, pkgResp] = await Promise.all([
+      atList(TB_OPT, {
+        filterByFormula: `FIND("${quote.id}", ARRAYJOIN({Preventivo}))`,
+        sort: [{ field: 'Indice', direction: 'asc' }]
+      }),
+      atList(TB_COLLI, {
+        filterByFormula: `FIND("${quote.id}", ARRAYJOIN({Preventivo}))`,
+        // ordina per Created time se non hai un campo Ordine
+      }),
+    ]);
+
+    const options = (optResp.records || []).map(r => {
+      const f = r.fields || {};
+      return {
+        index       : toNumber(f.Indice),
+        carrier     : f.Corriere || '',
+        service     : f.Servizio || '',
+        transit     : f.Tempo_Resa || '',
+        incoterm    : f.Incoterm || '',
+        payer       : f.Oneri_A_Carico || '',
+        price       : toNumber(f.Prezzo),
+        currency    : f.Valuta || qf.Valuta || 'EUR',
+        notes       : f.Note_Operative || '',
+        recommended : !!f.Consigliata,
+      };
+    });
+
+    const packages = (pkgResp.records || []).map(r => {
+      const f = r.fields || {};
+      return {
+        qty : toNumber(f.Quantita) || 1,
+        l   : toNumber(f.L_cm ?? f.L),
+        w   : toNumber(f.W_cm ?? f.W),
+        h   : toNumber(f.H_cm ?? f.H),
+        kg  : toNumber(f.Peso ?? f.Peso_Kg) || 0,
+      };
+    });
 
     const model = {
-      id          : quoteId,
-      slug        : slug,
-      customerEmail: f.Email_Cliente || '',
-      currency    : f.Valuta || 'EUR',
-      validUntil  : f.Valido_Fino_Al || '',
-      notes       : f.Note_Globali || '',
-      shipmentNotes: f.Note_Spedizione || f.Note_spedizione || f.Shipment_Notes || '',
-      sender: {
-        name   : f.Mittente_Nome || '',
-        country: f.Mittente_Paese || '',
-        city   : f.Mittente_Citta || '',
-        zip    : f.Mittente_CAP || '',
-        address: f.Mittente_Indirizzo || '',
-        phone  : f.Mittente_Telefono || '',
-        tax    : f.Mittente_Tax || ''
+      id           : quote.id,
+      slug,
+      customerEmail: qf.Email_Cliente || '',
+      currency     : qf.Valuta || 'EUR',
+      validUntil   : qf.Valido_Fino_Al || null,
+      notes        : qf.Note_Globali || '',
+      shipmentNotes: qf.Note_Spedizione || qf.Note_Generiche || '',
+      sender       : {
+        name   : qf.Mittente_Nome || '',
+        country: qf.Mittente_Paese || '',
+        city   : qf.Mittente_Citta || '',
+        zip    : qf.Mittente_CAP || '',
+        address: qf.Mittente_Indirizzo || '',
+        phone  : qf.Mittente_Telefono || '',
+        tax    : qf.Mittente_Tax || '',
       },
-      recipient: {
-        name   : f.Destinatario_Nome || '',
-        country: f.Destinatario_Paese || '',
-        city   : f.Destinatario_Citta || '',
-        zip    : f.Destinatario_CAP || '',
-        address: f.Destinatario_Indirizzo || '',
-        phone  : f.Destinatario_Telefono || '',
-        tax    : f.Destinatario_Tax || ''
+      recipient    : {
+        name   : qf.Destinatario_Nome || '',
+        country: qf.Destinatario_Paese || '',
+        city   : qf.Destinatario_Citta || '',
+        zip    : qf.Destinatario_CAP || '',
+        address: qf.Destinatario_Indirizzo || '',
+        phone  : qf.Destinatario_Telefono || '',
+        tax    : qf.Destinatario_Tax || '',
       },
-      packages: [],
-      options : []
+      options,
+      packages,
     };
 
-    // 2) Colli (linkati)
-    const filtColli = encodeURIComponent(`FIND("${quoteId}", ARRAYJOIN({Preventivo}))`);
-    const cResp = await atFetch(`${encodeURIComponent(TB_COLLI)}?filterByFormula=${filtColli}`);
-    model.packages = (cResp.records || []).map(r => {
-      const c = r.fields || {};
-      return {
-        qty : toNum(c.Quantita) || 1,
-        l   : toNum(c.L_cm),
-        w   : toNum(c.W_cm),
-        h   : toNum(c.H_cm),
-        kg  : toNum(c.Peso_Kg ?? c.Peso)
-      };
-    }).filter(p => (p.qty || 0) > 0);
+    // debug: ?json=1 per vedere il payload
+    if ('json' in req.query) return res.status(200).json({ ok:true, quote:model });
 
-    // 3) Opzioni (linkate)
-    const filtOpt = encodeURIComponent(`FIND("${quoteId}", ARRAYJOIN({Preventivo}))`);
-    const oResp = await atFetch(`${encodeURIComponent(TB_OPT)}?filterByFormula=${filtOpt}`);
-    model.options = (oResp.records || []).map(r => {
-      const o = r.fields || {};
-      return {
-        index : toNum(o.Indice),
-        carrier: z(o.Corriere),
-        service: z(o.Servizio),
-        transit: z(o.Tempo_Resa),
-        incoterm: z(o.Incoterm),
-        payer : z(o.Oneri_A_Carico),
-        price : toNum(o.Prezzo),
-        currency: z(o.Valuta || model.currency),
-        notes : z(o.Note_Operative),
-        recommended: !!o.Consigliata
-      };
-    });
-
-    // 4) Totali
-    const totPieces = model.packages.reduce((s,p)=> s + (Number(p.qty)||0), 0);
-    const totWeight = model.packages.reduce((s,p)=> s + (Number(p.kg)||0) * (Number(p.qty)||1), 0);
-
-    const payload = {
-      ok: true,
-      quote: {
-        id: model.id, slug: model.slug,
-        customerEmail: model.customerEmail,
-        currency: model.currency, validUntil: model.validUntil,
-        notes: model.notes, shipmentNotes: model.shipmentNotes
-      },
-      sender: model.sender,
-      recipient: model.recipient,
-      packages: model.packages,
-      options: model.options,
-      totals: { pieces: totPieces, weightKg: totWeight, weightFmt: `${totWeight.toFixed(2)} kg` }
-    };
-
-    // === Content negotiation ===
-    const wantsJson = (req.query?.format === 'json')
-                   || (req.headers.accept || '').includes('application/json');
-
-    if (wantsJson) {
-      res.setHeader('Content-Type','application/json; charset=utf-8');
-      return res.status(200).send(JSON.stringify(payload));
-    }
-
-    // Default: HTML public page
-    const html = buildPublicHtml({
-      customerEmail: model.customerEmail,
-      currency: model.currency,
-      validUntil: model.validUntil,
-      notes: model.notes,
-      shipmentNotes: model.shipmentNotes,
-      sender: model.sender,
-      recipient: model.recipient,
-      packages: model.packages,
-      options: model.options
-    });
-    res.setHeader('Content-Type','text/html; charset=utf-8');
-    res.setHeader('Cache-Control','public, max-age=60'); // 1 min
+    const html = buildPreviewHtml(model);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(html);
 
   } catch (err) {
     const status = err.status || 500;
-    console.error('[quote slug] error', { status, msg: err.message, payload: err.payload });
-    if ((req.headers.accept || '').includes('text/html') && !((req.query||{}).format === 'json')) {
-      res.setHeader('Content-Type','text/html; charset=utf-8');
-      return res.status(status).send('<!doctype html><meta charset="utf-8"><title>Errore</title><pre>'+esc(err.message)+'</pre>');
-    }
-    return res.status(status).json({ ok:false, error: { message: err.message, details: err.payload } });
+    console.error('[quote public] error:', err.payload || err);
+    return res.status(status).send('Errore nel recupero del preventivo.');
   }
 }
