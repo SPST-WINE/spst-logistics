@@ -13,9 +13,12 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, m => (
 ));
 function fmtDate(v){ try{ const d=new Date(v); return Number.isNaN(+d)?'—':d.toISOString().slice(0,10);}catch{ return '—'; } }
 function toNum(x, d=0){ const n=Number(x); return Number.isFinite(n)?n:d; }
-function money(n, curr='EUR'){ return (typeof n==='number' && Number.isFinite(n))
-  ? new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n)
-  : '—'; }
+function money(n, curr='EUR'){
+  const num = Number(n);
+  if (!Number.isFinite(num)) return '—';
+  try { return new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(num); }
+  catch { return `${num.toFixed(2)} ${curr}`; }
+}
 const pick = (obj, keys, fallback='') => {
   for (const k of keys) { if (obj && obj[k] != null && obj[k] !== '') return obj[k]; }
   return fallback;
@@ -50,7 +53,7 @@ function buildHtml({ quote, options, packages }) {
     if (isAccepted && quote?.acceptedIndex != null) return quote.acceptedIndex;
     const recommended = options.find(o => !!o.recommended)?.index;
     if (recommended != null) return recommended;
-    const priced = options.filter(o => typeof o.price === 'number').sort((a,b)=>a.price-b.price);
+    const priced = options.filter(o => Number.isFinite(Number(o.price))).sort((a,b)=>a.price-b.price);
     return priced[0]?.index ?? options[0]?.index ?? null;
   })();
 
@@ -111,7 +114,7 @@ function buildHtml({ quote, options, packages }) {
   const taxSender = quote?.sender?.tax ? `<div class="small">P. IVA / EORI: ${esc(quote.sender.tax)}</div>` : '';
   const taxRcpt   = quote?.recipient?.tax ? `<div class="small">Tax ID / EORI: ${esc(quote.recipient.tax)}</div>` : '';
 
-  // Script: accetta direttamente dalla card
+  // Script: accetta direttamente dalla card (invia { slug, option })
   const acceptScript = isAccepted ? '' : `
     <script>
       (function(){
@@ -126,12 +129,12 @@ function buildHtml({ quote, options, packages }) {
           fetch('/api/quotes/accept', {
             method:'POST',
             headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({ slug: slug, optionIndex: idx })
+            body: JSON.stringify({ slug: slug, option: idx })
           })
           .then(r => r.json().then(j => ({ ok: r.ok, j })))
           .then(({ok, j})=>{
             if(!ok || j?.ok===false){ throw new Error(j?.error?.message || j?.error || 'HTTP '+(j?.status||'')); }
-            // UI: disabilita tutti i bottoni e marca l’opzione
+            // UI
             document.querySelectorAll('.btn-accept').forEach(b => { b.disabled = true; if(b===btn){ b.textContent='Accettata'; b.classList.add('btn-accepted'); } else { b.textContent='—'; }});
             const card = btn.closest('.opt'); if (card){ card.classList.add('is-accepted','is-best'); }
             const badge = document.getElementById('status-badge');
@@ -180,7 +183,7 @@ table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1p
 @media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
 .status{font-size:12px;padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.2)}
 </style></head>
-<body><div class="wrap">
+<body><div class="wrap" data-slug="${esc(quote.slug)}">
 
   <div class="header">
     <div class="brand">
