@@ -30,127 +30,91 @@ function setCors(res, origin) {
 
 // ===== Airtable =====
 // api/quotes/accept.js
-// Registra l'accettazione di un preventivo aggiornando SOLO i campi:
-// Opzione_Accettata (number), Accettato_Il (date), Accettato_IP (text),
-// Accettato_UA (text), Stato (single select -> "Accettato")
 
+/* ---------- ENV ---------- */
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;   // es. "Preventivi"
-const TB_OPT   = process.env.TB_OPZIONI;      // es. "OpzioniPreventivo"
+const TB_QUOTE = process.env.TB_PREVENTIVI;   // "Preventivi"
 
-async function atFetch(path, init = {}) {
-  const url = `https://api.airtable.com/v0/${AT_BASE}/${path}`;
-  const resp = await fetch(url, {
-    ...init,
+/* ---------- Helpers ---------- */
+async function atList(table, { filterByFormula, maxRecords = 1 } = {}) {
+  const url = new URL(`https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`);
+  if (filterByFormula) url.searchParams.set('filterByFormula', filterByFormula);
+  if (maxRecords) url.searchParams.set('maxRecords', String(maxRecords));
+  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${AT_PAT}` } });
+  const j = await r.json().catch(() => null);
+  if (!r.ok) {
+    const err = new Error(j?.error?.message || `Airtable ${r.status}`);
+    err.status = r.status; err.payload = j; throw err;
+  }
+  return j;
+}
+
+async function atPatch(table, id, fields) {
+  const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}/${id}`;
+  const r = await fetch(url, {
+    method: 'PATCH',
     headers: {
       Authorization: `Bearer ${AT_PAT}`,
-      "Content-Type": "application/json",
-      ...(init.headers || {}),
+      'Content-Type': 'application/json'
     },
+    body: JSON.stringify({ fields })
   });
-  const json = await resp.json().catch(() => null);
-  if (!resp.ok) {
-    const err = new Error(json?.error?.message || `Airtable HTTP ${resp.status}`);
-    err.status = resp.status;
-    err.payload = json;
-    throw err;
+  const j = await r.json().catch(() => null);
+  if (!r.ok) {
+    const err = new Error(j?.error?.message || `Airtable ${r.status}`);
+    err.status = r.status; err.payload = j; throw err;
   }
-  return json;
+  return j;
 }
 
-const toNum = (x) => {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : undefined;
-};
-
-async function getQuoteBySlug(slug) {
-  const filter = encodeURIComponent(`{Slug_Pubblico}="${String(slug).replace(/"/g, '\\"')}"`);
-  const data = await atFetch(`${encodeURIComponent(TB_QUOTE)}?filterByFormula=${filter}&maxRecords=1`);
-  const rec = data.records?.[0];
-  if (!rec) return null;
-  return { id: rec.id, fields: rec.fields };
-}
-
-async function listOptionsForQuote(quoteId) {
-  const filter = encodeURIComponent(`FIND("${quoteId}", ARRAYJOIN({Preventivo},""))`);
-  const sort = encodeURIComponent('[{"field":"Indice","direction":"asc"}]');
-  const data = await atFetch(`${encodeURIComponent(TB_OPT)}?filterByFormula=${filter}&sort=${sort}`);
-  return data.records?.map((r) => ({ id: r.id, fields: r.fields })) || [];
-}
-
-function chooseOptionIndex({ requestedIndex, options }) {
-  // 1) Se l'utente ha selezionato un indice esistente, usalo
-  if (requestedIndex != null) {
-    const idx = Number(requestedIndex);
-    if (options.some((o) => Number(o.fields?.Indice) === idx)) return idx;
-  }
-  // 2) fallback: prezzo minore tra le opzioni con prezzo numerico
-  const priced = options
-    .map((o) => ({ idx: Number(o.fields?.Indice), price: toNum(o.fields?.Prezzo) }))
-    .filter((x) => Number.isFinite(x.idx) && typeof x.price === "number");
-  if (priced.length) {
-    priced.sort((a, b) => a.price - b.price);
-    return priced[0].idx;
-  }
-  return undefined;
-}
-
+/* ---------- Handler ---------- */
 export default async function handler(req, res) {
   try {
-    if (req.method !== "POST") {
-      return res.status(405).json({ ok: false, error: "Method Not Allowed" });
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return res.status(405).json({ ok: false, error: { type: 'METHOD_NOT_ALLOWED' } });
     }
-    if (!AT_BASE || !AT_PAT || !TB_QUOTE || !TB_OPT) {
-      throw new Error("Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI");
-    }
-
-    const body = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
-    const { slug, optionIndex, tosAccepted } = body || {};
-
-    if (!slug) return res.status(400).json({ ok: false, error: "Missing slug" });
-    if (!tosAccepted) return res.status(400).json({ ok: false, error: "Devi accettare i termini" });
-
-    // 1) Carica preventivo
-    const quote = await getQuoteBySlug(slug);
-    if (!quote) return res.status(404).json({ ok: false, error: "Preventivo non trovato" });
-
-    const stato = String(quote.fields?.Stato || "").toLowerCase();
-    if (stato === "accettato") {
-      return res.status(409).json({ ok: false, error: "Preventivo già accettato" });
+    if (!AT_BASE || !AT_PAT || !TB_QUOTE) {
+      return res.status(500).json({ ok: false, error: { type: 'CONFIG', message: 'Missing Airtable env vars' } });
     }
 
-    // 2) Carica opzioni e determina indice scelto
-    const options = await listOptionsForQuote(quote.id);
-    const chosenIdx = chooseOptionIndex({ requestedIndex: optionIndex, options });
+    const { slug, optionIndex } = req.body || {};
+    const idxNum = Number(optionIndex);
+    if (!slug || !Number.isFinite(idxNum)) {
+      return res.status(400).json({ ok: false, error: { type: 'INVALID_PARAM', message: 'Missing slug or optionIndex' } });
+    }
 
-    // 3) Aggiornamento su Airtable (SOLO i campi richiesti)
-    const nowIso = new Date().toISOString();
-    const ip =
-      req.headers["x-forwarded-for"]?.split(",")?.[0]?.trim() ||
-      req.headers["x-real-ip"] ||
-      req.socket?.remoteAddress ||
-      "";
-    const ua = req.headers["user-agent"] || "";
+    // Trova il preventivo per slug pubblico
+    const q = await atList(TB_QUOTE, { filterByFormula: `{Slug_Pubblico} = "${slug}"`, maxRecords: 1 });
+    const rec = q.records?.[0];
+    if (!rec) return res.status(404).json({ ok: false, error: { type: 'NOT_FOUND', message: 'Preventivo non trovato' } });
 
-    const fields = {
-      Stato: "Accettato",
-      Accettato_Il: nowIso,
-      Accettato_IP: ip,
-      Accettato_UA: ua,
-      Opzione_Accettata: (chosenIdx != null ? Number(chosenIdx) : undefined),
-    };
-    Object.keys(fields).forEach((k) => fields[k] === undefined && delete fields[k]);
+    const fields = rec.fields || {};
+    const stato  = String(fields.Stato || '').toLowerCase();
 
-    await atFetch(encodeURIComponent(TB_QUOTE), {
-      method: "PATCH",
-      body: JSON.stringify({ records: [{ id: quote.id, fields }] }),
+    // Se già accettato, rispondi idempotente
+    if (stato === 'accettato' && Number(fields.Opzione_Accettata) === idxNum) {
+      return res.status(200).json({ ok: true, already: true, id: rec.id, slug });
+    }
+
+    // IP & UA dal proxy
+    const fwd = req.headers['x-forwarded-for'];
+    const ip  = Array.isArray(fwd) ? fwd[0] : (fwd || req.headers['x-real-ip'] || '').split(',')[0].trim();
+    const ua  = req.headers['user-agent'] || '';
+
+    // Aggiorna i campi richiesti (nessun requisito sui "termini")
+    await atPatch(TB_QUOTE, rec.id, {
+      Opzione_Accettata: idxNum,          // number
+      Accettato_Il     : new Date().toISOString(), // date
+      Accettato_IP     : ip || '',        // text
+      Accettato_UA     : ua || '',        // text
+      Stato            : 'Accettato'      // single select by name
     });
 
-    return res.status(200).json({ ok: true, optionIndex: chosenIdx, acceptedAt: nowIso });
+    return res.status(200).json({ ok: true, id: rec.id, slug, acceptedIndex: idxNum });
   } catch (err) {
-    const status = err.status || 500;
-    console.error("[api/quotes/accept] error:", err.payload || err.stack || err);
-    return res.status(status).json({ ok: false, error: err.payload || err.message || "Server error" });
+    console.error('[quotes/accept]', { status: err.status, msg: err.message, payload: err.payload });
+    return res.status(err.status || 500).json({ ok: false, error: { message: err.message || 'Server error' } });
   }
 }
