@@ -161,33 +161,14 @@ function buildPreviewHtml(model){
   const options       = Array.isArray(model.options) ? model.options : [];
   const packages      = Array.isArray(model.packages) ? model.packages : [];
 
-  const best = getBestIndex(options) || (options[0]?.index ?? null);
+  const best = getBestIndex(options) ?? (options[0]?.index ?? null);
 
-  // Opzioni
-  const optRows = options.map(o => (
-    '<div class="opt ' + (o.index===best?'is-best':'') + '">' +
-      '<div class="opt-head">' +
-        '<div class="badge">OPZIONE ' + escapeHtml(String(o.index ?? '')) + '</div>' +
-        (o.index===best ? '<span class="pill">Consigliata</span>' : '') +
-      '</div>' +
-      '<div class="grid">' +
-        '<div><div class="k">Corriere</div><div class="v">' + escapeHtml(o.carrier||'—') + '</div></div>' +
-        '<div><div class="k">Servizio</div><div class="v">' + escapeHtml(o.service||'—') + '</div></div>' +
-        '<div><div class="k">Tempo di resa</div><div class="v">' + escapeHtml(o.transit||'—') + '</div></div>' +
-        '<div><div class="k">Incoterm</div><div class="v">' + escapeHtml(o.incoterm||'—') + '</div></div>' +
-        '<div><div class="k">Oneri a carico</div><div class="v">' + escapeHtml(o.payer||'—') + '</div></div>' +
-        '<div><div class="k">Prezzo</div><div class="v">' + money(o.price, o.currency||currency) + '</div></div>' +
-      '</div>' +
-      (o.notes ? '<div class="notes"><strong>Note aggiuntive:</strong> ' + escapeHtml(o.notes) + '</div>' : '') +
-    '</div>'
-  )).join('');
-
-  // Packages → totali + tabella (ATTENZIONE: nessun'altra dichiarazione "pieces/weight" altrove!)
-  const pkgPieces = packages.reduce((a,b)=> a + (Number(b.qty)||0), 0);
-  const pkgWeight = packages.reduce((a,b)=>{
-    const kg  = Number(b.kg ?? b.weight ?? 0);
-    const qty = Number(b.qty) || 0;
-    return a + (Number.isFinite(kg) ? kg : 0) * (qty || 0 || 1);
+  // ---- Colli: totali + tabella
+  const pkgPieces = packages.reduce((sum,p) => sum + (Number(p.qty) || 1), 0);
+  const pkgWeight = packages.reduce((sum,p) => {
+    const kg  = Number(p.kg ?? p.weight ?? 0);
+    const qty = Number(p.qty) || 1;
+    return sum + (Number.isFinite(kg) ? kg : 0) * qty;
   }, 0);
 
   let pkgTable = '';
@@ -199,12 +180,11 @@ function buildPreviewHtml(model){
       const h = Number(p.h ?? p.height ?? 0);
       const kg = Number(p.kg ?? p.weight ?? 0);
       const dims = [l,w,h].map(n => (Number.isFinite(n)?n:0).toFixed(1)).join(' × ');
-      const kgFmt = (Number.isFinite(kg)?kg:0).toFixed(2);
       return (
         '<tr>' +
-          '<td style="padding:6px 8px">' + qty   + '</td>' +
-          '<td style="padding:6px 8px">' + dims  + '</td>' +
-          '<td style="padding:6px 8px">' + kgFmt + '</td>' +
+          '<td style="padding:6px 8px">' + qty + '</td>' +
+          '<td style="padding:6px 8px">' + dims + '</td>' +
+          '<td style="padding:6px 8px">' + (Number.isFinite(kg)?kg:0).toFixed(2) + '</td>' +
         '</tr>'
       );
     }).join('');
@@ -221,7 +201,37 @@ function buildPreviewHtml(model){
       '</div>';
   }
 
-  // HTML finale assemblato con array → join (niente concatenazioni lunghissime)
+  // ---- Opzioni (layout: tempo di resa su riga singola; poi Incoterm + Oneri; poi Prezzo + Valuta)
+  const optRows = options.map(o => (
+    '<div class="opt ' + (o.index===best ? 'is-best' : '') + '">' +
+      '<div class="opt-head">' +
+        '<div class="badge">OPZIONE ' + escapeHtml(String(o.index ?? '')) + '</div>' +
+        (o.index===best ? '<span class="pill">Consigliata</span>' : '') +
+      '</div>' +
+
+      '<div class="grid2opt">' +
+        '<div><div class="k">Corriere</div><div class="v">' + escapeHtml(o.carrier||'—') + '</div></div>' +
+        '<div><div class="k">Servizio</div><div class="v">' + escapeHtml(o.service||'—') + '</div></div>' +
+      '</div>' +
+
+      '<div class="row"><div class="k">Tempo di resa previsto</div><div class="v">' +
+        escapeHtml(o.transit||'—') + '</div></div>' +
+
+      '<div class="grid2opt">' +
+        '<div><div class="k">Incoterm</div><div class="v">' + escapeHtml(o.incoterm||'—') + '</div></div>' +
+        '<div><div class="k">Oneri a carico di</div><div class="v">' + escapeHtml(o.payer||'—') + '</div></div>' +
+      '</div>' +
+
+      '<div class="grid2opt">' +
+        '<div><div class="k">Prezzo</div><div class="v">' + money(o.price, o.currency||currency) + '</div></div>' +
+        '<div><div class="k">Valuta</div><div class="v">' + escapeHtml(o.currency||currency) + '</div></div>' +
+      '</div>' +
+
+      (o.notes ? '<div class="notes"><strong>Note operative:</strong> ' + escapeHtml(o.notes) + '</div>' : '') +
+    '</div>'
+  )).join('');
+
+  // ---- HTML finale
   const parts = [];
   parts.push(
     '<!doctype html><html lang="it"><head>',
@@ -237,15 +247,16 @@ function buildPreviewHtml(model){
       'h1{margin:0;font-size:22px}',
       '.card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}',
       '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}',
+      '.grid2opt{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:6px 0}',
+      '.row{margin:6px 0}',
       '.k{font-size:12px;color:var(--muted)}.v{font-weight:600}',
       '.badge{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid var(--brand);color:var(--brand);background:rgba(247,145,30,.12);font-size:10px}',
       '.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.4);font-size:11px}',
       '.opt{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}',
       '.opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}',
       '.opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}',
-      '.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}',
       '.notes{margin-top:8px;color:var(--muted)}.small{font-size:12px;color:var(--muted)}',
-      '@media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}',
+      '@media (max-width:900px){.grid2{grid-template-columns:1fr}.grid2opt{grid-template-columns:1fr}}',
       'table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}',
     '</style></head><body><div class="wrap">'
   );
@@ -287,7 +298,8 @@ function buildPreviewHtml(model){
   // Card: colli
   parts.push(
     '<div class="card"><div class="k" style="margin-bottom:6px">Colli</div>',
-    '<div class="small" style="margin-bottom:8px">Totale colli: <strong>', String(pkgPieces) ,'</strong> · Peso reale totale: <strong>', pkgWeight.toFixed(2) ,' kg</strong></div>',
+    '<div class="small" style="margin-bottom:8px">Totale colli: <strong>', String(pkgPieces) ,
+    '</strong> · Peso reale totale: <strong>', pkgWeight.toFixed(2) ,' kg</strong></div>',
     pkgTable || '',
     '</div>'
   );
@@ -308,204 +320,6 @@ function buildPreviewHtml(model){
 
   parts.push('</div></body></html>');
   return parts.join('');
-}
-
-
-  const pkgTable = packages.length
-    ? '<div style="overflow:auto"><table style="width:100%;border-collapse:collapse">'
-        + '<thead><tr>'
-          + '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>'
-          + '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>'
-          + '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>'
-        + '</tr></thead><tbody>'+pkgRows+'</tbody></table></div>'
-    : '';
-
-  // HTML finale (robusto, niente concatenazioni lunghe)
-  const parts = [];
-  parts.push(
-    '<!doctype html><html lang="it"><head>',
-    '<meta charset="utf-8"/>',
-    '<meta name="viewport" content="width=device-width,initial-scale=1"/>',
-    '<title>Anteprima Preventivo • SPST</title>',
-    '<style>',
-      ':root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}',
-      '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}',
-      '.wrap{max-width:960px;margin:24px auto;padding:0 16px}',
-      '.header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}',
-      '.brand{display:flex;align-items:center;gap:10px}.logo{width:26px;height:26px}',
-      'h1{margin:0;font-size:22px}',
-      '.card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}',
-      '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}',
-      '.k{font-size:12px;color:var(--muted)}.v{font-weight:600}',
-      '.badge{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid var(--brand);color:var(--brand);background:rgba(247,145,30,.12);font-size:10px}',
-      '.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.4);font-size:11px}',
-      '.opt{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}',
-      '.opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}',
-      '.opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}',
-      '.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}',
-      '.notes{margin-top:8px;color:var(--muted)}.small{font-size:12px;color:var(--muted)}',
-      '@media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}',
-      'table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}',
-    '</style></head><body><div class="wrap">'
-  );
-
-  // Header
-  parts.push(
-    '<div class="header"><div class="brand">',
-      '<img class="logo" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png" alt="SPST logo" />',
-      '<h1>Preventivo SPST</h1>',
-    '</div>',
-    '<div class="small">Valido fino al <strong>', escapeHtml(fmtDate(validUntil)) ,'</strong></div>',
-    '</div>'
-  );
-
-  // Card: intestazione
-  parts.push(
-    '<div class="card"><div class="grid2">',
-      '<div><div class="k">Cliente</div><div class="v">', escapeHtml(customerEmail||'—') ,'</div></div>',
-      '<div><div class="k">Valuta</div><div class="v">',   escapeHtml(currency||'EUR') ,'</div></div>',
-    '</div>'
-  );
-  if (notes) {
-    parts.push('<div style="margin-top:10px"><div class="k">Note</div><div class="v">', escapeHtml(notes) ,'</div></div>');
-  }
-  parts.push('</div>');
-
-  // Card: indirizzi
-  parts.push(
-    '<div class="card"><div class="grid2">',
-      '<div><div class="k">Mittente</div><div class="v">', escapeHtml(sender.name||'—') ,'</div>',
-        '<div class="small">', escapeHtml([sender.address,sender.zip,sender.city,sender.country].filter(Boolean).join(', ')) ,'</div>',
-      '</div>',
-      '<div><div class="k">Destinatario</div><div class="v">', escapeHtml(recipient.name||'—') ,'</div>',
-        '<div class="small">', escapeHtml([recipient.address,recipient.zip,recipient.city,recipient.country].filter(Boolean).join(', ')) ,'</div>',
-      '</div>',
-    '</div></div>'
-  );
-
-  // Card: colli
-  parts.push(
-    '<div class="card"><div class="k" style="margin-bottom:6px">Colli</div>',
-    '<div class="small" style="margin-bottom:8px">Totale colli: <strong>', String(pieces) ,'</strong> · Peso reale totale: <strong>', weight.toFixed(2) ,' kg</strong></div>',
-    pkgTable,
-    '</div>'
-  );
-
-  // Card: opzioni
-  parts.push(
-    '<div class="card"><div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>',
-    (optRows || '<div class="small">Nessuna opzione completa.</div>'),
-    '</div>'
-  );
-
-  // Footer note
-  parts.push(
-    '<div class="small" style="margin-top:8px">Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente. ',
-    'Per maggiori informazioni consulta i <a style="color:#9ec1ff" href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.',
-    '</div>'
-  );
-
-  parts.push('</div></body></html>');
-  return parts.join('');
-
-
-  // Packages → tabella
-  const pieces = packages.reduce((a,b)=>a+(b.qty||1),0);
-  const weight = packages.reduce((a,b)=>a+((b.kg??b.weight??0)*(b.qty||1)),0);
-  let pkgTable = '';
-  if (packages.length){
-    const rows = packages.map(function (p) {
-  // prendi L/W/H accettando sia l/w/h che length/width/height
-  const dimsArr = [
-    p.l ?? p.length ?? 0,
-    p.w ?? p.width  ?? 0,
-    p.h ?? p.height ?? 0,
-  ];
-  const dims = dimsArr.map(n => Number(n || 0).toFixed(1)).join(' × ');
-
-  // peso: accetta kg oppure weight
-  const kg = Number((p.kg ?? p.weight ?? 0) || 0).toFixed(2);
-
-  return (
-    '<tr>' +
-      '<td style="padding:6px 8px">' + (p.qty || 1) + '</td>' +
-      '<td style="padding:6px 8px">' + dims + '</td>' +
-      '<td style="padding:6px 8px">' + kg + '</td>' +
-    '</tr>'
-  );
-}).join('');
-    pkgTable =
-      '<div style="overflow:auto">'
-      +  '<table style="width:100%;border-collapse:collapse">'
-      +    '<thead><tr>'
-      +      '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>'
-      +      '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>'
-      +      '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>'
-      +    '</tr></thead>'
-      +    '<tbody>'+rows+'</tbody>'
-      +  '</table>'
-      +'</div>';
-  }
-
-  // HTML finale (no nested backticks)
-  const html =
-'<!doctype html>'
-+ '<html lang="it"><head>'
-+ '<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>'
-+ '<title>Anteprima Preventivo • SPST</title>'
-+ '<style>'
-+ ':root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}'
-+ '*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}'
-+ '.wrap{max-width:960px;margin:24px auto;padding:0 16px}'
-+ '.header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}'
-+ '.brand{display:flex;align-items:center;gap:10px}.logo{width:26px;height:26px}'
-+ 'h1{margin:0;font-size:22px}'
-+ '.card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}'
-+ '.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}'
-+ '.k{font-size:12px;color:var(--muted)}.v{font-weight:600}'
-+ '.badge{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid var(--brand);color:var(--brand);background:rgba(247,145,30,.12);font-size:10px}'
-+ '.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.4);font-size:11px}'
-+ '.opt{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}'
-+ '.opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}'
-+ '.opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}'
-+ '.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}'
-+ '.notes{margin-top:8px;color:var(--muted)}.small{font-size:12px;color:var(--muted)}'
-+ '@media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}'
-+ 'table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}'
-+ '</style></head><body><div class="wrap">'
-+   '<div class="header"><div class="brand">'
-+     '<img class="logo" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png" alt="SPST logo" />'
-+     '<h1>Preventivo SPST</h1>'
-+   '</div>'
-+   '<div class="small">Valido fino al <strong>'+escapeHtml(fmtDate(validUntil))+'</strong></div></div>'
-
-+   '<div class="card"><div class="grid2">'
-+     '<div><div class="k">Cliente</div><div class="v">'+escapeHtml(customerEmail||'—')+'</div></div>'
-+     '<div><div class="k">Valuta</div><div class="v">'+escapeHtml(currency||'EUR')+'</div></div>'
-+   '</div>'
-+   (notes ? '<div style="margin-top:10px"><div class="k">Note</div><div class="v">'+escapeHtml(notes)+'</div></div>' : '')
-+   + '</div>'
-
-+   '<div class="card"><div class="grid2">'
-+     '<div><div class="k">Mittente</div><div class="v">'+escapeHtml(sender.name||'—')+'</div>'
-+       '<div class="small">'+escapeHtml([sender.address,sender.zip,sender.city,sender.country].filter(Boolean).join(", "))+'</div></div>'
-+     '<div><div class="k">Destinatario</div><div class="v">'+escapeHtml(recipient.name||'—')+'</div>'
-+       '<div class="small">'+escapeHtml([recipient.address,recipient.zip,recipient.city,recipient.country].filter(Boolean).join(", "))+'</div></div>'
-+   '</div></div>'
-
-+   '<div class="card"><div class="k" style="margin-bottom:6px">Colli</div>'
-+     '<div class="small" style="margin-bottom:8px">Totale colli: <strong>'+pieces+'</strong> · Peso reale totale: <strong>'+weight.toFixed(2)+' kg</strong></div>'
-+     + pkgTable +
-+   '</div>'
-
-+   '<div class="card"><div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>'
-+     + (optRows || '<div class="small">Nessuna opzione completa.</div>')
-+   + '</div>'
-
-+   '<div class="small" style="margin-top:8px">Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente. Per maggiori informazioni consulta i <a style="color:#9ec1ff" href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.</div>'
-+ '</div></body></html>';
-
-  return html;
 }
 
 function openHtmlInNewTab(html) {
