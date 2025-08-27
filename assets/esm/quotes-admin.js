@@ -37,23 +37,27 @@ function money(n, curr='EUR'){
 const escapeHtml = s => String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
 /* --------------------------- Colli (Packages) --------------------------- */
-function pkgRowTemplate(p={qty:1,l:'',w:'',h:'',kg:''}){
+function pkgRowElement(p={qty:1,l:'',w:'',h:'',kg:''}){
   const row = document.createElement('div');
   row.className = 'pkg-row';
-  row.innerHTML = `
-    <input type="number" min="1" step="1"   class="pkg-qty" value="${p.qty ?? 1}" />
-    <input type="number" min="0" step="0.1" class="pkg-l"   placeholder="lunghezza" value="${p.l ?? ''}" />
-    <input type="number" min="0" step="0.1" class="pkg-w"   placeholder="larghezza" value="${p.w ?? ''}" />
-    <input type="number" min="0" step="0.1" class="pkg-h"   placeholder="altezza"   value="${p.h ?? ''}" />
-    <input type="number" min="0" step="0.01" class="pkg-kg"  placeholder="kg"        value="${p.kg ?? ''}" />
-    <span class="pkg-remove" style="cursor:pointer;color:#f66">Elimina</span>
-  `;
+  row.style.display = 'grid';
+  row.style.gridTemplateColumns = '120px repeat(3,1fr) 140px 80px';
+  row.style.gap = '8px';
+  row.style.margin = '6px 0';
+  row.innerHTML =
+    '<input type="number" min="1" step="1" class="pkg-qty" value="'+(p.qty ?? 1)+'" />' +
+    '<input type="number" min="0" step="0.1" class="pkg-l" placeholder="lunghezza" value="'+(p.l ?? '')+'" />' +
+    '<input type="number" min="0" step="0.1" class="pkg-w" placeholder="larghezza" value="'+(p.w ?? '')+'" />' +
+    '<input type="number" min="0" step="0.1" class="pkg-h" placeholder="altezza" value="'+(p.h ?? '')+'" />' +
+    '<input type="number" min="0" step="0.01" class="pkg-kg" placeholder="kg" value="'+(p.kg ?? '')+'" />' +
+    '<span class="pkg-remove" style="align-self:center;cursor:pointer;color:#f66;user-select:none">Elimina</span>';
   return row;
 }
 
-function addPackageRow(p){ 
-  const rows = qs('#qa-pkg-rows'); 
-  rows?.appendChild(pkgRowTemplate(p)); 
+function addPackageRow(p){
+  const rows = qs('#qa-pkg-rows');
+  if (!rows) return;
+  rows.appendChild(pkgRowElement(p));
 }
 
 function readPackages(){
@@ -73,36 +77,31 @@ function refreshPackages(){
   const totQty = pkgs.reduce((s,p)=> s + (p.qty||0), 0);
   const totKg  = pkgs.reduce((s,p)=> s + (p.kg||0) * (p.qty||1), 0);
   text(qs('#qa-pkg-totals'), `Totale colli: ${totQty} · Peso reale totale: ${totKg.toFixed(2)} kg`);
-  const sumPk = qs('#sum-packages');
-  if (sumPk) text(sumPk, totQty ? `${totQty} collo${totQty===1?'':'i'} (${totKg.toFixed(2)} kg)` : '—');
+  text(qs('#sum-packages'), totQty ? `${totQty} collo${totQty===1?'':'i'} (${totKg.toFixed(2)} kg)` : '—');
 }
 
 function wirePackages(onChange){
   const rows = qs('#qa-pkg-rows');
   const add  = qs('#qa-pkg-add');
-  const changed = () => { refreshPackages(); onChange && onChange(); };
+  const changed = () => { refreshPackages(); if (onChange) onChange(); };
 
-  // Add
   add?.addEventListener('click', () => { addPackageRow({ qty:1 }); changed(); });
 
-  // Edit
   rows?.addEventListener('input', (e) => {
     if (e.target.closest('.pkg-row')) changed();
   });
 
-  // Remove
   rows?.addEventListener('click', (e) => {
     if (e.target.matches('.pkg-remove')) {
       e.preventDefault();
-      e.target.closest('.pkg-row')?.remove();
+      const r = e.target.closest('.pkg-row');
+      if (r) r.remove();
       changed();
     }
   });
 
-  // Prima riga
   if (!rows?.children.length) { addPackageRow({ qty:1 }); changed(); }
 }
-
 
 /* -------------------------- Lettura form -------------------------- */
 function readSender() {
@@ -177,56 +176,50 @@ function buildPreviewHtml(model){
   const { customerEmail, currency, validUntil, notes, sender, recipient, options, packages } = model;
   const best = getBestIndex(options) || options[0]?.index;
 
-  const optRows = options.map(o => `
-    <div class="opt ${o.index===best?'is-best':''}">
-      <div class="opt-head">
-        <div class="badge">OPZIONE ${o.index}</div>
-        ${o.index===best ? '<span class="pill">Consigliata</span>' : ''}
-      </div>
-      <div class="grid">
-        <div><div class="k">Corriere</div><div class="v">${escapeHtml(o.carrier||'—')}</div></div>
-        <div><div class="k">Servizio</div><div class="v">${escapeHtml(o.service||'—')}</div></div>
-        <div><div class="k">Tempo di resa</div><div class="v">${escapeHtml(o.transit||'—')}</div></div>
-        <div><div class="k">Incoterm</div><div class="v">${escapeHtml(o.incoterm||'—')}</div></div>
-        <div><div class="k">Oneri a carico</div><div class="v">${escapeHtml(o.payer||'—')}</div></div>
-        <div><div class="k">Prezzo</div><div class="v">${money(o.price, o.currency||currency)}</div></div>
-      </div>
-      ${o.notes ? `<div class="notes"><strong>Note aggiuntive:</strong> ${escapeHtml(o.notes)}</div>` : ''}
-    </div>
-  `).join("");
+  const optRows = options.map(o =>
+    '<div class="opt '+(o.index===best?'is-best':'')+'">'+
+      '<div class="opt-head">'+
+        '<div class="badge">OPZIONE '+o.index+'</div>'+
+        (o.index===best ? '<span class="pill">Consigliata</span>' : '')+
+      '</div>'+
+      '<div class="grid">'+
+        '<div><div class="k">Corriere</div><div class="v">'+escapeHtml(o.carrier||'—')+'</div></div>'+
+        '<div><div class="k">Servizio</div><div class="v">'+escapeHtml(o.service||'—')+'</div></div>'+
+        '<div><div class="k">Tempo di resa</div><div class="v">'+escapeHtml(o.transit||'—')+'</div></div>'+
+        '<div><div class="k">Incoterm</div><div class="v">'+escapeHtml(o.incoterm||'—')+'</div></div>'+
+        '<div><div class="k">Oneri a carico</div><div class="v">'+escapeHtml(o.payer||'—')+'</div></div>'+
+        '<div><div class="k">Prezzo</div><div class="v">'+money(o.price, o.currency||currency)+'</div></div>'+
+      '</div>'+
+      (o.notes ? '<div class="notes"><strong>Note aggiuntive:</strong> '+escapeHtml(o.notes)+'</div>' : '')+
+    '</div>'
+  ).join("");
 
   const pkgs = Array.isArray(packages) ? packages : [];
   const pieces = pkgs.reduce((a,b)=>a+(b.qty||1),0);
-  const weight = pkgs.reduce((a,b)=>a+((b.kg||b.weight||0)*(b.qty||1)),0);
+  const weight = pkgs.reduce((a,b)=>a+((b.kg??b.weight??0)*(b.qty||1)),0);
 
-  const pkgCard = `
-    <div class="card">
-      <div class="k" style="margin-bottom:6px">Colli</div>
-      <div class="small" style="margin-bottom:8px">
-        Totale colli: <strong>${pieces}</strong> ·
-        Peso reale totale: <strong>${weight.toFixed(2)} kg</strong>
-      </div>
-      ${pkgs.length ? `
-        <div style="overflow:auto">
-          <table style="width:100%;border-collapse:collapse">
-            <thead><tr>
-              <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>
-              <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>
-              <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>
-            </tr></thead>
-            <tbody>
-              ${pkgs.map(p=>`
-                <tr>
-                  <td style="padding:6px 8px">${p.qty||1}</td>
-                  <td style="padding:6px 8px">${[p.l??p.length,p.w??p.width,p.h??p.height].map(n=>Number(n||0).toFixed(1)).join(' × ')}</td>
-                  <td style="padding:6px 8px">${Number(p.kg??p.weight||0).toFixed(2)}</td>
-                </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>` : ``}
-    </div>`;
+  let pkgTable = '';
+  if (pkgs.length){
+    const rows = pkgs.map(p => {
+      const dims = [p.l??p.length, p.w??p.width, p.h??p.height].map(n => Number(n||0).toFixed(1)).join(' × ');
+      const kg = Number(p.kg??p.weight||0).toFixed(2);
+      return '<tr><td style="padding:6px 8px">'+(p.qty||1)+'</td><td style="padding:6px 8px">'+dims+'</td><td style="padding:6px 8px">'+kg+'</td></tr>';
+    }).join('');
+    pkgTable =
+      '<div style="overflow:auto">'+
+        '<table style="width:100%;border-collapse:collapse">'+
+          '<thead><tr>'+
+            '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>'+
+            '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>'+
+            '<th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>'+
+          '</tr></thead>'+
+          '<tbody>'+rows+'</tbody>'+
+        '</table>'+
+      '</div>';
+  }
 
-  return `<!doctype html>
+  return (
+`<!doctype html>
 <html lang="it"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Anteprima Preventivo • SPST</title>
@@ -285,7 +278,13 @@ th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:le
     </div>
   </div>
 
-  ${pkgCard}
+  <div class="card">
+    <div class="k" style="margin-bottom:6px">Colli</div>
+    <div class="small" style="margin-bottom:8px">
+      Totale colli: <strong>${pieces}</strong> · Peso reale totale: <strong>${weight.toFixed(2)} kg</strong>
+    </div>
+    ${pkgTable}
+  </div>
 
   <div class="card">
     <div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>
@@ -296,8 +295,10 @@ th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:le
     Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente.
     Per maggiori informazioni consulta i <a style="color:#9ec1ff" href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.
   </div>
-</div></body></html>`;
+</div></body></html>`
+  );
 }
+
 function openHtmlInNewTab(html) {
   const blob = new Blob([html], { type: "text/html" });
   const url  = URL.createObjectURL(blob);
@@ -430,6 +431,9 @@ function wireup(){
     buildOptions(qs(".qa-incoterm", wrap), incoterms, "Seleziona incoterm");
   });
 
+  // Sezione colli
+  wirePackages(() => { refreshSummary(); syncButtons(); });
+
   // Pulsanti
   const syncButtons = () => {
     const okCreate  = formIsValid();
@@ -438,17 +442,13 @@ function wireup(){
     qsa("#btn-preview", container).forEach(b => b.disabled = !okPreview);
   };
 
- // Sezione colli
-wirePackages(() => { refreshSummary(); syncButtons(); });
-
-
   // Ricalcola riepilogo e stato bottoni per gli altri input
   qsa("input,select,textarea", container).forEach(el => {
     el.addEventListener("input", () => { refreshSummary(); syncButtons(); });
     if (el.name === "bestOption") el.addEventListener("change", () => { refreshSummary(); syncButtons(); });
   });
 
-  // Event delegation (clic su bottoni top)
+  // Event delegation (clic su bottoni top/bottom)
   container.addEventListener("click", (e) => {
     const btn = e.target.closest('[data-action="create"], #btn-create, #btn-preview');
     if (!btn) return;
@@ -458,10 +458,8 @@ wirePackages(() => { refreshSummary(); syncButtons(); });
 
   // Fallback binding diretto
   qsa('[data-action="create"]', container).forEach(b => b.addEventListener("click", handleCreate));
-  const btnCreateBottom = qs("#btn-create", container);
-  if (btnCreateBottom) btnCreateBottom.addEventListener("click", handleCreate);
-  const btnPreview = qs("#btn-preview", container);
-  if (btnPreview) btnPreview.addEventListener("click", handlePreview);
+  qs("#btn-create", container)?.addEventListener("click", handleCreate);
+  qs("#btn-preview", container)?.addEventListener("click", handlePreview);
 
   wireRecommendedUI(container);
   refreshSummary();
