@@ -185,11 +185,26 @@ function buildPreviewHtml(model){
   const weight = packages.reduce((a,b)=>a+((b.kg??b.weight??0)*(b.qty||1)),0);
   let pkgTable = '';
   if (packages.length){
-    const rows = packages.map(function(p){
-      const dims = [p.l??p.length, p.w??p.width, p.h??p.height].map(n=>Number(n||0).toFixed(1)).join(' × ');
-      const kg = Number(p.kg??p.weight||0).toFixed(2);
-      return '<tr><td style="padding:6px 8px">'+(p.qty||1)+'</td><td style="padding:6px 8px">'+dims+'</td><td style="padding:6px 8px">'+kg+'</td></tr>';
-    }).join('');
+    const rows = packages.map(function (p) {
+  // prendi L/W/H accettando sia l/w/h che length/width/height
+  const dimsArr = [
+    p.l ?? p.length ?? 0,
+    p.w ?? p.width  ?? 0,
+    p.h ?? p.height ?? 0,
+  ];
+  const dims = dimsArr.map(n => Number(n || 0).toFixed(1)).join(' × ');
+
+  // peso: accetta kg oppure weight
+  const kg = Number((p.kg ?? p.weight ?? 0) || 0).toFixed(2);
+
+  return (
+    '<tr>' +
+      '<td style="padding:6px 8px">' + (p.qty || 1) + '</td>' +
+      '<td style="padding:6px 8px">' + dims + '</td>' +
+      '<td style="padding:6px 8px">' + kg + '</td>' +
+    '</tr>'
+  );
+}).join('');
     pkgTable =
       '<div style="overflow:auto">'
       +  '<table style="width:100%;border-collapse:collapse">'
