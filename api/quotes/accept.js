@@ -1,6 +1,6 @@
 // api/quotes/accept.js
 
-/* ========================= CORS ========================= */
+/* ===== CORS (come create.js) ===== */
 const DEFAULT_ALLOW = [
   "https://spst.it",
   "https://www.spst.it",
@@ -28,7 +28,7 @@ function setCors(res, origin) {
   if (isAllowed(origin)) res.setHeader("Access-Control-Allow-Origin", origin);
 }
 
-/* ========================= Airtable ========================= */
+/* ===== Airtable ===== */
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
 const TB_QUOTE = process.env.TB_PREVENTIVI;   // Preventivi
@@ -38,7 +38,7 @@ async function atFetch(url) {
   const r = await fetch(url, { headers: { Authorization: `Bearer ${AT_PAT}` } });
   const j = await r.json().catch(() => null);
   if (!r.ok) {
-    const e = new Error(j?.error?.message || "Airtable error");
+    const e = new Error(j?.error?.message || `Airtable ${r.status}`);
     e.status = r.status;
     e.payload = j;
     throw e;
@@ -61,46 +61,68 @@ async function atUpdate(table, records) {
   }
   return json;
 }
-
-/* ========================= Utils ========================= */
-function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : undefined; }
+const toNumber = (x) => {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : undefined;
+};
 function money(n, curr="EUR"){
   const num = Number(n);
   if (!Number.isFinite(num)) return "—";
   try { return new Intl.NumberFormat("it-IT", { style:"currency", currency:curr }).format(num); }
   catch { return `${num.toFixed(2)} ${curr}`; }
 }
-function escapeHtml(s=""){ return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m])); }
-const pick = (obj, keys, fallback='') => {
-  for (const k of keys) { if (obj && obj[k] != null && obj[k] !== '') return obj[k]; }
+const pick = (obj, keys, fallback="") => {
+  for (const k of keys) {
+    if (obj && obj[k] != null && obj[k] !== "") return obj[k];
+  }
   return fallback;
 };
-const getQuoteEmail = f => pick(f, ['Email_Cliente','Cliente_Email','customerEmail'], '');
+function escapeHtml(s=""){
+  return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m]));
+}
 
-/* Opzioni del preventivo (prima campo testo Preventivo_Id, poi fallback su linked record) */
+/* Opzioni del preventivo (prima campo testo Preventivo_Id, poi fallback su linked) */
 async function fetchOptionsForQuote(quoteId) {
   const base = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_OPT)}`;
   const sort = `&sort[0][field]=Indice&sort[0][direction]=asc`;
 
-  // 1) Campo testo
-  let url = `${base}?filterByFormula=${encodeURIComponent(`{Preventivo_Id}='${quoteId}'`)}${sort}`;
+  // 1) campo testo (usa DOPPI apici nelle formule Airtable)
+  let url = `${base}?filterByFormula=${encodeURIComponent(`{Preventivo_Id} = "${quoteId}"`)}${sort}`;
   try {
     const j = await atFetch(url);
     if (Array.isArray(j.records) && j.records.length) return j.records;
   } catch {}
 
-  // 2) Fallback su linked
-  url = `${base}?filterByFormula=${encodeURIComponent(`FIND('${quoteId}', ARRAYJOIN({Preventivo}))`)}${sort}`;
+  // 2) fallback sul linked
+  url = `${base}?filterByFormula=${encodeURIComponent(`FIND("${quoteId}", ARRAYJOIN({Preventivo}))`)}${sort}`;
   const j = await atFetch(url);
   return j.records || [];
 }
 
-/* ========================= Email (Resend) ========================= */
+/* ===== Email (Resend) ===== */
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const MAIL_FROM = process.env.MAIL_FROM || "SPST Notifications <notification@spst.it>";
 const PUBLIC_QUOTE_BASE_URL = (process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote").replace(/\/$/,"");
 
-function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
+/* Normalizzazione campi opzione (indipendente dai nomi in Airtable) */
+function normalizeOptionFields(x) {
+  const f = x || {};
+  const priceRaw = pick(f, ["Prezzo","price","Price"]);
+  const price = Number(priceRaw);
+  const data = {
+    index   : toNumber(pick(f, ["Indice","Opzione","Index","Option"])),
+    carrier : pick(f, ["Corriere","Carrier","carrier"], "—"),
+    service : pick(f, ["Servizio","Service","service"], "—"),
+    transit : pick(f, ["Tempo_Resa","Tempo di resa previsto","Tempo resa previsto","Transit","transit"], "—"),
+    incoterm: pick(f, ["Incoterm","incoterm"], "—"),
+    payer   : pick(f, ["Oneri_A_Carico","Oneri a carico di","Payer","payer"], "—"),
+    price   : Number.isFinite(price) ? price : undefined,
+    currency: pick(f, ["Valuta","Currency","currency"], "EUR"),
+  };
+  return data;
+}
+
+function buildEmailHtml({ fields, optionIdx, optionData, quoteUrl }) {
   const brand = "#f7911e";
   const label = "#6b7280";
   const text  = "#111111";
@@ -116,13 +138,12 @@ function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
 
   const rows = [
     row("Opzione", escapeHtml(String(optionIdx))),
-    row("Cliente", `<a style="color:${text};text-decoration:underline" href="mailto:${escapeHtml(getQuoteEmail(fields))}">${escapeHtml(getQuoteEmail(fields) || "—")}</a>`),
-    row("Corriere", escapeHtml(optionFields?.Corriere || "—")),
-    row("Servizio", escapeHtml(optionFields?.Servizio || "—")),
-    row("Incoterm", escapeHtml(optionFields?.Incoterm || "—")),
-    row("Oneri a carico", escapeHtml(optionFields?.Oneri_A_Carico || "—")),
-    row("Prezzo", escapeHtml(money(optionFields?.Prezzo, optionFields?.Valuta || fields?.Valuta || "EUR"))),
-    row("Peso reale", Number.isFinite(Number(optionFields?.Peso_Kg)) ? `${Number(optionFields.Peso_Kg).toFixed(2)} kg` : "—"),
+    row("Cliente", `<a style="color:${text};text-decoration:underline" href="mailto:${escapeHtml(fields?.Email_Cliente||"")}">${escapeHtml(fields?.Email_Cliente||"—")}</a>`),
+    row("Corriere", escapeHtml(optionData.carrier || "—")),
+    row("Servizio", escapeHtml(optionData.service || "—")),
+    row("Incoterm", escapeHtml(optionData.incoterm || "—")),
+    row("Oneri a carico", escapeHtml(optionData.payer || "—")),
+    row("Prezzo", escapeHtml(money(optionData.price, optionData.currency))),
     row("Link preventivo", `<a style="color:${text};text-decoration:underline" href="${quoteUrl}" target="_blank" rel="noopener">${escapeHtml(quoteUrl)}</a>`),
   ].join("");
 
@@ -180,7 +201,7 @@ function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
   </div>`.trim();
 }
 
-async function sendAcceptanceEmail({ slug, fields, optionIdx, optionFields }) {
+async function sendAcceptanceEmail({ slug, fields, optionIdx, optionData }) {
   if (!RESEND_API_KEY) {
     console.warn("[accept] RESEND_API_KEY mancante: salto invio email");
     return { sent:false, reason:"missing api key" };
@@ -189,12 +210,12 @@ async function sendAcceptanceEmail({ slug, fields, optionIdx, optionFields }) {
   const toSet = new Set([
     "commerciale@spst.it",
     "info@spst.it",
-    (getQuoteEmail(fields) || "").trim()
+    (fields?.Email_Cliente || "").trim()
   ].filter(Boolean).map(e => e.toLowerCase()));
   const to = Array.from(toSet);
   if (!to.length) return { sent:false, reason:"no recipients" };
 
-  const subject  = `Conferma accettazione preventivo • Opzione ${optionIdx}`;
+  const subject = `Conferma accettazione preventivo • Opzione ${optionIdx}`;
   const quoteUrl = `${PUBLIC_QUOTE_BASE_URL}/${encodeURIComponent(slug)}`;
 
   const textLines = [
@@ -202,20 +223,19 @@ async function sendAcceptanceEmail({ slug, fields, optionIdx, optionFields }) {
     "",
     "Dettagli:",
     `Opzione: ${optionIdx}`,
-    `Cliente: ${getQuoteEmail(fields) || "—"}`,
-    `Corriere: ${optionFields?.Corriere || "—"}`,
-    `Servizio: ${optionFields?.Servizio || "—"}`,
-    `Incoterm: ${optionFields?.Incoterm || "—"}`,
-    `Oneri a carico: ${optionFields?.Oneri_A_Carico || "—"}`,
-    `Prezzo: ${money(optionFields?.Prezzo, optionFields?.Valuta || fields?.Valuta || "EUR")}`,
-    Number.isFinite(Number(optionFields?.Peso_Kg)) ? `Peso reale: ${Number(optionFields.Peso_Kg).toFixed(2)} kg` : "",
+    `Cliente: ${fields?.Email_Cliente || "—"}`,
+    `Corriere: ${optionData.carrier || "—"}`,
+    `Servizio: ${optionData.service || "—"}`,
+    `Incoterm: ${optionData.incoterm || "—"}`,
+    `Oneri a carico: ${optionData.payer || "—"}`,
+    `Prezzo: ${money(optionData.price, optionData.currency)}`,
     "",
     `Link preventivo: ${quoteUrl}`,
     "",
     "Per supporto WhatsApp: +39 320 144 1789",
-  ].filter(Boolean).join("\n");
+  ].join("\n");
 
-  const html = buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl });
+  const html = buildEmailHtml({ fields, optionIdx, optionData, quoteUrl });
 
   const resp = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -239,7 +259,7 @@ async function sendAcceptanceEmail({ slug, fields, optionIdx, optionFields }) {
   return { sent:true, payload:json };
 }
 
-/* ========================= Handler ========================= */
+/* ===== Handler ===== */
 export default async function handler(req, res) {
   setCors(res, req.headers.origin);
   if (req.method === "OPTIONS") return res.status(200).end();
@@ -250,14 +270,13 @@ export default async function handler(req, res) {
       throw new Error("Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI");
     }
 
-    const body = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
-    const slug = String(body.slug || "").trim();
-    // NB: supportiamo sia optionIndex che option (retro-compatibilità)
-    const option = toNumber(body.optionIndex ?? body.option);
+    const body   = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
+    const slug   = String(body.slug || "").trim();
+    const option = toNumber(body.option) ?? toNumber(body.optionIndex);
     if (!slug || !option) return res.status(400).json({ ok:false, error:"Missing slug/option" });
 
     // 1) preventivo per slug
-    const qUrl = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_QUOTE)}?filterByFormula=${encodeURIComponent(`{Slug_Pubblico}='${slug}'`)}`;
+    const qUrl = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_QUOTE)}?filterByFormula=${encodeURIComponent(`{Slug_Pubblico} = "${slug}"`)}`;
     const q = await atFetch(qUrl);
     const rec = q.records?.[0];
     if (!rec) return res.status(404).json({ ok:false, error:"Quote not found" });
@@ -282,28 +301,20 @@ export default async function handler(req, res) {
       },
     }]);
 
-    // 3) trova l'opzione scelta e normalizza i campi per l’email (best-effort)
-    let normalized = null;
+    // 3) leggi l'opzione accettata e normalizza (best-effort)
+    let optionData = {
+      index: option,
+      carrier: "—", service: "—", incoterm: "—", payer: "—", price: undefined, currency: f.Valuta || "EUR"
+    };
     try {
       const options = await fetchOptionsForQuote(rec.id);
-      const match = options.find(r => Number(r.fields?.Indice) === option);
-      if (match && match.fields) {
-        const x = match.fields;
-        normalized = {
-          // mapping robusto per email
-          Corriere      : pick(x, ['Corriere','Carrier'], ''),
-          Servizio      : pick(x, ['Servizio','Service'], ''),
-          Incoterm      : pick(x, ['Incoterm'], ''),
-          Oneri_A_Carico: pick(x, ['Oneri_A_Carico','Oneri a carico di','Payer'], ''),
-          Prezzo        : typeof x.Prezzo === 'number' ? x.Prezzo : toNumber(x.Prezzo),
-          Valuta        : pick(x, ['Valuta','Currency'], pick(f, ['Valuta','Currency'], 'EUR')),
-          Peso_Kg       : typeof x.Peso_Kg === 'number' ? x.Peso_Kg : toNumber(x.Peso_Kg),
-        };
-        // prova a marcare anche la riga opzione come accettata (non blocca)
-        try { await atUpdate(TB_OPT, [{ id: match.id, fields: { Accettata: true } }]); } catch {}
-      }
+      // match per Indice oppure Opzione/Index
+      let match = options.find(r => Number(r.fields?.Indice) === option);
+      if (!match) match = options.find(r => Number(r.fields?.Opzione) === option);
+      if (!match) match = options.find(r => Number(r.fields?.Index) === option);
+      if (match) optionData = normalizeOptionFields(match.fields);
     } catch (e) {
-      console.warn("[accept] could not load/normalize options:", e?.payload?.error || e.message);
+      console.warn("[accept] could not load options:", e?.payload?.error || e.message);
     }
 
     // 4) email (non blocca il 200 se fallisce)
@@ -313,7 +324,7 @@ export default async function handler(req, res) {
         slug,
         fields: f,
         optionIdx: option,
-        optionFields: normalized,
+        optionData,
       });
     } catch (e) {
       console.error("[accept] email error:", e);
