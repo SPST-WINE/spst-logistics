@@ -133,40 +133,42 @@ export default async function handler(req, res) {
     // Normalizza colli
     const pkg = computePackages(body.packages);
 
-    // Campi Preventivo (ATTENZIONE: niente Tot_Colli / Tot_Peso_Reale_Kg perché calcolati in Airtable)
-    const qFields = {
-      Email_Cliente   : body.customerEmail || undefined,
-      Valuta          : body.currency || undefined,
-      Valido_Fino_Al  : body.validUntil || undefined,
-      Note_Globali    : body.notes || undefined,
+    // ---- campi Preventivo (solo campi scrivibili, niente campi calcolati) ----
+const qFields = {
+  Email_Cliente   : body.customerEmail || undefined,
+  Valuta          : body.currency || undefined,
+  Valido_Fino_Al  : body.validUntil || undefined, // "YYYY-MM-DD"
+  Note_Globali    : body.notes || undefined,
 
-      Mittente_Nome      : body.sender?.name || undefined,
-      Mittente_Paese     : body.sender?.country || undefined,
-      Mittente_Citta     : body.sender?.city || undefined,
-      Mittente_CAP       : body.sender?.zip || undefined,
-      Mittente_Indirizzo : body.sender?.address || undefined,
-      Mittente_Telefono  : body.sender?.phone || undefined,
-      Mittente_Tax       : body.sender?.tax || undefined,
+  Mittente_Nome      : body.sender?.name || undefined,
+  Mittente_Paese     : body.sender?.country || undefined,
+  Mittente_Citta     : body.sender?.city || undefined,
+  Mittente_CAP       : body.sender?.zip || undefined,
+  Mittente_Indirizzo : body.sender?.address || undefined,
+  Mittente_Telefono  : body.sender?.phone || undefined,
+  Mittente_Tax       : body.sender?.tax || undefined,
 
-      Destinatario_Nome      : body.recipient?.name || undefined,
-      Destinatario_Paese     : body.recipient?.country || undefined,
-      Destinatario_Citta     : body.recipient?.city || undefined,
-      Destinatario_CAP       : body.recipient?.zip || undefined,
-      Destinatario_Indirizzo : body.recipient?.address || undefined,
-      Destinatario_Telefono  : body.recipient?.phone || undefined,
-      Destinatario_Tax       : body.recipient?.tax || undefined,
+  Destinatario_Nome      : body.recipient?.name || undefined,
+  Destinatario_Paese     : body.recipient?.country || undefined,
+  Destinatario_Citta     : body.recipient?.city || undefined,
+  Destinatario_CAP       : body.recipient?.zip || undefined,
+  Destinatario_Indirizzo : body.recipient?.address || undefined,
+  Destinatario_Telefono  : body.recipient?.phone || undefined,
+  Destinatario_Tax       : body.recipient?.tax || undefined,
 
-      Versione_Termini : body.terms?.version || 'v1.0',
-      Visibilita       : mapVisibility(body.terms?.visibility) || 'Immediata',
-      Slug_Pubblico    : slug,
-      Scadenza_Link    : expiryDate ? expiryDate.toISOString() : undefined,
+  Versione_Termini      : body.terms?.version || "v1.0",
+  Visibilita            : mapVisibility(body.terms?.visibility) || "Immediata",
+  Slug_Pubblico         : slug,
+  Scadenza_Link         : expiryDate ? expiryDate.toISOString() : undefined,
 
-      Opzione_Consigliata : getBestIndex(Array.isArray(body.options) ? body.options : []),
+  Opzione_Consigliata   : getBestIndex(Array.isArray(body.options) ? body.options : []),
 
-      // opzionali (non calcolati): utile per audit/preview server-side
-      UM_Dimensioni : pkg.rows.length ? 'cm/kg' : undefined,
-      Colli_JSON    : pkg.rows.length ? JSON.stringify(pkg.rows) : undefined,
-    };
+  // Non inviare Tot_Colli / Tot_Peso_Reale_Kg (sono calcolati)
+  // Resta utile salvare il dettaglio:
+  Colli_JSON            : Array.isArray(body.packages) && body.packages.length
+                          ? JSON.stringify(body.packages)
+                          : undefined,
+};
 
     // Dry-run
     if (debug) {
