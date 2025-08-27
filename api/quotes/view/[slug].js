@@ -1,28 +1,35 @@
 // api/quotes/view/[slug].js
 
-// ===== Airtable env =====
+// ==== ENV (Airtable) ====
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;   // es. "Preventivi"
-const TB_OPT   = process.env.TB_OPZIONI;      // es. "OpzioniPreventivo"
-const TB_COLLI = process.env.TB_COLLI;        // es. "Colli"
+const TB_QUOTE = process.env.TB_PREVENTIVI;   // Preventivi
+const TB_OPT   = process.env.TB_OPZIONI;      // OpzioniPreventivo
+const TB_COLLI = process.env.TB_COLLI;        // Colli
 
-// ===== Helpers =====
-const esc = (s) => String(s ?? "").replace(/[&<>"']/g, m => ({
-  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'
-}[m]));
+// ==== Utils ====
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, m => (
+  { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m]
+));
 function fmtDate(v){ try{ const d=new Date(v); return Number.isNaN(+d)?'—':d.toISOString().slice(0,10);}catch{ return '—'; } }
 function toNum(x, d=0){ const n=Number(x); return Number.isFinite(n)?n:d; }
 function money(n, curr='EUR'){ return (typeof n==='number' && Number.isFinite(n))
-  ? new Intl.NumberFormat('it-IT', { style:'currency', currency: curr }).format(n)
+  ? new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n)
   : '—'; }
 
-async function atList(table, params={}) {
+async function atList(table, opts={}) {
   const url = new URL(`https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`);
-  Object.entries(params).forEach(([k,v]) => v!=null && url.searchParams.set(k, v));
-  const r = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${AT_PAT}` }
+
+  if (opts.filterByFormula) url.searchParams.set('filterByFormula', opts.filterByFormula);
+  if (Array.isArray(opts.fields))  opts.fields.forEach(f => url.searchParams.append('fields[]', f));
+  if (Array.isArray(opts.sort))    opts.sort.forEach((s,i)=>{
+    if (s.field)     url.searchParams.set(`sort[${i}][field]`, s.field);
+    if (s.direction) url.searchParams.set(`sort[${i}][direction]`, s.direction);
   });
+  if (opts.maxRecords) url.searchParams.set('maxRecords', String(opts.maxRecords));
+  if (opts.pageSize)   url.searchParams.set('pageSize',  String(opts.pageSize));
+
+  const r = await fetch(url.toString(), { headers: { Authorization:`Bearer ${AT_PAT}` } });
   const j = await r.json().catch(()=>null);
   if (!r.ok) {
     const err = new Error(j?.error?.message || `Airtable ${r.status}`);
@@ -32,15 +39,16 @@ async function atList(table, params={}) {
   return j;
 }
 
-function buildHtml({ quote, options, packages, totals }) {
+// ==== HTML ====
+function buildHtml({ quote, options, packages }) {
   const bestIdx = (() => {
     const priced = options.filter(o => typeof o.price === 'number').sort((a,b)=>a.price-b.price);
     const chosen = options.find(o => !!o.recommended);
     return chosen?.index ?? priced[0]?.index ?? options[0]?.index ?? null;
   })();
 
-  const pieces = toNum(totals?.pieces, packages.reduce((s,p)=>s+toNum(p.qty,0),0));
-  const weight = toNum(totals?.weightKg, packages.reduce((s,p)=> s + (toNum(p.kg ?? p.weight,0) * (toNum(p.qty,0)||0||1)), 0));
+  const pieces = packages.reduce((s,p)=> s + toNum(p.qty,0), 0);
+  const weight = packages.reduce((s,p)=> s + (toNum(p.kg ?? p.weight,0) * (toNum(p.qty,0)||0||1)), 0);
 
   const pkgRows = packages.map(p=>{
     const qty = toNum(p.qty,1);
@@ -54,12 +62,10 @@ function buildHtml({ quote, options, packages, totals }) {
   const pkgTable = packages.length
     ? `<div style="overflow:auto"><table style="width:100%;border-collapse:collapse">
          <thead><tr>
-          <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>
-          <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>
-          <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>
-         </tr></thead>
-         <tbody>${pkgRows}</tbody>
-       </table></div>`
+           <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Quantità</th>
+           <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">L × W × H (cm)</th>
+           <th class="k" style="text-align:left;padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1)">Peso (kg)</th>
+         </tr></thead><tbody>${pkgRows}</tbody></table></div>`
     : `<div class="small">Nessun collo.</div>`;
 
   const optBlocks = options.length
@@ -135,13 +141,13 @@ th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:le
       <div>
         <div class="k">Mittente</div>
         <div class="v">${esc(quote?.sender?.name||'—')}</div>
-        <div class="small">${esc(senderAddr)}</div>
+        <div class="small">${esc([quote?.sender?.address,quote?.sender?.zip,quote?.sender?.city,quote?.sender?.country].filter(Boolean).join(', '))}</div>
         ${taxSender}
       </div>
       <div>
         <div class="k">Destinatario</div>
         <div class="v">${esc(quote?.recipient?.name||'—')}</div>
-        <div class="small">${esc(rcptAddr)}</div>
+        <div class="small">${esc([quote?.recipient?.address,quote?.recipient?.zip,quote?.recipient?.city,quote?.recipient?.country].filter(Boolean).join(', '))}</div>
         ${taxRcpt}
       </div>
     </div>
@@ -175,104 +181,98 @@ th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:le
 </div></body></html>`;
 }
 
-// ===== Handler =====
+// ==== Handler ====
 export default async function handler(req, res) {
   try {
     if (!AT_BASE || !AT_PAT || !TB_QUOTE || !TB_OPT || !TB_COLLI) {
       return res.status(500).send('Missing Airtable env vars');
     }
-
     const slug = Array.isArray(req.query.slug) ? req.query.slug[0] : req.query.slug;
     if (!slug) return res.status(400).send('Missing slug');
 
-    // 1) Quote principale per Slug_Pubblico
+    // 1) Quote
     const qResp = await atList(TB_QUOTE, {
-      maxRecords: '1',
+      maxRecords: 1,
       filterByFormula: `{Slug_Pubblico} = "${slug}"`
     });
     const qRec = qResp.records?.[0];
     if (!qRec) return res.status(404).send('Preventivo non trovato');
 
-    const qf = qRec.fields || {};
+    const f = qRec.fields || {};
     const quote = {
-      id          : qRec.id,
-      slug        : qf.Slug_Pubblico || slug,
-      customerEmail: qf.Email_Cliente || '',
-      currency    : qf.Valuta || 'EUR',
-      validUntil  : qf.Valido_Fino_Al || null,
-      notes       : qf.Note_Globali || '',
-      shipmentNotes: qf.Note_Spedizione || '', // opzionale: se hai un campo diverso, adegua qui
+      id           : qRec.id,
+      slug         : f.Slug_Pubblico || slug,
+      customerEmail: f.Email_Cliente || '',
+      currency     : f.Valuta || 'EUR',
+      validUntil   : f.Valido_Fino_Al || null,
+      notes        : f.Note_Globali || '',
+      // usa il nome del campo che hai in base (aggiungi fallback se diverso)
+      shipmentNotes: f.Note_Spedizione || f.Shipment_Notes || '',
       sender: {
-        name   : qf.Mittente_Nome || '',
-        country: qf.Mittente_Paese || '',
-        city   : qf.Mittente_Citta || '',
-        zip    : qf.Mittente_CAP || '',
-        address: qf.Mittente_Indirizzo || '',
-        phone  : qf.Mittente_Telefono || '',
-        tax    : qf.Mittente_Tax || '',
+        name   : f.Mittente_Nome || '',
+        country: f.Mittente_Paese || '',
+        city   : f.Mittente_Citta || '',
+        zip    : f.Mittente_CAP || '',
+        address: f.Mittente_Indirizzo || '',
+        phone  : f.Mittente_Telefono || '',
+        tax    : f.Mittente_Tax || '',
       },
       recipient: {
-        name   : qf.Destinatario_Nome || '',
-        country: qf.Destinatario_Paese || '',
-        city   : qf.Destinatario_Citta || '',
-        zip    : qf.Destinatario_CAP || '',
-        address: qf.Destinatario_Indirizzo || '',
-        phone  : qf.Destinatario_Telefono || '',
-        tax    : qf.Destinatario_Tax || '',
+        name   : f.Destinatario_Nome || '',
+        country: f.Destinatario_Paese || '',
+        city   : f.Destinatario_Citta || '',
+        zip    : f.Destinatario_CAP || '',
+        address: f.Destinatario_Indirizzo || '',
+        phone  : f.Destinatario_Telefono || '',
+        tax    : f.Destinatario_Tax || '',
       }
     };
 
     // 2) Opzioni collegate
     const optResp = await atList(TB_OPT, {
       filterByFormula: `FIND("${qRec.id}", ARRAYJOIN({Preventivo}))`,
-      sort: '[{"field":"Indice","direction":"asc"}]'
+      sort: [{ field: 'Indice', direction: 'asc' }],
+      pageSize: 100
     });
-    const options = (optResp.records || []).map(r=>{
-      const f = r.fields || {};
+    const options = (optResp.records||[]).map(r=>{
+      const x = r.fields || {};
       return {
-        index: toNum(f.Indice, undefined),
-        carrier: f.Corriere || '',
-        service: f.Servizio || '',
-        transit: f.Tempo_Resa || '',
-        incoterm: f.Incoterm || '',
-        payer: f.Oneri_A_Carico || '',
-        price: typeof f.Prezzo==='number' ? f.Prezzo : undefined,
-        currency: f.Valuta || quote.currency || 'EUR',
-        notes: f.Note_Operative || '',
-        recommended: !!f.Consigliata,
+        index: toNum(x.Indice, undefined),
+        carrier: x.Corriere || '',
+        service: x.Servizio || '',
+        transit: x.Tempo_Resa || '',
+        incoterm: x.Incoterm || '',
+        payer: x.Oneri_A_Carico || '',
+        price: typeof x.Prezzo === 'number' ? x.Prezzo : undefined,
+        currency: x.Valuta || quote.currency || 'EUR',
+        notes: x.Note_Operative || '',
+        recommended: !!x.Consigliata,
       };
     });
 
     // 3) Colli collegati
     const colliResp = await atList(TB_COLLI, {
       filterByFormula: `FIND("${qRec.id}", ARRAYJOIN({Preventivo}))`,
-      sort: '[{"field":"Quantita","direction":"asc"}]'
+      sort: [{ field: 'Quantita', direction: 'asc' }],
+      pageSize: 100
     });
-    const packages = (colliResp.records || []).map(r=>{
-      const f = r.fields || {};
+    const packages = (colliResp.records||[]).map(r=>{
+      const x = r.fields || {};
       return {
-        qty: toNum(f.Quantita, 1),
-        l  : toNum(f.L_cm, 0),
-        w  : toNum(f.W_cm, 0),
-        h  : toNum(f.H_cm, 0),
-        kg : toNum(f.Peso_Kg ?? f.Peso, 0),
+        qty: toNum(x.Quantita, 1),
+        l  : toNum(x.L_cm, 0),
+        w  : toNum(x.W_cm, 0),
+        h  : toNum(x.H_cm, 0),
+        kg : toNum((x.Peso_Kg ?? x.Peso), 0),
       };
     });
 
-    // 4) Totali
-    const totals = {
-      pieces  : packages.reduce((s,p)=> s + toNum(p.qty,0), 0),
-      weightKg: packages.reduce((s,p)=> s + (toNum(p.kg,0) * (toNum(p.qty,0)||0||1)), 0),
-    };
-
-    // 5) HTML
-    const html = buildHtml({ quote, options, packages, totals });
+    const html = buildHtml({ quote, options, packages });
     res.setHeader('Content-Type','text/html; charset=utf-8');
     return res.status(200).send(html);
 
   } catch (err) {
-    console.error('[api/quotes/view/[slug]] error:', { name:err.name, msg:err.message, status:err.status, payload:err.payload });
-    const msg = err?.message || 'Server error';
-    return res.status(err.status || 500).send(`Errore: ${esc(msg)}`);
+    console.error('[view/[slug]]', { status: err.status, msg: err.message, payload: err.payload });
+    return res.status(err.status || 500).send(`Errore: ${esc(err?.message || 'Server error')}`);
   }
 }
