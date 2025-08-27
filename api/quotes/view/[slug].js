@@ -16,6 +16,10 @@ function toNum(x, d=0){ const n=Number(x); return Number.isFinite(n)?n:d; }
 function money(n, curr='EUR'){ return (typeof n==='number' && Number.isFinite(n))
   ? new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n)
   : '—'; }
+const pick = (obj, keys, fallback='') => {
+  for (const k of keys) { if (obj && obj[k] != null && obj[k] !== '') return obj[k]; }
+  return fallback;
+};
 
 async function atList(table, { filterByFormula, fields, sort, maxRecords, pageSize } = {}) {
   const url = new URL(`https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`);
@@ -198,69 +202,103 @@ export default async function handler(req, res) {
     const quote = {
       id           : qRec.id,
       slug         : f.Slug_Pubblico || slug,
-      customerEmail: f.Email_Cliente || '',
-      currency     : f.Valuta || 'EUR',
-      validUntil   : f.Valido_Fino_Al || null,
-      notes        : f.Note_Globali || '',
-      shipmentNotes: f.Note_Spedizione || f.Shipment_Notes || '',
+      customerEmail: pick(f, ['Email_Cliente','Cliente_Email']),
+      currency     : pick(f, ['Valuta','Currency'],'EUR'),
+      validUntil   : pick(f, ['Valido_Fino_Al','Validita','Valid_Until'], null),
+      notes        : pick(f, ['Note_Globali','Note','Note Globali'], ''),
+      shipmentNotes: pick(f, [
+        'Note generiche sulla spedizione','Note_Spedizione','Shipment_Notes','Note spedizione'
+      ], ''),
       sender: {
-        name   : f.Mittente_Nome || '',
-        country: f.Mittente_Paese || '',
-        city   : f.Mittente_Citta || '',
-        zip    : f.Mittente_CAP || '',
-        address: f.Mittente_Indirizzo || '',
-        phone  : f.Mittente_Telefono || '',
-        tax    : f.Mittente_Tax || '',
+        name   : pick(f, ['Mittente_Nome','Mittente Nome','Sender_Name']),
+        country: pick(f, ['Mittente_Paese','Mittente Paese','Sender_Country']),
+        city   : pick(f, ['Mittente_Citta','Mittente Citta','Sender_City']),
+        zip    : pick(f, ['Mittente_CAP','Mittente CAP','Sender_Zip']),
+        address: pick(f, ['Mittente_Indirizzo','Mittente Indirizzo','Sender_Address']),
+        phone  : pick(f, ['Mittente_Telefono','Mittente Telefono','Sender_Phone']),
+        tax    : pick(f, ['Mittente_Tax','PIVA','P.IVA','Sender_Tax']),
       },
       recipient: {
-        name   : f.Destinatario_Nome || '',
-        country: f.Destinatario_Paese || '',
-        city   : f.Destinatario_Citta || '',
-        zip    : f.Destinatario_CAP || '',
-        address: f.Destinatario_Indirizzo || '',
-        phone  : f.Destinatario_Telefono || '',
-        tax    : f.Destinatario_Tax || '',
+        name   : pick(f, ['Destinatario_Nome','Destinatario Nome','Recipient_Name']),
+        country: pick(f, ['Destinatario_Paese','Destinatario Paese','Recipient_Country']),
+        city   : pick(f, ['Destinatario_Citta','Destinatario Citta','Recipient_City']),
+        zip    : pick(f, ['Destinatario_CAP','Destinatario CAP','Recipient_Zip']),
+        address: pick(f, ['Destinatario_Indirizzo','Destinatario Indirizzo','Recipient_Address']),
+        phone  : pick(f, ['Destinatario_Telefono','Destinatario Telefono','Recipient_Phone']),
+        tax    : pick(f, ['Destinatario_Tax','TaxID','EORI','Recipient_Tax']),
       }
     };
 
-    // 2) Opzioni collegate (fallback con Preventivo_Id se presente)
-    const optFilter = `OR( FIND("${qRec.id}", ARRAYJOIN({Preventivo})), {Preventivo_Id} = "${qRec.id}" )`;
-    const optResp = await atList(TB_OPT, {
-      filterByFormula: optFilter,
-      sort: [{ field: 'Indice', direction: 'asc' }],
+    // 2) Opzioni collegate
+    const linkFormula = `OR( FIND("${qRec.id}", ARRAYJOIN({Preventivo})), {Preventivo_Id} = "${qRec.id}" )`;
+    let optResp = await atList(TB_OPT, {
+      filterByFormula: linkFormula,
       pageSize: 100
     });
-    const options = (optResp.records||[]).map(r=>{
+    let options = (optResp.records||[]).map(r=>{
       const x = r.fields || {};
       return {
-        index: toNum(x.Indice, undefined),
-        carrier: x.Corriere || '',
-        service: x.Servizio || '',
-        transit: x.Tempo_Resa || '',
-        incoterm: x.Incoterm || '',
-        payer: x.Oneri_A_Carico || '',
-        price: typeof x.Prezzo === 'number' ? x.Prezzo : undefined,
-        currency: x.Valuta || quote.currency || 'EUR',
-        notes: x.Note_Operative || '',
-        recommended: !!x.Consigliata,
+        index: toNum(pick(x, ['Indice','Index','Opzione','Option'], undefined), undefined),
+        carrier: pick(x, ['Corriere','Carrier'], ''),
+        service: pick(x, ['Servizio','Service'], ''),
+        transit: pick(x, ['Tempo_Resa','Tempo di resa previsto','Tempo resa previsto','Transit'], ''),
+        incoterm: pick(x, ['Incoterm'], ''),
+        payer: pick(x, ['Oneri_A_Carico','Oneri a carico di','Payer'], ''),
+        price: (typeof x.Prezzo === 'number') ? x.Prezzo : toNum(x.Prezzo, undefined),
+        currency: pick(x, ['Valuta','Currency'], quote.currency || 'EUR'),
+        notes: pick(x, ['Note_Operative','Note operative','Notes'], ''),
+        recommended: !!pick(x, ['Consigliata','Recommended'], false),
       };
     });
 
-    // 3) Colli collegati (link o id testo)
+    // Fallback: se 0 opzioni, prova senza filtro e filtra in locale (compatibilità nomi campo)
+    if (!options.length) {
+      const all = await atList(TB_OPT, { pageSize: 100 });
+      options = (all.records||[])
+        .filter(r=>{
+          const x = r.fields || {};
+          const link = x.Preventivo;
+          const txt  = x.Preventivo_Id;
+          return (Array.isArray(link) && link.includes(qRec.id)) || (txt === qRec.id);
+        })
+        .map(r=>{
+          const x = r.fields || {};
+          return {
+            index: toNum(pick(x, ['Indice','Index','Opzione','Option'], undefined), undefined),
+            carrier: pick(x, ['Corriere','Carrier'], ''),
+            service: pick(x, ['Servizio','Service'], ''),
+            transit: pick(x, ['Tempo_Resa','Tempo di resa previsto','Tempo resa previsto','Transit'], ''),
+            incoterm: pick(x, ['Incoterm'], ''),
+            payer: pick(x, ['Oneri_A_Carico','Oneri a carico di','Payer'], ''),
+            price: (typeof x.Prezzo === 'number') ? x.Prezzo : toNum(x.Prezzo, undefined),
+            currency: pick(x, ['Valuta','Currency'], quote.currency || 'EUR'),
+            notes: pick(x, ['Note_Operative','Note operative','Notes'], ''),
+            recommended: !!pick(x, ['Consigliata','Recommended'], false),
+          };
+        });
+    }
+
+    // Ordina in locale
+    options.sort((a,b)=>{
+      if (a.index != null && b.index != null) return a.index - b.index;
+      if (a.price != null && b.price != null) return a.price - b.price;
+      return 0;
+    });
+
+    // 3) Colli collegati
     const pkFilter = `OR( FIND("${qRec.id}", ARRAYJOIN({Preventivo})), {Preventivo_Id} = "${qRec.id}" )`;
     const colliResp = await atList(TB_COLLI, {
       filterByFormula: pkFilter,
-      sort: [{ field: 'Quantita', direction: 'asc' }],
       pageSize: 100
     });
     const packages = (colliResp.records||[]).map(r=>{
       const x = r.fields || {};
       return {
-        qty: toNum(x.Quantita, 1),
-        l  : toNum(x.L_cm, 0),
-        w  : toNum(x.W_cm, 0),
-        h  : toNum(x.H_cm, 0),
-        kg : toNum((x.Peso_Kg ?? x.Peso), 0),
+        qty: toNum(pick(x, ['Quantita','Qty','Quantità'], 1), 1),
+        l  : toNum(pick(x, ['L_cm','Lunghezza','L'], 0), 0),
+        w  : toNum(pick(x, ['W_cm','Larghezza','W'], 0), 0),
+        h  : toNum(pick(x, ['H_cm','Altezza','H'], 0), 0),
+        kg : toNum(pick(x, ['Peso_Kg','Peso','Kg','Weight'], 0), 0),
       };
     });
 
