@@ -233,11 +233,9 @@ if (TB_COLLI && pkg.rows.length) {
       L_cm     : toNumber(p.l),
       W_cm     : toNumber(p.w),
       H_cm     : toNumber(p.h),
+      Peso: toNumber(p.kg),
     };
-    // peso dinamico (Peso o Peso_Kg a seconda dell'env)
-    const kg = toNumber(p.kg);
-    if (typeof kg === 'number') f[COLLI_WEIGHT_FIELD] = kg;
-
+    
     return { fields: f };
   });
 
