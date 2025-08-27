@@ -1,13 +1,13 @@
 // api/quotes/view/[slug].js
 
-// ==== ENV (Airtable) ====
+/* ---------- ENV ---------- */
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;   // Preventivi
-const TB_OPT   = process.env.TB_OPZIONI;      // OpzioniPreventivo
-const TB_COLLI = process.env.TB_COLLI;        // Colli
+const TB_QUOTE = process.env.TB_PREVENTIVI;   // es. "Preventivi"
+const TB_OPT   = process.env.TB_OPZIONI;      // es. "OpzioniPreventivo"
+const TB_COLLI = process.env.TB_COLLI;        // es. "Colli"
 
-// ==== Utils ====
+/* ---------- Utils ---------- */
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, m => (
   { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[m]
 ));
@@ -17,19 +17,18 @@ function money(n, curr='EUR'){ return (typeof n==='number' && Number.isFinite(n)
   ? new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n)
   : '—'; }
 
-async function atList(table, opts={}) {
+async function atList(table, { filterByFormula, fields, sort, maxRecords, pageSize } = {}) {
   const url = new URL(`https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`);
-
-  if (opts.filterByFormula) url.searchParams.set('filterByFormula', opts.filterByFormula);
-  if (Array.isArray(opts.fields))  opts.fields.forEach(f => url.searchParams.append('fields[]', f));
-  if (Array.isArray(opts.sort))    opts.sort.forEach((s,i)=>{
+  if (filterByFormula) url.searchParams.set('filterByFormula', filterByFormula);
+  if (Array.isArray(fields)) fields.forEach(f => url.searchParams.append('fields[]', f));
+  if (Array.isArray(sort)) sort.forEach((s,i)=>{
     if (s.field)     url.searchParams.set(`sort[${i}][field]`, s.field);
     if (s.direction) url.searchParams.set(`sort[${i}][direction]`, s.direction);
   });
-  if (opts.maxRecords) url.searchParams.set('maxRecords', String(opts.maxRecords));
-  if (opts.pageSize)   url.searchParams.set('pageSize',  String(opts.pageSize));
+  if (maxRecords) url.searchParams.set('maxRecords', String(maxRecords));
+  if (pageSize)   url.searchParams.set('pageSize',  String(pageSize));
 
-  const r = await fetch(url.toString(), { headers: { Authorization:`Bearer ${AT_PAT}` } });
+  const r = await fetch(url.toString(), { headers: { Authorization: `Bearer ${AT_PAT}` } });
   const j = await r.json().catch(()=>null);
   if (!r.ok) {
     const err = new Error(j?.error?.message || `Airtable ${r.status}`);
@@ -39,7 +38,7 @@ async function atList(table, opts={}) {
   return j;
 }
 
-// ==== HTML ====
+/* ---------- HTML ---------- */
 function buildHtml({ quote, options, packages }) {
   const bestIdx = (() => {
     const priced = options.filter(o => typeof o.price === 'number').sort((a,b)=>a.price-b.price);
@@ -86,9 +85,6 @@ function buildHtml({ quote, options, packages }) {
         ${o.notes ? `<div class="small" style="margin-top:6px"><strong>Note operative:</strong> ${esc(o.notes)}</div>` : ''}
       </div>`).join('')
     : `<div class="small">Nessuna opzione.</div>`;
-
-  const senderAddr = [quote?.sender?.address,quote?.sender?.zip,quote?.sender?.city,quote?.sender?.country].filter(Boolean).join(', ');
-  const rcptAddr   = [quote?.recipient?.address,quote?.recipient?.zip,quote?.recipient?.city,quote?.recipient?.country].filter(Boolean).join(', ');
 
   const taxSender = quote?.sender?.tax ? `<div class="small">P. IVA / EORI: ${esc(quote.sender.tax)}</div>` : '';
   const taxRcpt   = quote?.recipient?.tax ? `<div class="small">Tax ID / EORI: ${esc(quote.recipient.tax)}</div>` : '';
@@ -181,7 +177,7 @@ th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:le
 </div></body></html>`;
 }
 
-// ==== Handler ====
+/* ---------- Handler ---------- */
 export default async function handler(req, res) {
   try {
     if (!AT_BASE || !AT_PAT || !TB_QUOTE || !TB_OPT || !TB_COLLI) {
@@ -190,7 +186,7 @@ export default async function handler(req, res) {
     const slug = Array.isArray(req.query.slug) ? req.query.slug[0] : req.query.slug;
     if (!slug) return res.status(400).send('Missing slug');
 
-    // 1) Quote
+    // 1) Preventivo per Slug
     const qResp = await atList(TB_QUOTE, {
       maxRecords: 1,
       filterByFormula: `{Slug_Pubblico} = "${slug}"`
@@ -206,7 +202,6 @@ export default async function handler(req, res) {
       currency     : f.Valuta || 'EUR',
       validUntil   : f.Valido_Fino_Al || null,
       notes        : f.Note_Globali || '',
-      // usa il nome del campo che hai in base (aggiungi fallback se diverso)
       shipmentNotes: f.Note_Spedizione || f.Shipment_Notes || '',
       sender: {
         name   : f.Mittente_Nome || '',
@@ -228,9 +223,10 @@ export default async function handler(req, res) {
       }
     };
 
-    // 2) Opzioni collegate
+    // 2) Opzioni collegate (fallback con Preventivo_Id se presente)
+    const optFilter = `OR( FIND("${qRec.id}", ARRAYJOIN({Preventivo})), {Preventivo_Id} = "${qRec.id}" )`;
     const optResp = await atList(TB_OPT, {
-      filterByFormula: `FIND("${qRec.id}", ARRAYJOIN({Preventivo}))`,
+      filterByFormula: optFilter,
       sort: [{ field: 'Indice', direction: 'asc' }],
       pageSize: 100
     });
@@ -250,9 +246,10 @@ export default async function handler(req, res) {
       };
     });
 
-    // 3) Colli collegati
+    // 3) Colli collegati (link o id testo)
+    const pkFilter = `OR( FIND("${qRec.id}", ARRAYJOIN({Preventivo})), {Preventivo_Id} = "${qRec.id}" )`;
     const colliResp = await atList(TB_COLLI, {
-      filterByFormula: `FIND("${qRec.id}", ARRAYJOIN({Preventivo}))`,
+      filterByFormula: pkFilter,
       sort: [{ field: 'Quantita', direction: 'asc' }],
       pageSize: 100
     });
