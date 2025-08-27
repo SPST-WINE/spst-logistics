@@ -1,4 +1,4 @@
-// pages/api/quotes/[slug].js  (Next API route)
+// pages/api/quotes/[slug].js
 
 // ---------- CORS ----------
 const DEFAULT_ALLOW = [
@@ -28,74 +28,73 @@ function setCors(res, origin) {
   if (isAllowed(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
 }
 
-// ---------- Airtable helpers ----------
+// ---------- Airtable ----------
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;   // es. "Preventivi"
-const TB_OPT   = process.env.TB_OPZIONI;      // es. "OpzioniPreventivo"
-const TB_COLLI = process.env.TB_COLLI;        // es. "Colli"
+const TB_QUOTE = process.env.TB_PREVENTIVI;
+const TB_OPT   = process.env.TB_OPZIONI;
+const TB_COLLI = process.env.TB_COLLI;
 
-async function atList(table, params={}) {
+async function atFetch(url) {
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${AT_PAT}` } });
+  const json = await resp.json();
+  if (!resp.ok) {
+    const err = new Error(json?.error?.message || `Airtable ${resp.status}`);
+    err.status = resp.status; err.payload = json;
+    throw err;
+  }
+  return json;
+}
+async function atList(table, params = {}) {
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null) continue;
     if (k === 'sort' && Array.isArray(v)) {
       v.forEach((s, i) => {
         if (!s) return;
         qs.append(`sort[${i}][field]`, s.field);
         qs.append(`sort[${i}][direction]`, s.direction || 'asc');
       });
-    } else if (v !== undefined && v !== null) {
+    } else {
       qs.append(k, String(v));
     }
   }
-  const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}?${qs}`;
-  const resp = await fetch(url, { headers: { Authorization: `Bearer ${AT_PAT}` } });
-  const json = await resp.json();
-  if (!resp.ok) {
-    const msg = json?.error?.message || `Airtable ${resp.status}`;
-    const err = new Error(msg);
-    err.status = resp.status;
-    err.payload = json;
-    throw err;
+  const base = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
+  let url = `${base}?${qs}`;
+  let records = [], guard = 0;
+  while (true) {
+    const data = await atFetch(url);
+    records = records.concat(data.records || []);
+    if (!data.offset || ++guard > 10) break;
+    const next = new URL(base);
+    for (const [k, v] of qs) next.searchParams.append(k, v);
+    next.searchParams.append('offset', data.offset);
+    url = next.toString();
   }
-  return json;
+  return { records };
 }
 
+// ---------- utils + HTML ----------
 const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 const money = (n, curr='EUR') => (typeof n === 'number'
   ? new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n)
   : '—');
-const fmtDate = (value) => {
-  if (!value) return '—';
-  const d = new Date(value);
-  return Number.isNaN(+d) ? '—' : d.toISOString().slice(0,10);
-};
-const toNumber = x => {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : undefined;
-};
-function getBestIndex(options){
-  const chosen = options.find(o => !!o.recommended);
+const fmtDate = v => { if (!v) return '—'; const d = new Date(v); return Number.isNaN(+d) ? '—' : d.toISOString().slice(0,10); };
+const toNumber = x => { const n = Number(x); return Number.isFinite(n) ? n : undefined; };
+function getBestIndex(opts){
+  const chosen = opts.find(o => !!o.recommended);
   if (chosen) return toNumber(chosen.index);
-  const priced = options.filter(o => typeof o.price === 'number');
+  const priced = opts.filter(o => typeof o.price === 'number');
   if (!priced.length) return undefined;
   priced.sort((a,b)=>a.price-b.price);
   return toNumber(priced[0].index);
 }
 
-// ---------- HTML builder (stessa resa dell’anteprima locale) ----------
-function buildPreviewHtml(model){
-  const customerEmail = model.customerEmail || '';
-  const currency      = model.currency || 'EUR';
-  const validUntil    = model.validUntil || '';
-  const notes         = model.notes || '';
-  const shipmentNotes = model.shipmentNotes || '';
-  const sender        = model.sender || {};
-  const recipient     = model.recipient || {};
-  const options       = Array.isArray(model.options) ? model.options : [];
-  const packages      = Array.isArray(model.packages) ? model.packages : [];
+function buildHtml(model){
+  const { customerEmail, currency='EUR', validUntil, notes='', shipmentNotes='',
+          sender={}, recipient={}, options=[], packages=[] } = model;
 
-  const best = getBestIndex(options) ?? (options[0]?.index);
+  const best = getBestIndex(options) ?? options[0]?.index;
 
   const optRows = options.map(o =>
     '<div class="opt ' + (o.index===best?'is-best':'') + '">'
@@ -113,8 +112,8 @@ function buildPreviewHtml(model){
     + '</div>'
   ).join('');
 
-  const pkgPieces = packages.reduce((s,p)=> s + (Number(p.qty)||0), 0);
-  const pkgWeight = packages.reduce((s,p)=> s + (Number(p.kg ?? p.weight ?? 0) * (Number(p.qty)||1)), 0);
+  const pieces = packages.reduce((s,p)=> s + (Number(p.qty)||0), 0);
+  const weight = packages.reduce((s,p)=> s + (Number(p.kg ?? p.weight ?? 0) * (Number(p.qty)||1)), 0);
 
   let pkgTable = '';
   if (packages.length){
@@ -207,7 +206,7 @@ function buildPreviewHtml(model){
 
   parts.push(
     '<div class="card"><div class="k" style="margin-bottom:6px">Colli</div>',
-    '<div class="small" style="margin-bottom:8px">Totale colli: <strong>', String(pkgPieces) ,'</strong> · Peso reale totale: <strong>', pkgWeight.toFixed(2) ,' kg</strong></div>',
+    '<div class="small" style="margin-bottom:8px">Totale colli: <strong>', String(pieces) ,'</strong> · Peso reale totale: <strong>', weight.toFixed(2) ,' kg</strong></div>',
     pkgTable || '',
     '</div>'
   );
@@ -242,89 +241,86 @@ export default async function handler(req, res) {
     const slug = String(req.query.slug || '').trim();
     if (!slug) return res.status(400).json({ ok:false, error:'Missing slug' });
 
-    // 1) record Preventivo
-    const qResp = await atList(TB_QUOTE, {
+    // 1) Preventivo dal suo slug
+    const q = await atList(TB_QUOTE, {
       maxRecords: 1,
       filterByFormula: `LOWER({Slug_Pubblico}) = "${slug.toLowerCase()}"`
     });
-    const quote = qResp.records?.[0];
-    if (!quote) return res.status(404).send('Preventivo non trovato');
+    const rec = q.records?.[0];
+    if (!rec) return res.status(404).send('Preventivo non trovato');
+    const f = rec.fields;
 
-    const qf = quote.fields;
-
-    // 2) figli: Opzioni + Colli (filtrati per link {Preventivo})
-    const [optResp, pkgResp] = await Promise.all([
-      atList(TB_OPT, {
-        filterByFormula: `FIND("${quote.id}", ARRAYJOIN({Preventivo}))`,
-        sort: [{ field: 'Indice', direction: 'asc' }]
-      }),
-      atList(TB_COLLI, {
-        filterByFormula: `FIND("${quote.id}", ARRAYJOIN({Preventivo}))`,
-        // ordina per Created time se non hai un campo Ordine
-      }),
+    // 2) Opzioni + Colli: fetch all (pagine) e filtro by linked record IDs
+    const [optAll, pkgAll] = await Promise.all([
+      atList(TB_OPT,   { sort:[{field:'Indice',direction:'asc'}], pageSize:100 }),
+      atList(TB_COLLI, { pageSize:100 }),
     ]);
 
-    const options = (optResp.records || []).map(r => {
-      const f = r.fields || {};
-      return {
-        index       : toNumber(f.Indice),
-        carrier     : f.Corriere || '',
-        service     : f.Servizio || '',
-        transit     : f.Tempo_Resa || '',
-        incoterm    : f.Incoterm || '',
-        payer       : f.Oneri_A_Carico || '',
-        price       : toNumber(f.Prezzo),
-        currency    : f.Valuta || qf.Valuta || 'EUR',
-        notes       : f.Note_Operative || '',
-        recommended : !!f.Consigliata,
-      };
-    });
+    const options = (optAll.records || [])
+      .filter(r => Array.isArray(r.fields?.Preventivo) && r.fields.Preventivo.includes(rec.id))
+      .map(r => {
+        const x = r.fields || {};
+        return {
+          index       : toNumber(x.Indice),
+          carrier     : x.Corriere || '',
+          service     : x.Servizio || '',
+          transit     : x.Tempo_Resa || x['Tempo di resa previsto'] || '',
+          incoterm    : x.Incoterm || '',
+          payer       : x.Oneri_A_Carico || x['Oneri a carico di'] || '',
+          price       : toNumber(x.Prezzo),
+          currency    : x.Valuta || f.Valuta || 'EUR',
+          notes       : x.Note_Operative || x['Note operative'] || '',
+          recommended : !!x.Consigliata,
+        };
+      });
 
-    const packages = (pkgResp.records || []).map(r => {
-      const f = r.fields || {};
-      return {
-        qty : toNumber(f.Quantita) || 1,
-        l   : toNumber(f.L_cm ?? f.L),
-        w   : toNumber(f.W_cm ?? f.W),
-        h   : toNumber(f.H_cm ?? f.H),
-        kg  : toNumber(f.Peso ?? f.Peso_Kg) || 0,
-      };
-    });
+    const packages = (pkgAll.records || [])
+      .filter(r => Array.isArray(r.fields?.Preventivo) && r.fields.Preventivo.includes(rec.id))
+      .map(r => {
+        const x = r.fields || {};
+        return {
+          qty : toNumber(x.Quantita) || 1,
+          l   : toNumber(x.L_cm ?? x.L),
+          w   : toNumber(x.W_cm ?? x.W),
+          h   : toNumber(x.H_cm ?? x.H),
+          kg  : toNumber(x.Peso ?? x.Peso_Kg) || 0,
+        };
+      });
 
     const model = {
-      id           : quote.id,
+      id           : rec.id,
       slug,
-      customerEmail: qf.Email_Cliente || '',
-      currency     : qf.Valuta || 'EUR',
-      validUntil   : qf.Valido_Fino_Al || null,
-      notes        : qf.Note_Globali || '',
-      shipmentNotes: qf.Note_Spedizione || qf.Note_Generiche || '',
+      customerEmail: f.Email_Cliente || '',
+      currency     : f.Valuta || 'EUR',
+      validUntil   : f.Valido_Fino_Al || null,
+      notes        : f.Note_Globali || '',
+      shipmentNotes: f.Note_Spedizione || f.Note_Generiche || '',
       sender       : {
-        name   : qf.Mittente_Nome || '',
-        country: qf.Mittente_Paese || '',
-        city   : qf.Mittente_Citta || '',
-        zip    : qf.Mittente_CAP || '',
-        address: qf.Mittente_Indirizzo || '',
-        phone  : qf.Mittente_Telefono || '',
-        tax    : qf.Mittente_Tax || '',
+        name   : f.Mittente_Nome || '',
+        country: f.Mittente_Paese || '',
+        city   : f.Mittente_Citta || '',
+        zip    : f.Mittente_CAP || '',
+        address: f.Mittente_Indirizzo || '',
+        phone  : f.Mittente_Telefono || '',
+        tax    : f.Mittente_Tax || '',
       },
       recipient    : {
-        name   : qf.Destinatario_Nome || '',
-        country: qf.Destinatario_Paese || '',
-        city   : qf.Destinatario_Citta || '',
-        zip    : qf.Destinatario_CAP || '',
-        address: qf.Destinatario_Indirizzo || '',
-        phone  : qf.Destinatario_Telefono || '',
-        tax    : qf.Destinatario_Tax || '',
+        name   : f.Destinatario_Nome || '',
+        country: f.Destinatario_Paese || '',
+        city   : f.Destinatario_Citta || '',
+        zip    : f.Destinatario_CAP || '',
+        address: f.Destinatario_Indirizzo || '',
+        phone  : f.Destinatario_Telefono || '',
+        tax    : f.Destinatario_Tax || '',
       },
       options,
       packages,
     };
 
-    // debug: ?json=1 per vedere il payload
-    if ('json' in req.query) return res.status(200).json({ ok:true, quote:model });
+    // debug: /quote/[slug]?json=1
+    if ('json' in req.query) return res.status(200).json({ ok:true, counts:{options:options.length, packages:packages.length}, model });
 
-    const html = buildPreviewHtml(model);
+    const html = buildHtml(model);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     return res.status(200).send(html);
 
