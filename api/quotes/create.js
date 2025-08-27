@@ -31,10 +31,9 @@ function setCors(res, origin) {
 // ===== Airtable =====
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;     // Preventivi
-const TB_OPT   = process.env.TB_OPZIONI;        // OpzioniPreventivo
-const TB_COLLI = process.env.TB_COLLI;          // Colli (tabella nuova)
-const COLLI_WEIGHT_FIELD = process.env.COLLI_WEIGHT_FIELD || 'Peso'; // <- NEW
+const TB_QUOTE = process.env.TB_PREVENTIVI;      // Preventivi
+const TB_OPT   = process.env.TB_OPZIONI;         // OpzioniPreventivo
+const TB_COLLI = process.env.TB_COLLI;           // Colli (opzionale)
 
 async function atCreate(table, records) {
   const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
@@ -44,11 +43,8 @@ async function atCreate(table, records) {
     headers: { Authorization: `Bearer ${AT_PAT}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  const json = await resp.json().catch(() => null);
+  const json = await resp.json();
   if (!resp.ok) {
-    console.error(`[AT CREATE FAIL] table=${table} status=${resp.status}`);
-    console.error(`[AT PAYLOAD] ${JSON.stringify(payload, null, 2)}`);
-    console.error(`[AT ERROR] ${JSON.stringify(json, null, 2)}`);
     const err = new Error(json?.error?.message || "Airtable error");
     err.name = json?.error?.type || "AirtableError";
     err.status = resp.status;
@@ -86,24 +82,26 @@ function getBestIndex(options) {
   return toNumber(priced[0].index);
 }
 
-// Sanifica i colli dal body (accetta chiavi l/w/h/kg o length/width/height/weight)
-function computePackages(arr = []) {
-  const rows = [];
-  let pieces = 0;
-  let weightKg = 0;
-  for (const p of arr) {
-    const qty = toNumber(p?.qty) || 0;
-    const l   = toNumber(p?.l ?? p?.length);
-    const w   = toNumber(p?.w ?? p?.width);
-    const h   = toNumber(p?.h ?? p?.height);
-    const kg  = toNumber(p?.kg ?? p?.weight);
-    if (qty > 0) {
-      rows.push({ qty, l, w, h, kg });
-      pieces  += qty;
-      weightKg += (kg || 0) * qty;
-    }
-  }
-  return { rows, totals: { pieces, weightKg: Number.isFinite(weightKg) ? Number(weightKg) : 0 } };
+// Calcolo colli (rows + totali)
+function computePackages(pkgs = []) {
+  const rows = []
+    .concat(pkgs || [])
+    .map(p => ({
+      qty: toNumber(p.qty) || 1,
+      l  : toNumber(p.l ?? p.length),
+      w  : toNumber(p.w ?? p.width),
+      h  : toNumber(p.h ?? p.height),
+      kg : toNumber(p.kg ?? p.weight),
+    }))
+    .filter(r => r.qty && (r.l || r.w || r.h || r.kg));
+
+  const totals = rows.reduce((acc, r) => {
+    acc.pieces   += r.qty || 0;
+    acc.weightKg += (r.kg || 0) * (r.qty || 1);
+    return acc;
+  }, { pieces:0, weightKg:0 });
+
+  return { rows, totals };
 }
 
 // ===== handler =====
@@ -121,7 +119,7 @@ export default async function handler(req, res) {
     const body  = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
     const debug = (typeof req.url === "string") && req.url.includes("debug=1");
 
-    // ---- slug + scadenza
+    // slug + scadenza
     const now  = new Date();
     const slug = `q-${now.toISOString().slice(2,10).replace(/-/g,"")}-${Math.random().toString(36).slice(2,7)}`;
 
@@ -133,15 +131,15 @@ export default async function handler(req, res) {
       expiryDate = addDays(now, body.terms.linkExpiryDays);
     }
 
-    // base URL pubblico (senza slash finale)
+    // URL pubblico
     const PUBLIC_QUOTE_BASE_URL =
       (process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote").replace(/\/$/,"");
     const publicUrl = `${PUBLIC_QUOTE_BASE_URL}/${encodeURIComponent(slug)}`;
 
-    // ---- colli
+    // Colli
     const pkg = computePackages(Array.isArray(body.packages) ? body.packages : []);
 
-    // ---- campi Preventivo (solo campi esistenti e sicuri)
+    // Campi Preventivo
     const qFields = {
       Email_Cliente   : body.customerEmail || undefined,
       Valuta          : body.currency || undefined,
@@ -170,9 +168,15 @@ export default async function handler(req, res) {
       Scadenza_Link         : expiryDate ? expiryDate.toISOString() : undefined,
 
       Opzione_Consigliata   : getBestIndex(Array.isArray(body.options) ? body.options : []),
+
+      // Colli – snapshot nel record Preventivi
+      Tot_Colli         : pkg.totals.pieces || undefined,
+      Tot_Peso_Reale_Kg : pkg.totals.weightKg || undefined,
+      UM_Dimensioni     : pkg.rows.length ? 'cm/kg' : undefined,
+      Colli_JSON        : pkg.rows.length ? JSON.stringify(pkg.rows) : undefined,
     };
 
-    // ---- DEBUG (dry-run)
+    // DEBUG (dry-run)
     if (debug) {
       const rawOptions = Array.isArray(body.options) ? body.options : [];
       const wouldOptions = rawOptions.map(o => ({
@@ -195,14 +199,12 @@ export default async function handler(req, res) {
       });
     }
 
-    // ---- crea Preventivo
+    // 1) Crea Preventivo
     const qResp   = await atCreate(TB_QUOTE, [{ fields: qFields }]);
     const quoteId = qResp.records?.[0]?.id;
-    if (!quoteId || typeof quoteId !== "string") {
-      throw new Error("Quote created but no valid record id returned");
-    }
+    if (!quoteId) throw new Error("Quote created but no valid record id returned");
 
-    // ---- crea Opzioni (senza peso per opzione)
+    // 2) Crea Opzioni
     const rawOptions = Array.isArray(body.options) ? body.options : [];
     if (rawOptions.length) {
       const optRecords = rawOptions.map(o => ({
@@ -223,32 +225,21 @@ export default async function handler(req, res) {
       await atCreate(TB_OPT, optRecords);
     }
 
-    // ---- crea Colli (se richiesti e se TB_COLLI configurata)
-if (TB_COLLI && pkg.rows.length) {
-  const pkgRecords = pkg.rows.map(p => {
-    const f = {
-      Preventivo    : [ quoteId ],
-      Preventivo_Id : quoteId,
-      Quantita : toNumber(p.qty) || 1,
-      L_cm     : toNumber(p.l),
-      W_cm     : toNumber(p.w),
-      H_cm     : toNumber(p.h),
-      Peso: toNumber(p.kg),
-    };
-    
-    return { fields: f };
-  });
-
-  await atCreate(process.env.TB_COLLI, pkgs.map(p => ({
-  fields: {
-    Preventivo : [quoteId],           // <— IMPORTANTISSIMO: crea il link
-    Quantita   : toNumber(p.qty) || 1,
-    L_cm       : toNumber(p.l ?? p.length),
-    W_cm       : toNumber(p.w ?? p.width),
-    H_cm       : toNumber(p.h ?? p.height),
-    Peso       : toNumber(p.kg ?? p.weight),
-  }
-})));
+    // 3) Crea Colli (se tabella configurata)
+    if (TB_COLLI && pkg.rows.length) {
+      const pkgRecords = pkg.rows.map(p => ({
+        fields: {
+          Preventivo    : [ quoteId ],
+          Preventivo_Id : quoteId,
+          Quantita : p.qty,
+          L_cm     : p.l,
+          W_cm     : p.w,
+          H_cm     : p.h,
+          Peso     : p.kg, // usa "Peso" (non Peso_Kg) come da tua tabella
+        }
+      }));
+      await atCreate(TB_COLLI, pkgRecords);
+    }
 
     return res.status(200).json({ ok:true, id: quoteId, slug, url: publicUrl });
   } catch (err) {
