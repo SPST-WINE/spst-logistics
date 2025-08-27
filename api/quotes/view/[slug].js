@@ -3,9 +3,9 @@
 /* ---------- ENV ---------- */
 const AT_BASE  = process.env.AIRTABLE_BASE_ID;
 const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;   // es. "Preventivi"
-const TB_OPT   = process.env.TB_OPZIONI;      // es. "OpzioniPreventivo"
-const TB_COLLI = process.env.TB_COLLI;        // es. "Colli"
+const TB_QUOTE = process.env.TB_PREVENTIVI;   // "Preventivi"
+const TB_OPT   = process.env.TB_OPZIONI;      // "OpzioniPreventivo"
+const TB_COLLI = process.env.TB_COLLI;        // "Colli"
 
 /* ---------- Utils ---------- */
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, m => (
@@ -44,9 +44,10 @@ async function atList(table, { filterByFormula, fields, sort, maxRecords, pageSi
 
 /* ---------- HTML ---------- */
 function buildHtml({ quote, options, packages }) {
+  const isAccepted = (quote?.stato || '').toLowerCase() === 'accettato';
+
   const bestIdx = (() => {
-    const chosen = (quote?.acceptedIndex != null ? quote.acceptedIndex : undefined);
-    if (chosen != null) return chosen;
+    if (isAccepted && quote?.acceptedIndex != null) return quote.acceptedIndex;
     const recommended = options.find(o => !!o.recommended)?.index;
     if (recommended != null) return recommended;
     const priced = options.filter(o => typeof o.price === 'number').sort((a,b)=>a.price-b.price);
@@ -74,14 +75,20 @@ function buildHtml({ quote, options, packages }) {
          </tr></thead><tbody>${pkgRows}</tbody></table></div>`
     : `<div class="small">Nessun collo.</div>`;
 
+  // Cards opzioni con pulsante "Accetta" dentro la card
   const optBlocks = options.length
-    ? options.map(o => `
-      <div class="opt ${o.index===bestIdx?'is-best':''}">
+    ? options.map(o => {
+        const idx = Number(o.index);
+        const isBest = idx === Number(bestIdx);
+        const isCardAccepted = isAccepted && (idx === Number(quote?.acceptedIndex));
+        return `
+      <div class="opt ${isBest ? 'is-best' : ''} ${isCardAccepted ? 'is-accepted' : ''}">
         <div class="opt-head">
           <div class="badge">OPZIONE ${esc(String(o.index??''))}</div>
-          ${o.index===bestIdx ? '<span class="pill">Consigliata</span>' : ''}
+          ${isBest ? '<span class="pill pill-info">Consigliata</span>' : ''}
+          ${isCardAccepted ? '<span class="pill pill-success">Accettata</span>' : ''}
         </div>
-        <div class="grid">
+        <div class="grid" style="row-gap:12px">
           <div><div class="k">Corriere</div><div class="v">${esc(o.carrier||'—')}</div></div>
           <div><div class="k">Servizio</div><div class="v">${esc(o.service||'—')}</div></div>
           <div><div class="k">Tempo di resa previsto</div><div class="v">${esc(o.transit||'—')}</div></div>
@@ -89,63 +96,53 @@ function buildHtml({ quote, options, packages }) {
           <div><div class="k">Oneri a carico di</div><div class="v">${esc(o.payer||'—')}</div></div>
           <div><div class="k">Prezzo</div><div class="v">${money(o.price, o.currency||quote.currency||'EUR')}</div></div>
         </div>
-        ${o.notes ? `<div class="small" style="margin-top:6px"><strong>Note operative:</strong> ${esc(o.notes)}</div>` : ''}
-      </div>`).join('')
+        ${o.notes ? `<div class="small" style="margin-top:8px"><strong>Note operative:</strong> ${esc(o.notes)}</div>` : ''}
+        ${
+          isAccepted
+            ? ''
+            : `<div class="opt-actions">
+                 <button class="btn btn-accept" data-index="${esc(String(o.index))}">Accetta</button>
+               </div>`
+        }
+      </div>`;
+      }).join('')
     : `<div class="small">Nessuna opzione.</div>`;
 
   const taxSender = quote?.sender?.tax ? `<div class="small">P. IVA / EORI: ${esc(quote.sender.tax)}</div>` : '';
   const taxRcpt   = quote?.recipient?.tax ? `<div class="small">Tax ID / EORI: ${esc(quote.recipient.tax)}</div>` : '';
 
-  // Card di accettazione: solo se non già accettato e ci sono opzioni
-  const showAccept = (quote?.stato?.toLowerCase() !== 'accettato') && options.length;
-  const acceptCard = !showAccept ? '' : `
-    <div class="card" id="accept-card">
-      <div class="k" style="margin-bottom:6px">Accetta il preventivo</div>
-      <form id="accept-form">
-        <div class="small" style="margin-bottom:10px">Seleziona l’opzione desiderata e conferma i termini.</div>
-        <div style="margin-bottom:10px"><div class="k">Opzione</div>
-          ${options.map(o => `
-            <label style="display:flex;gap:8px;align-items:center;margin:6px 0">
-              <input type="radio" name="opt" value="${esc(o.index)}" ${Number(o.index)===Number(bestIdx)?'checked':''} />
-              <span>Opzione ${esc(o.index)}</span>
-            </label>
-          `).join('')}
-        </div>
-        <label style="display:flex;gap:8px;align-items:center;margin-top:10px">
-          <input type="checkbox" id="tos" required />
-          <span class="small">Dichiaro di accettare i termini di utilizzo.</span>
-        </label>
-        <button id="btn-accept" type="submit" class="btn" style="margin-top:12px">Accetta preventivo</button>
-        <div id="acc-ok" class="small" style="display:none;margin-top:8px">Grazie! La tua accettazione è stata registrata.</div>
-        <div id="acc-err" class="small" style="display:none;margin-top:8px;color:#f88"></div>
-      </form>
-    </div>
+  // Script: accetta direttamente dalla card
+  const acceptScript = isAccepted ? '' : `
     <script>
       (function(){
-        const form = document.getElementById('accept-form');
-        if(!form) return;
-        form.addEventListener('submit', async function(ev){
-          ev.preventDefault();
-          const btn = document.getElementById('btn-accept');
-          const ok  = document.getElementById('acc-ok');
-          const err = document.getElementById('acc-err');
-          ok.style.display='none'; err.style.display='none';
-          btn.disabled=true; btn.textContent='Invio…';
-          try{
-            const sel = form.querySelector('input[name="opt"]:checked');
-            const payload = { slug: ${JSON.stringify(quote.slug)}, tosAccepted: document.getElementById('tos').checked, optionIndex: sel ? Number(sel.value) : undefined };
-            const resp = await fetch('/api/quotes/accept', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) });
-            const json = await resp.json().catch(()=>null);
-            if(!resp.ok || json?.ok===false){ throw new Error(json?.error?.message || json?.error || ('HTTP '+resp.status)); }
-            ok.style.display='block';
-            form.querySelectorAll('input,button').forEach(el=>el.disabled=true);
-          }catch(e){
-            err.textContent = 'Errore: ' + (e.message||e);
-            err.style.display='block';
-          }finally{
-            btn.disabled=false; btn.textContent='Accetta preventivo';
-          }
-        });
+        const slug = ${JSON.stringify(quote.slug)};
+        function onClick(ev){
+          const btn = ev.currentTarget;
+          if (!btn || btn.disabled) return;
+          const idx = Number(btn.getAttribute('data-index'));
+          if (!idx){ alert('Indice opzione non valido'); return; }
+          const prev = btn.textContent;
+          btn.disabled = true; btn.textContent = 'Invio…';
+          fetch('/api/quotes/accept', {
+            method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({ slug: slug, optionIndex: idx })
+          })
+          .then(r => r.json().then(j => ({ ok: r.ok, j })))
+          .then(({ok, j})=>{
+            if(!ok || j?.ok===false){ throw new Error(j?.error?.message || j?.error || 'HTTP '+(j?.status||'')); }
+            // UI: disabilita tutti i bottoni e marca l’opzione
+            document.querySelectorAll('.btn-accept').forEach(b => { b.disabled = true; if(b===btn){ b.textContent='Accettata'; b.classList.add('btn-accepted'); } else { b.textContent='—'; }});
+            const card = btn.closest('.opt'); if (card){ card.classList.add('is-accepted','is-best'); }
+            const badge = document.getElementById('status-badge');
+            if (badge){ badge.textContent = 'Accettato'; badge.style.background='rgba(110,168,255,.15)'; badge.style.borderColor='rgba(110,168,255,.4)'; }
+          })
+          .catch(err=>{
+            btn.disabled = false; btn.textContent = prev;
+            alert('Errore: ' + (err?.message || err));
+          });
+        }
+        document.querySelectorAll('.btn-accept').forEach(b => b.addEventListener('click', onClick));
       })();
     </script>
   `;
@@ -155,7 +152,7 @@ function buildHtml({ quote, options, packages }) {
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Preventivo SPST</title>
 <style>
-:root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}
+:root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff;--ok:#2cbb5d}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
 .wrap{max-width:960px;margin:24px auto;padding:0 16px}
 .header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
@@ -165,16 +162,22 @@ h1{margin:0;font-size:22px}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .k{font-size:12px;color:var(--muted)}.v{font-weight:600}
 .badge{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid var(--brand);color:var(--brand);background:rgba(247,145,30,.12);font-size:10px}
-.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.4);font-size:11px}
-.opt{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}
-.opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}
+.pill{display:inline-block;padding:4px 9px;border-radius:999px;font-size:11px;border:1px solid rgba(255,255,255,.25)}
+.pill-info{background:rgba(110,168,255,.15);border-color:rgba(110,168,255,.4)}
+.pill-success{background:rgba(44,187,93,.18);border-color:rgba(44,187,93,.45)}
+.opt{border:1px solid rgba(255,255,255,.12);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}
+.opt.is-best{border-color:rgba(160,200,255,.55);box-shadow:inset 0 0 0 1px rgba(160,200,255,.45), 0 6px 16px rgba(0,0,0,.25)}
+.opt.is-accepted{border-color:rgba(44,187,93,.45);box-shadow:inset 0 0 0 1px rgba(44,187,93,.35), 0 6px 16px rgba(0,0,0,.25)}
 .opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}
 .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
 .small{font-size:12px;color:var(--muted)}
+.opt-actions{display:flex;justify-content:flex-end;margin-top:12px}
+.btn{padding:10px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.18);background:#142041;color:#fff;cursor:pointer}
+.btn[disabled]{opacity:.6;cursor:not-allowed}
+.btn-accept{background:var(--ok);border-color:rgba(44,187,93,.55)}
+.btn-accepted{background:rgba(44,187,93,.35);border-color:rgba(44,187,93,.7)}
 table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}
 @media (max-width:900px){.grid{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
-.btn{padding:10px 14px;border-radius:999px;border:1px solid rgba(255,255,255,.15);background:#142041;color:#fff;cursor:pointer}
-.btn[disabled]{opacity:.6;cursor:not-allowed}
 .status{font-size:12px;padding:4px 8px;border-radius:999px;border:1px solid rgba(255,255,255,.2)}
 </style></head>
 <body><div class="wrap">
@@ -184,10 +187,10 @@ table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1p
       <img class="logo" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png" alt="SPST logo" />
       <h1>Preventivo SPST</h1>
     </div>
-    <div>
-      ${quote.stato?.toLowerCase()==='accettato'
-        ? `<span class="status" style="background:rgba(110,168,255,.15);border-color:rgba(110,168,255,.4)">Accettato il ${esc(fmtDate(quote.acceptedAt))}</span>`
-        : `<span class="small">Valido fino al <strong>${esc(fmtDate(quote?.validUntil))}</strong></span>`}
+    <div id="status-badge" class="status" style="${isAccepted
+      ? 'background:rgba(110,168,255,.15);border-color:rgba(110,168,255,.4)'
+      : ''}">
+      ${isAccepted ? 'Accettato' : ('Valido fino al ' + esc(fmtDate(quote?.validUntil)))}
     </div>
   </div>
 
@@ -235,13 +238,13 @@ table{border-collapse:collapse;width:100%}th,td{padding:6px 8px;border-bottom:1p
     ${optBlocks}
   </div>
 
-  ${acceptCard}
-
   <div class="small" style="margin-top:8px">
     Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente.
     Per maggiori informazioni consulta i
     <a style="color:#9ec1ff" href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.
   </div>
+
+  ${acceptScript}
 
 </div></body></html>`;
 }
@@ -318,7 +321,7 @@ export default async function handler(req, res) {
       };
     });
 
-    // Fallback se zero opzioni
+    // Fallback se zero opzioni (compatibilità)
     if (!options.length) {
       const all = await atList(TB_OPT, { pageSize: 100 });
       options = (all.records||[])
