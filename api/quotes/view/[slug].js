@@ -1,251 +1,172 @@
-// api/quotes/view/[slug].js
+// api/quotes/[slug].js
+// Restituisce: preventivo + opzioni + pacchi (da Colli_JSON) pronti per il render pubblico.
 
-const AT_BASE  = process.env.AIRTABLE_BASE_ID;
-const AT_PAT   = process.env.AIRTABLE_PAT;
-const TB_QUOTE = process.env.TB_PREVENTIVI;
-const TB_OPT   = process.env.TB_OPZIONI;
+const DEFAULT_ALLOW = [
+  'https://spst.it',
+  'https://www.spst.it',
+  'https://spst-logistics.vercel.app',
+  'http://localhost:3000',
+  'http://localhost:8888',
+];
+const allowlist = (process.env.ORIGIN_ALLOWLIST || DEFAULT_ALLOW.join(','))
+  .split(',').map(s => s.trim()).filter(Boolean);
 
-/* --------------------------- Utils di formattazione --------------------------- */
-function money(n, curr = "EUR") {
-  const num = Number(n);
-  if (!Number.isFinite(num)) return "—";
-  try { return new Intl.NumberFormat("it-IT", { style: "currency", currency: curr }).format(num); }
-  catch { return `${num.toFixed(2)} ${curr}`; }
+function isAllowed(origin) {
+  if (!origin) return false;
+  for (const item of allowlist) {
+    if (item.includes('*')) {
+      const esc = item.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace('\\*', '.*');
+      if (new RegExp('^' + esc + '$').test(origin)) return true;
+    } else if (item === origin) return true;
+  }
+  return false;
 }
-function esc(s = "") {
-  return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[m]));
-}
-function fmtDate(val) {
-  if (!val) return "—";
-  try {
-    const d = new Date(val);
-    if (Number.isNaN(+d)) return "—";
-    return d.toISOString().slice(0, 10);
-  } catch { return "—"; }
-}
-function parseDate(val) {
-  const d = new Date(val);
-  return Number.isNaN(+d) ? null : d;
-}
-function isExpired(scadenza) {
-  if (!scadenza) return false;
-  const d = parseDate(scadenza);
-  if (!d) return false;
-  return d.getTime() < Date.now();
+function setCors(res, origin) {
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+  if (isAllowed(origin)) res.setHeader('Access-Control-Allow-Origin', origin);
 }
 
-/* ------------------------------ Helpers HTTP/Airtable ------------------------------ */
-async function fetchJson(url) {
-  const r = await fetch(url, { headers: { Authorization: `Bearer ${AT_PAT}` } });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j?.error?.message || "Airtable error");
-  return j;
-}
-function htmlPage(title, body) {
-  return `<!doctype html><html lang="it"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>${esc(title)}</title>
-<style>
-:root{--bg:#0b1224;--card:#0e162b;--text:#e7ecf5;--muted:#9aa3b7;--brand:#f7911e;--accent:#6ea8ff}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 Inter,system-ui,Segoe UI,Roboto,Helvetica,Arial}
-.wrap{max-width:960px;margin:24px auto;padding:0 16px}
-.header{display:flex;justify-content:space-between;align-items:center;margin:8px 0 16px}
-.brand{display:flex;align-items:center;gap:10px}
-.brand img{width:24px;height:24px}
-h1{margin:0;font-size:22px}
-.card{background:var(--card);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:14px;margin:12px 0}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.k{font-size:12px;color:var(--muted)} .v{font-weight:600}
-.badge{display:inline-block;padding:3px 8px;border-radius:999px;border:1px solid var(--brand);color:var(--brand);background:rgba(247,145,30,.12);font-size:10px}
-.pill{display:inline-block;padding:4px 9px;border-radius:999px;background:rgba(110,168,255,.15);border:1px solid rgba(110,168,255,.4);font-size:11px}
-.opt{border:1px solid rgba(255,255,255,.10);border-radius:12px;padding:12px;margin:10px 0;background:#0d152a}
-.opt.is-best{box-shadow:inset 0 0 0 1px rgba(110,168,255,.45), 0 6px 16px rgba(0,0,0,.25)}
-.opt-head{display:flex;gap:8px;align-items:center;margin-bottom:8px}
-.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-.notes{margin-top:8px;color:var(--muted)}
-.small{font-size:12px;color:var(--muted)}
-a{color:#a9c6ff}
-@media (max-width:900px){ .grid{grid-template-columns:1fr 1fr} .grid2{grid-template-columns:1fr} }
-@media print{ body{background:#fff;color:#000} .card{border-color:#ddd} .opt{background:#fff;border-color:#ddd} .small{color:#444} }
-.center{display:flex;min-height:60vh;align-items:center;justify-content:center;text-align:center}
-table{border-collapse:collapse;width:100%}
-th,td{padding:6px 8px;border-bottom:1px solid rgba(255,255,255,.1);text-align:left}
-</style></head><body>${body}</body></html>`;
+// Airtable
+const AT_BASE   = process.env.AIRTABLE_BASE_ID;
+const AT_PAT    = process.env.AIRTABLE_PAT;
+const TB_QUOTE  = process.env.TB_PREVENTIVI;      // Preventivi
+const TB_OPT    = process.env.TB_OPZIONI;         // OpzioniPreventivo
+
+async function atList(table, params = {}) {
+  const url = new URL(`https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`);
+  Object.entries(params).forEach(([k,v]) => {
+    if (v == null) return;
+    if (k === 'sort' && Array.isArray(v)) {
+      v.forEach((s, i) => {
+        if (!s?.field) return;
+        url.searchParams.set(`sort[${i}][field]`, s.field);
+        url.searchParams.set(`sort[${i}][direction]`, s.direction || 'asc');
+      });
+    } else {
+      url.searchParams.set(k, v);
+    }
+  });
+  const resp = await fetch(url, { headers: { Authorization: `Bearer ${AT_PAT}` }});
+  const json = await resp.json();
+  if (!resp.ok) {
+    const err = new Error(json?.error?.message || 'Airtable error');
+    err.status = resp.status;
+    err.payload = json;
+    throw err;
+  }
+  return json.records || [];
 }
 
-/* ------------------------------ Fetch opzioni robuste ------------------------------ */
-async function fetchOptionsForQuote(quoteId) {
-  const base = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_OPT)}`;
-  const sort = `&sort[0][field]=Indice&sort[0][direction]=asc`;
-
-  let url = `${base}?filterByFormula=${encodeURIComponent(`{Preventivo_Id}='${quoteId}'`)}${sort}`;
-  try {
-    const j = await fetchJson(url);
-    if (Array.isArray(j.records) && j.records.length > 0) return j;
-  } catch {}
-
-  url = `${base}?filterByFormula=${encodeURIComponent(`FIND('${quoteId}', ARRAYJOIN({Preventivo}))`)}${sort}`;
-  return await fetchJson(url);
+function parseJSON(s){ try { return JSON.parse(s || '[]'); } catch { return []; } }
+function money(n, curr='EUR'){
+  if (typeof n !== 'number') return null;
+  try { return new Intl.NumberFormat('it-IT',{style:'currency',currency:curr}).format(n); }
+  catch { return `${n.toFixed(2)} ${curr}`; }
 }
+function sanitizeSlug(slug=''){ return String(slug).replace(/[^a-z0-9-_]/gi,''); }
 
-/* ------------------------------------ Handler ------------------------------------ */
 export default async function handler(req, res) {
+  setCors(res, req.headers.origin);
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'GET')     return res.status(405).json({ ok:false, error:'Method Not Allowed' });
+
   try {
-    const slug = req.query?.slug;
-    if (!slug) return res.status(400).send("Missing slug");
-
-    // Preventivo
-    const qUrl = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_QUOTE)}?filterByFormula=${encodeURIComponent(`{Slug_Pubblico}='${slug}'`)}`;
-    const q = await fetchJson(qUrl);
-    const rec = q.records?.[0];
-    if (!rec) {
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.status(404).send(htmlPage("Preventivo non trovato",
-        `<div class="wrap center"><div>
-           <h1>Preventivo non trovato</h1>
-           <p class="small">Verifica il link ricevuto o contatta SPST.</p>
-         </div></div>`));
+    if (!AT_BASE || !AT_PAT || !TB_QUOTE || !TB_OPT) {
+      throw new Error('Missing env vars: AIRTABLE_BASE_ID / AIRTABLE_PAT / TB_PREVENTIVI / TB_OPZIONI');
     }
 
-    const f = rec.fields;
-    if (isExpired(f.Scadenza_Link)) {
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.status(410).send(htmlPage("Link scaduto",
-        `<div class="wrap center"><div>
-           <h1>Link scaduto</h1>
-           <p class="small">Questo link non è più attivo. Richiedi un nuovo preventivo a SPST.</p>
-         </div></div>`));
-    }
+    const slug = sanitizeSlug(req.query.slug || req.query.id || '');
+    if (!slug) return res.status(400).json({ ok:false, error:'Missing slug' });
 
-    // Opzioni
-    const o = await fetchOptionsForQuote(rec.id);
-    const options = (o.records || []).map(r => ({
-      index: r.fields.Indice,
-      carrier: r.fields.Corriere,
-      service: r.fields.Servizio,
-      transit: r.fields.Tempo_Resa,
-      incoterm: r.fields.Incoterm,
-      payer: r.fields.Oneri_A_Carico,
-      price: Number(r.fields.Prezzo),
-      currency: r.fields.Valuta || f.Valuta,
-      notes: r.fields.Note_Operative,
-      recommended: !!r.fields.Consigliata,
-    }));
+    // 1) Recupero preventivo per slug, visibile e non scaduto
+    const filter = [
+      `{Slug_Pubblico}='${slug}'`,
+      `OR({Visibilita}='Immediata', {Visibilita}='Pubblica')`,
+      `OR({Scadenza_Link}='', IS_AFTER({Scadenza_Link}, NOW()))`,
+    ].join(','); // AND([...]) sotto
 
-    let best = f.Opzione_Consigliata;
-    if (!best) {
-      best = options.find(x => x.recommended)?.index;
-      if (!best) {
-        const priced = options.filter(x => Number.isFinite(x.price)).sort((a,b)=>a.price-b.price);
-        best = priced[0]?.index ?? options[0]?.index;
-      }
-    }
+    const recs = await atList(TB_QUOTE, {
+      maxRecords: 1,
+      filterByFormula: `AND(${filter})`,
+    });
+    const rec = recs[0];
+    if (!rec) return res.status(404).json({ ok:false, error:'Not found' });
 
-    const rows = options.map(o => `
-      <div class="opt ${String(o.index) === String(best) ? "is-best" : ""}">
-        <div class="opt-head">
-          <div class="badge">OPZIONE ${esc(o.index ?? "")}</div>
-          ${String(o.index) === String(best) ? '<span class="pill">Consigliata</span>' : ''}
-        </div>
-        <div class="grid">
-          <div><div class="k">Corriere</div><div class="v">${esc(o.carrier||"—")}</div></div>
-          <div><div class="k">Servizio</div><div class="v">${esc(o.service||"—")}</div></div>
-          <div><div class="k">Tempo di resa</div><div class="v">${esc(o.transit||"—")}</div></div>
-          <div><div class="k">Incoterm</div><div class="v">${esc(o.incoterm||"—")}</div></div>
-          <div><div class="k">Oneri a carico</div><div class="v">${esc(o.payer||"—")}</div></div>
-          <div><div class="k">Prezzo</div><div class="v">${money(o.price, o.currency||f.Valuta)}</div></div>
-        </div>
-        ${o.notes ? `<div class="notes"><div class="k" style="margin-bottom:4px">Note aggiuntive</div>${esc(o.notes)}</div>` : ""}
-      </div>
-    `).join("");
+    const f = rec.fields || {};
+    const id = rec.id;
 
-    // Colli (card)
-    let pkgs = [];
-    try { pkgs = JSON.parse(f.Colli_JSON || '[]'); } catch {}
-    const pkgCard = `
-      <div class="card">
-        <div class="k" style="margin-bottom:6px">Colli</div>
-        <div class="small" style="margin-bottom:8px">
-          Totale colli: <strong>${Number(f.Tot_Colli||0)}</strong> ·
-          Peso reale totale: <strong>${Number(f.Tot_Peso_Reale_Kg||0).toFixed(2)} kg</strong>
-        </div>
-        ${pkgs.length ? `
-          <div style="overflow:auto">
-            <table>
-              <thead>
-                <tr>
-                  <th class="k">Q.tà</th>
-                  <th class="k">L × W × H (cm)</th>
-                  <th class="k">Peso (kg)</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${pkgs.map(p => `
-                  <tr>
-                    <td>${p.qty||1}</td>
-                    <td>${[p.length,p.width,p.height].map(n=>Number(n||0).toFixed(1)).join(' × ')}</td>
-                    <td>${Number(p.weightKg||0).toFixed(2)}</td>
-                  </tr>`).join('')}
-              </tbody>
-            </table>
-          </div>` : ``}
-      </div>
-    `;
+    // Mappa campi (incluse P.IVA / TAX ID)
+    const quote = {
+      id,
+      slug: f.Slug_Pubblico || slug,
+      customerEmail: f.Email_Cliente || '',
+      currency: f.Valuta || 'EUR',
+      validUntil: f.Valido_Fino_Al || null,
+      notes: f.Note_Globali || '',
 
-    // HTML
-    const html = htmlPage("Preventivo SPST", `
-      <div class="wrap">
-        <div class="header">
-          <div class="brand">
-            <img alt="" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png"/>
-            <h1>Preventivo SPST</h1>
-          </div>
-          <div class="small">Valido fino al <strong>${fmtDate(f.Valido_Fino_Al)}</strong></div>
-        </div>
+      sender: {
+        name   : f.Mittente_Nome || '',
+        country: f.Mittente_Paese || '',
+        city   : f.Mittente_Citta || '',
+        zip    : f.Mittente_CAP || '',
+        address: f.Mittente_Indirizzo || '',
+        phone  : f.Mittente_Telefono || '',
+        tax    : f.Mittente_Tax || '',         // <<< QUI
+      },
+      recipient: {
+        name   : f.Destinatario_Nome || '',
+        country: f.Destinatario_Paese || '',
+        city   : f.Destinatario_Citta || '',
+        zip    : f.Destinatario_CAP || '',
+        address: f.Destinatario_Indirizzo || '',
+        phone  : f.Destinatario_Telefono || '',
+        tax    : f.Destinatario_Tax || '',     // <<< E QUI
+      },
 
-        <div class="card">
-          <div class="grid2">
-            <div><div class="k">Cliente</div><div class="v">${esc(f.Email_Cliente||"—")}</div></div>
-            <div><div class="k">Valuta</div><div class="v">${esc(f.Valuta||"EUR")}</div></div>
-          </div>
-          ${f.Note_Globali ? `<div style="margin-top:10px"><div class="k">Note</div><div class="v">${esc(f.Note_Globali)}</div></div>` : ""}
-        </div>
+      packages: parseJSON(f.Colli_JSON),
+    };
 
-        <div class="card">
-          <div class="grid2">
-            <div>
-              <div class="k">Mittente</div>
-              <div class="v">${esc(f.Mittente_Nome||"—")}</div>
-              <div class="small">${esc([f.Mittente_Indirizzo,f.Mittente_CAP,f.Mittente_Citta,f.Mittente_Paese].filter(Boolean).join(", "))}</div>
-            </div>
-            <div>
-              <div class="k">Destinatario</div>
-              <div class="v">${esc(f.Destinatario_Nome||"—")}</div>
-              <div class="small">${esc([f.Destinatario_Indirizzo,f.Destinatario_CAP,f.Destinatario_Citta,f.Destinatario_Paese].filter(Boolean).join(", "))}</div>
-            </div>
-          </div>
-        </div>
+    // 2) Recupero opzioni collegate
+    // filterByFormula per link: FIND(quoteId, ARRAYJOIN({Preventivo}))
+    const optsRecs = await atList(TB_OPT, {
+      filterByFormula: `FIND('${id}', ARRAYJOIN({Preventivo}))`,
+      sort: [{ field: 'Indice', direction: 'asc' }],
+    });
 
-        ${pkgCard}
+    const options = optsRecs.map(r => {
+      const x = r.fields || {};
+      return {
+        index      : Number(x.Indice ?? 0) || 0,
+        carrier    : x.Corriere || '',
+        service    : x.Servizio || '',
+        transit    : x.Tempo_Resa || '',
+        incoterm   : x.Incoterm || '',
+        payer      : x.Oneri_A_Carico || '',
+        price      : Number(x.Prezzo ?? NaN),
+        currency   : x.Valuta || quote.currency || 'EUR',
+        notes      : x.Note_Operative || '',
+        recommended: !!x.Consigliata,
+      };
+    });
 
-        <div class="card">
-          <div class="k" style="margin-bottom:6px">Opzioni di spedizione</div>
-          ${rows || '<div class="small">Nessuna opzione.</div>'}
-        </div>
+    // 3) Totali colli
+    const pieces = quote.packages.reduce((s,p)=> s + (Number(p.qty)||0), 0);
+    const weightKg = quote.packages.reduce((s,p)=> {
+      const kg = Number(p.kg ?? p.weight ?? 0);
+      const q  = Number(p.qty) || 0;
+      return s + (Number.isFinite(kg)?kg:0) * (q || 0 || 1);
+    }, 0);
 
-        <div class="small" style="margin-top:8px">
-          Anteprima non vincolante. Eventuali costi accessori potrebbero essere applicati dal corriere ed addebitati al cliente.
-          Per maggiori informazioni consulta i <a href="https://www.spst.it/termini-di-utilizzo" target="_blank" rel="noopener">Termini di utilizzo</a>.
-        </div>
-      </div>
-    `);
-
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    return res.status(200).send(html);
+    return res.status(200).json({
+      ok: true,
+      quote,
+      options,
+      totals: { pieces, weightKg, weightFmt: money(weightKg, quote.currency) },
+    });
   } catch (err) {
-    console.error("[view/[slug]] error:", err);
-    res.setHeader("Content-Type", "text/html; charset=utf-8");
-    return res.status(500).send(htmlPage("Errore", `<div class="wrap center"><div><h1>Errore</h1><p class="small">Si è verificato un errore inatteso.</p></div></div>`));
+    const status = err.status || 500;
+    return res.status(status).json({ ok:false, error: err.payload || { name: err.name, message: err.message } });
   }
 }
