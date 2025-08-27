@@ -37,7 +37,6 @@ function money(n, curr='EUR'){
 const escapeHtml = s => String(s ?? "").replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 
 /* --------------------------- Colli (Packages) --------------------------- */
-// markup per una riga collo
 function pkgRowTemplate(p={qty:1,l:'',w:'',h:'',kg:''}){
   const row = document.createElement('div');
   row.className = 'pkg-row';
@@ -47,16 +46,20 @@ function pkgRowTemplate(p={qty:1,l:'',w:'',h:'',kg:''}){
     <input type="number" min="0" step="0.1" class="pkg-w"   placeholder="larghezza" value="${p.w ?? ''}" />
     <input type="number" min="0" step="0.1" class="pkg-h"   placeholder="altezza"   value="${p.h ?? ''}" />
     <input type="number" min="0" step="0.01" class="pkg-kg"  placeholder="kg"        value="${p.kg ?? ''}" />
-    <button type="button" class="pkg-remove">Elimina</button>
+    <span class="pkg-remove" style="cursor:pointer;color:#f66">Elimina</span>
   `;
   return row;
 }
-function addPackageRow(p){ const rows = qs('#qa-pkg-rows'); rows.appendChild(pkgRowTemplate(p)); }
+
+function addPackageRow(p){ 
+  const rows = qs('#qa-pkg-rows'); 
+  rows?.appendChild(pkgRowTemplate(p)); 
+}
 
 function readPackages(){
-  const wrap = qs('#qa-packages');
-  if (!wrap) return [];
-  return qsa('.pkg-row', wrap).map(r => ({
+  const rows = qs('#qa-pkg-rows');
+  if (!rows) return [];
+  return qsa('.pkg-row', rows).map(r => ({
     qty: toNumber(qs('.pkg-qty', r)?.value) || 0,
     l  : toNumber(qs('.pkg-l',   r)?.value),
     w  : toNumber(qs('.pkg-w',   r)?.value),
@@ -70,12 +73,10 @@ function refreshPackages(){
   const totQty = pkgs.reduce((s,p)=> s + (p.qty||0), 0);
   const totKg  = pkgs.reduce((s,p)=> s + (p.kg||0) * (p.qty||1), 0);
   text(qs('#qa-pkg-totals'), `Totale colli: ${totQty} · Peso reale totale: ${totKg.toFixed(2)} kg`);
-  // riepilogo
   const sumPk = qs('#sum-packages');
   if (sumPk) text(sumPk, totQty ? `${totQty} collo${totQty===1?'':'i'} (${totKg.toFixed(2)} kg)` : '—');
 }
 
-// attacca gli handler ai controlli dei colli
 function wirePackages(onChange){
   const rows = qs('#qa-pkg-rows');
   const add  = qs('#qa-pkg-add');
@@ -93,8 +94,7 @@ function wirePackages(onChange){
   rows?.addEventListener('click', (e) => {
     if (e.target.matches('.pkg-remove')) {
       e.preventDefault();
-      const r = e.target.closest('.pkg-row');
-      if (r) r.remove();
+      e.target.closest('.pkg-row')?.remove();
       changed();
     }
   });
@@ -102,6 +102,7 @@ function wirePackages(onChange){
   // Prima riga
   if (!rows?.children.length) { addPackageRow({ qty:1 }); changed(); }
 }
+
 
 /* -------------------------- Lettura form -------------------------- */
 function readSender() {
@@ -437,8 +438,9 @@ function wireup(){
     qsa("#btn-preview", container).forEach(b => b.disabled = !okPreview);
   };
 
-  // Sezione colli
-  wirePackages(() => { refreshSummary(); syncButtons(); });
+ // Sezione colli
+wirePackages(() => { refreshSummary(); syncButtons(); });
+
 
   // Ricalcola riepilogo e stato bottoni per gli altri input
   qsa("input,select,textarea", container).forEach(el => {
