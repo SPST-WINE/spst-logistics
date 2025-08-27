@@ -9,9 +9,7 @@ const DEFAULT_ALLOW = [
   "http://localhost:8888",
 ];
 const allowlist = (process.env.ORIGIN_ALLOWLIST || DEFAULT_ALLOW.join(","))
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
+  .split(",").map(s => s.trim()).filter(Boolean);
 
 function isAllowed(origin) {
   if (!origin) return false;
@@ -51,10 +49,7 @@ async function atUpdate(table, records) {
   const url = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(table)}`;
   const resp = await fetch(url, {
     method: "PATCH",
-    headers: {
-      Authorization: `Bearer ${AT_PAT}`,
-      "Content-Type": "application/json",
-    },
+    headers: { Authorization: `Bearer ${AT_PAT}`, "Content-Type": "application/json" },
     body: JSON.stringify({ records }),
   });
   const json = await resp.json().catch(() => null);
@@ -66,36 +61,35 @@ async function atUpdate(table, records) {
   }
   return json;
 }
-function toNumber(x) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : undefined;
-}
-function money(n, curr = "EUR") {
+
+/* ========================= Utils ========================= */
+function toNumber(x){ const n = Number(x); return Number.isFinite(n) ? n : undefined; }
+function money(n, curr="EUR"){
   const num = Number(n);
   if (!Number.isFinite(num)) return "—";
-  try {
-    return new Intl.NumberFormat("it-IT", { style: "currency", currency: curr }).format(num);
-  } catch {
-    return `${num.toFixed(2)} ${curr}`;
-  }
+  try { return new Intl.NumberFormat("it-IT", { style:"currency", currency:curr }).format(num); }
+  catch { return `${num.toFixed(2)} ${curr}`; }
 }
-function escapeHtml(s = "") {
-  return String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
-}
+function escapeHtml(s=""){ return String(s).replace(/[&<>"']/g, m => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[m])); }
+const pick = (obj, keys, fallback='') => {
+  for (const k of keys) { if (obj && obj[k] != null && obj[k] !== '') return obj[k]; }
+  return fallback;
+};
+const getQuoteEmail = f => pick(f, ['Email_Cliente','Cliente_Email','customerEmail'], '');
 
-// Opzioni del preventivo (prima campo testo Preventivo_Id, poi fallback sul linked record)
+/* Opzioni del preventivo (prima campo testo Preventivo_Id, poi fallback su linked record) */
 async function fetchOptionsForQuote(quoteId) {
   const base = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_OPT)}`;
   const sort = `&sort[0][field]=Indice&sort[0][direction]=asc`;
 
-  // 1) campo testo
+  // 1) Campo testo
   let url = `${base}?filterByFormula=${encodeURIComponent(`{Preventivo_Id}='${quoteId}'`)}${sort}`;
   try {
     const j = await atFetch(url);
     if (Array.isArray(j.records) && j.records.length) return j.records;
   } catch {}
 
-  // 2) fallback: linked record
+  // 2) Fallback su linked
   url = `${base}?filterByFormula=${encodeURIComponent(`FIND('${quoteId}', ARRAYJOIN({Preventivo}))`)}${sort}`;
   const j = await atFetch(url);
   return j.records || [];
@@ -104,42 +98,32 @@ async function fetchOptionsForQuote(quoteId) {
 /* ========================= Email (Resend) ========================= */
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const MAIL_FROM = process.env.MAIL_FROM || "SPST Notifications <notification@spst.it>";
-const PUBLIC_QUOTE_BASE_URL = (process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote").replace(/\/$/, "");
+const PUBLIC_QUOTE_BASE_URL = (process.env.PUBLIC_QUOTE_BASE_URL || "https://spst-logistics.vercel.app/quote").replace(/\/$/,"");
 
 function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
   const brand = "#f7911e";
   const label = "#6b7280";
-  const text = "#111111";
+  const text  = "#111111";
   const border = "#e8e8e8";
   const bg = "#ffffff";
   const outerBg = "#f6f7fb";
 
   const row = (k, v) => `
     <tr>
-      <td style="padding:10px 12px;border-bottom:1px solid ${border};color:${label};width:34%;font:500 13px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial">${escapeHtml(
-        k
-      )}</td>
+      <td style="padding:10px 12px;border-bottom:1px solid ${border};color:${label};width:34%;font:500 13px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial">${escapeHtml(k)}</td>
       <td style="padding:10px 12px;border-bottom:1px solid ${border};color:${text};font:600 13px/1.3 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial">${v}</td>
     </tr>`;
 
   const rows = [
     row("Opzione", escapeHtml(String(optionIdx))),
-    row(
-      "Cliente",
-      `<a style="color:${text};text-decoration:underline" href="mailto:${escapeHtml(fields?.Email_Cliente || "")}">${escapeHtml(
-        fields?.Email_Cliente || "—"
-      )}</a>`
-    ),
+    row("Cliente", `<a style="color:${text};text-decoration:underline" href="mailto:${escapeHtml(getQuoteEmail(fields))}">${escapeHtml(getQuoteEmail(fields) || "—")}</a>`),
     row("Corriere", escapeHtml(optionFields?.Corriere || "—")),
     row("Servizio", escapeHtml(optionFields?.Servizio || "—")),
     row("Incoterm", escapeHtml(optionFields?.Incoterm || "—")),
     row("Oneri a carico", escapeHtml(optionFields?.Oneri_A_Carico || "—")),
-    row("Prezzo", escapeHtml(money(optionFields?.Prezzo, optionFields?.Valuta || fields?.Valuta))),
+    row("Prezzo", escapeHtml(money(optionFields?.Prezzo, optionFields?.Valuta || fields?.Valuta || "EUR"))),
     row("Peso reale", Number.isFinite(Number(optionFields?.Peso_Kg)) ? `${Number(optionFields.Peso_Kg).toFixed(2)} kg` : "—"),
-    row(
-      "Link preventivo",
-      `<a style="color:${text};text-decoration:underline" href="${quoteUrl}" target="_blank" rel="noopener">${escapeHtml(quoteUrl)}</a>`
-    ),
+    row("Link preventivo", `<a style="color:${text};text-decoration:underline" href="${quoteUrl}" target="_blank" rel="noopener">${escapeHtml(quoteUrl)}</a>`),
   ].join("");
 
   return `
@@ -150,7 +134,8 @@ function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             <tr>
               <td style="vertical-align:middle;padding-right:10px">
-                <img src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png" alt="SPST" width="28" height="28" style="display:block;border:0;outline:0;margin:0 10px 0 0" />
+                <img src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png"
+                     alt="SPST" width="28" height="28" style="display:block;border:0;outline:0;margin:0 10px 0 0" />
               </td>
               <td style="vertical-align:middle">
                 <div style="font:700 18px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:${brand};margin:0 0 6px">Preventivo accettato!</div>
@@ -168,7 +153,8 @@ function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
           <div style="font:600 13px/1.2 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;color:${label};text-transform:uppercase;letter-spacing:.3px;margin:0 0 6px">
             Dettagli del preventivo accettato
           </div>
-          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid ${border};border-radius:10px;overflow:hidden">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+                 style="border:1px solid ${border};border-radius:10px;overflow:hidden">
             ${rows}
           </table>
         </td>
@@ -176,7 +162,8 @@ function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
 
       <tr>
         <td style="padding:14px 20px 4px 20px">
-          <a href="${quoteUrl}" target="_blank" rel="noopener" style="display:inline-block;background:${brand};color:#111;text-decoration:none;font:700 14px/1 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;padding:12px 16px;border-radius:10px;border:1px solid rgba(0,0,0,.06)">
+          <a href="${quoteUrl}" target="_blank" rel="noopener"
+             style="display:inline-block;background:${brand};color:#111;text-decoration:none;font:700 14px/1 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;padding:12px 16px;border-radius:10px;border:1px solid rgba(0,0,0,.06)">
             Apri il preventivo
           </a>
         </td>
@@ -185,7 +172,7 @@ function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
       <tr>
         <td style="padding:14px 20px 20px 20px;color:${label};font:12px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial">
           Per ulteriore supporto, puoi scriverci su WhatsApp:
-          <a href="https://wa.me/393201441789" style="color:#111;text-decoration:underline">+39 320 144 1789</a><br/>
+          <a href="https://wa.me/393201441789" style="color:${text};text-decoration:underline">+39 320 144 1789</a><br/>
           Grazie per aver scelto SPST!
         </td>
       </tr>
@@ -196,18 +183,18 @@ function buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl }) {
 async function sendAcceptanceEmail({ slug, fields, optionIdx, optionFields }) {
   if (!RESEND_API_KEY) {
     console.warn("[accept] RESEND_API_KEY mancante: salto invio email");
-    return { sent: false, reason: "missing api key" };
+    return { sent:false, reason:"missing api key" };
   }
 
-  const toSet = new Set(
-    ["commerciale@spst.it", "info@spst.it", (fields?.Email_Cliente || "").trim()]
-      .filter(Boolean)
-      .map((e) => e.toLowerCase())
-  );
+  const toSet = new Set([
+    "commerciale@spst.it",
+    "info@spst.it",
+    (getQuoteEmail(fields) || "").trim()
+  ].filter(Boolean).map(e => e.toLowerCase()));
   const to = Array.from(toSet);
-  if (!to.length) return { sent: false, reason: "no recipients" };
+  if (!to.length) return { sent:false, reason:"no recipients" };
 
-  const subject = `Conferma accettazione preventivo • Opzione ${optionIdx}`;
+  const subject  = `Conferma accettazione preventivo • Opzione ${optionIdx}`;
   const quoteUrl = `${PUBLIC_QUOTE_BASE_URL}/${encodeURIComponent(slug)}`;
 
   const textLines = [
@@ -215,20 +202,18 @@ async function sendAcceptanceEmail({ slug, fields, optionIdx, optionFields }) {
     "",
     "Dettagli:",
     `Opzione: ${optionIdx}`,
-    `Cliente: ${fields?.Email_Cliente || "—"}`,
+    `Cliente: ${getQuoteEmail(fields) || "—"}`,
     `Corriere: ${optionFields?.Corriere || "—"}`,
     `Servizio: ${optionFields?.Servizio || "—"}`,
     `Incoterm: ${optionFields?.Incoterm || "—"}`,
     `Oneri a carico: ${optionFields?.Oneri_A_Carico || "—"}`,
-    `Prezzo: ${money(optionFields?.Prezzo, optionFields?.Valuta || fields?.Valuta)}`,
+    `Prezzo: ${money(optionFields?.Prezzo, optionFields?.Valuta || fields?.Valuta || "EUR")}`,
     Number.isFinite(Number(optionFields?.Peso_Kg)) ? `Peso reale: ${Number(optionFields.Peso_Kg).toFixed(2)} kg` : "",
     "",
     `Link preventivo: ${quoteUrl}`,
     "",
     "Per supporto WhatsApp: +39 320 144 1789",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ].filter(Boolean).join("\n");
 
   const html = buildEmailHtml({ fields, optionIdx, optionFields, quoteUrl });
 
@@ -244,22 +229,21 @@ async function sendAcceptanceEmail({ slug, fields, optionIdx, optionFields }) {
       subject,
       html,
       text: textLines,
-      reply_to: fields?.Email_Cliente || undefined,
     }),
   });
   const json = await resp.json().catch(() => null);
   if (!resp.ok) {
     console.error("[accept] email send failed:", json || resp.statusText);
-    return { sent: false, status: resp.status, payload: json };
+    return { sent:false, status:resp.status, payload:json };
   }
-  return { sent: true, payload: json };
+  return { sent:true, payload:json };
 }
 
 /* ========================= Handler ========================= */
 export default async function handler(req, res) {
   setCors(res, req.headers.origin);
   if (req.method === "OPTIONS") return res.status(200).end();
-  if (req.method !== "POST") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
+  if (req.method !== "POST")   return res.status(405).json({ ok:false, error:"Method Not Allowed" });
 
   try {
     if (!AT_BASE || !AT_PAT || !TB_QUOTE || !TB_OPT) {
@@ -268,74 +252,78 @@ export default async function handler(req, res) {
 
     const body = (req.body && typeof req.body === "object") ? req.body : JSON.parse(req.body || "{}");
     const slug = String(body.slug || "").trim();
-    const option = toNumber(body.option);
+    // NB: supportiamo sia optionIndex che option (retro-compatibilità)
+    const option = toNumber(body.optionIndex ?? body.option);
+    if (!slug || !option) return res.status(400).json({ ok:false, error:"Missing slug/option" });
 
-    if (!slug || !option) {
-      return res.status(400).json({ ok: false, error: "Missing slug/option" });
-    }
-
-    // 1) trova preventivo per slug
+    // 1) preventivo per slug
     const qUrl = `https://api.airtable.com/v0/${AT_BASE}/${encodeURIComponent(TB_QUOTE)}?filterByFormula=${encodeURIComponent(`{Slug_Pubblico}='${slug}'`)}`;
     const q = await atFetch(qUrl);
     const rec = q.records?.[0];
-    if (!rec) return res.status(404).json({ ok: false, error: "Quote not found" });
+    if (!rec) return res.status(404).json({ ok:false, error:"Quote not found" });
 
     const f = rec.fields || {};
     const already = f.Opzione_Accettata;
     if (already && Number(already) !== option) {
-      return res.status(409).json({ ok: false, error: "Quote already accepted with a different option" });
+      return res.status(409).json({ ok:false, error:"Quote already accepted with a different option" });
     }
 
     // 2) aggiorna il preventivo
     const ip = String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "").split(",")[0].trim();
     const ua = String(req.headers["user-agent"] || "");
-
-    await atUpdate(TB_QUOTE, [
-      {
-        id: rec.id,
-        fields: {
-          Opzione_Accettata: option,
-          Accettato_Il: new Date().toISOString(),
-          Accettato_IP: ip || undefined,
-          Accettato_UA: ua || undefined,
-          Stato: "Accettato", // single select
-        },
+    await atUpdate(TB_QUOTE, [{
+      id: rec.id,
+      fields: {
+        Opzione_Accettata: option,
+        Accettato_Il     : new Date().toISOString(),
+        Accettato_IP     : ip || undefined,
+        Accettato_UA     : ua || undefined,
+        Stato            : "Accettato",
       },
-    ]);
+    }]);
 
-    // 3) marca l'opzione come accettata (best-effort) e raccogli campi per l'email
-    let chosenFields = null;
+    // 3) trova l'opzione scelta e normalizza i campi per l’email (best-effort)
+    let normalized = null;
     try {
       const options = await fetchOptionsForQuote(rec.id);
-      const match = options.find((r) => Number(r.fields?.Indice) === option);
-      if (match) {
-        chosenFields = match.fields || null;
-        try {
-          await atUpdate(TB_OPT, [{ id: match.id, fields: { Accettata: true } }]);
-        } catch {}
+      const match = options.find(r => Number(r.fields?.Indice) === option);
+      if (match && match.fields) {
+        const x = match.fields;
+        normalized = {
+          // mapping robusto per email
+          Corriere      : pick(x, ['Corriere','Carrier'], ''),
+          Servizio      : pick(x, ['Servizio','Service'], ''),
+          Incoterm      : pick(x, ['Incoterm'], ''),
+          Oneri_A_Carico: pick(x, ['Oneri_A_Carico','Oneri a carico di','Payer'], ''),
+          Prezzo        : typeof x.Prezzo === 'number' ? x.Prezzo : toNumber(x.Prezzo),
+          Valuta        : pick(x, ['Valuta','Currency'], pick(f, ['Valuta','Currency'], 'EUR')),
+          Peso_Kg       : typeof x.Peso_Kg === 'number' ? x.Peso_Kg : toNumber(x.Peso_Kg),
+        };
+        // prova a marcare anche la riga opzione come accettata (non blocca)
+        try { await atUpdate(TB_OPT, [{ id: match.id, fields: { Accettata: true } }]); } catch {}
       }
     } catch (e) {
-      console.warn("[accept] could not load options:", e?.payload?.error || e.message);
+      console.warn("[accept] could not load/normalize options:", e?.payload?.error || e.message);
     }
 
-    // 4) invia email (non blocca il 200 se fallisce)
+    // 4) email (non blocca il 200 se fallisce)
     let emailResult = null;
     try {
       emailResult = await sendAcceptanceEmail({
         slug,
         fields: f,
         optionIdx: option,
-        optionFields: chosenFields,
+        optionFields: normalized,
       });
     } catch (e) {
       console.error("[accept] email error:", e);
     }
 
-    return res.status(200).json({ ok: true, email: emailResult?.sent ? "sent" : "skipped" });
+    return res.status(200).json({ ok:true, email: emailResult?.sent ? "sent" : "skipped" });
   } catch (err) {
-    const status = err.status || 500;
+    const status  = err.status || 500;
     const details = err.payload || { name: err.name, message: err.message, stack: err.stack };
     console.error("[api/quotes/accept] error:", details);
-    return res.status(status).json({ ok: false, error: details });
+    return res.status(status).json({ ok:false, error: details });
   }
 }
