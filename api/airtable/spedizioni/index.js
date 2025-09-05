@@ -1,4 +1,5 @@
 // GET /api/airtable/spedizioni?search=&status=all|nuova|in_elab|evase&onlyOpen=0|1&pageSize=50&offset=...
+
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return sendCORS(req, res);
   sendCORS(req, res);
@@ -13,8 +14,10 @@ export default async function handler(req, res) {
 
     const pat    = process.env.AIRTABLE_PAT;
     const baseId = process.env.AIRTABLE_BASE_ID;
-    const table  = process.env.AIRTABLE_TABLE || 'SPEDIZIONI';
-    const view   = process.env.AIRTABLE_VIEW || ''; // opzionale
+    const table  = process.env.USE_NEW_SHIPMENTS_TABLE
+      ? (process.env.TB_SPEDIZIONI_WEBAPP || 'SpedizioniWebApp')
+      : (process.env.AIRTABLE_TABLE || 'SPEDIZIONI');
+    const view   = process.env.AIRTABLE_VIEW || '';
     assertEnv({ pat, baseId, table });
 
     const baseUrl = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`;
@@ -28,14 +31,12 @@ export default async function handler(req, res) {
     const formula = buildFilterFormula({ search, status, onlyOpen });
     if (formula) params.set('filterByFormula', formula);
 
-    // NIENTE sort qui (alcuni campi non esistono in tutte le basi → 422/500).
     const url = `${baseUrl}?${params.toString()}`;
     const out = await airtableFetch(url, { headers });
     return res.status(200).json(out);
 
   } catch (e) {
     console.error('[GET spedizioni] error', e);
-    // Propaghiamo 502 con testo errore Airtable per diagnosi lato FE
     return res.status(502).json({ error: 'Upstream error', details: String(e?.message || e) });
   }
 }
@@ -48,9 +49,21 @@ function buildFilterFormula({ search, status, onlyOpen }) {
   if (search) {
     const s = esc(search.toLowerCase());
 
-    // Campi indicizzati (estendibili)
-    const FIELDS = [
+    const NEW_FIELDS = [
       'ID Spedizione',
+      'Creato da',
+      'Mittente - Ragione sociale',
+      'Mittente - Paese',
+      'Mittente - Città',
+      'Mittente - Indirizzo',
+      'Destinatario - Ragione sociale',
+      'Destinatario - Paese',
+      'Destinatario - Città',
+      'Destinatario - Indirizzo',
+      'Tracking Number',
+      'Incoterm',
+    ];
+    const LEGACY_FIELDS = [
       'Destinatario',
       'Mittente',
       'Mail Cliente',
@@ -60,30 +73,40 @@ function buildFilterFormula({ search, status, onlyOpen }) {
       'Paese Mittente',
       'Città Mittente',
       'Indirizzo Mittente',
-      'Tracking Number',
-      'Incoterm'
     ];
+    const FIELDS = [...NEW_FIELDS, ...LEGACY_FIELDS];
 
     const ors = [];
-    // match esatto su ID / Tracking
     ors.push(`LOWER({ID Spedizione} & "") = "${s}"`);
     ors.push(`LOWER({Tracking Number} & "") = "${s}"`);
-    // match "contiene" su tutti i campi
     for (const f of FIELDS) {
       ors.push(`FIND("${s}", LOWER({${f}} & ""))`);
     }
     parts.push(`OR(${ors.join(',')})`);
   }
 
-  // Filtri stato
-  if (status === 'evase') parts.push('{Stato Spedizione}');
-  if (status === 'nuova' || status === 'in_elab' || onlyOpen) parts.push('NOT({Stato Spedizione})');
+  const IS_EVASA = `{Stato}="Evasa"`;
+  const IS_NUOVA = `{Stato}="Nuova"`;
+  const IS_CONSEGNATA = `{Stato}="Consegnata"`;
+  const IS_ANNULLATA = `{Stato}="Annullata"`;
+
+  if (status === 'evase') {
+    parts.push(IS_EVASA);
+  } else if (status === 'nuova') {
+    parts.push(IS_NUOVA);
+  } else if (status === 'in_elab') {
+    parts.push(`AND(NOT(${IS_EVASA}), NOT(${IS_CONSEGNATA}), NOT(${IS_ANNULLATA}))`);
+  }
+
+  if (onlyOpen) {
+    parts.push(`AND(NOT(${IS_EVASA}), NOT(${IS_CONSEGNATA}), NOT(${IS_ANNULLATA}))`);
+  }
 
   if (!parts.length) return '';
   return `AND(${parts.join(',')})`;
 }
 
-/* ───────── helpers (CORS, fetch, utils) ───────── */
+/* ───────── helpers ───────── */
 
 function esc(s){ return String(s).replace(/"/g,'\\"'); }
 function clampInt(v,min,max,d){ const n=parseInt(v,10); return Number.isNaN(n)? d : Math.min(max,Math.max(min,n)); }
