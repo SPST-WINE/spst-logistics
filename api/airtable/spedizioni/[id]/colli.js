@@ -1,5 +1,4 @@
-// GET /api/airtable/spedizioni/:id/colli
-// Ritorna { ok:true, rows:[{lunghezza_cm,larghezza_cm,altezza_cm,peso_kg,quantita}] }
+// api/airtable/spedizioni/[id]/colli.js
 
 export default async function handler(req, res){
   if (req.method === 'OPTIONS') return sendCORS(req, res);
@@ -12,46 +11,65 @@ export default async function handler(req, res){
 
     const pat    = process.env.AIRTABLE_PAT;
     const baseId = process.env.AIRTABLE_BASE_ID;
-    const table  = process.env.AIRTABLE_TABLE_COLLI
-                || process.env.AIRTABLE_TABLE_SPED_COLLI
-                || process.env.TB_COLLI
-                || 'SPED_COLLI';
-    assertEnv({ pat, baseId, table });
+    // tabelle
+    const TB_SPED = process.env.AIRTABLE_TABLE_SPEDIZIONI_WEBAPP
+                 || process.env.AIRTABLE_TABLE
+                 || 'SpedizioniWebApp';
+    const TB_COLLI = process.env.AIRTABLE_TABLE_COLLI
+                  || process.env.AIRTABLE_TABLE_SPED_COLLI
+                  || process.env.TB_COLLI
+                  || 'SPED_COLLI';
+    assertEnv({ pat, baseId, table: TB_COLLI });
 
-    const apiBase = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`;
+    const api = (t)=>`https://api.airtable.com/v0/${baseId}/${encodeURIComponent(t)}`;
     const headers = { Authorization: `Bearer ${pat}` };
 
+    /* A) prova a leggere dal record spedizione l’elenco dei linked record dei colli */
+    let linkedIds = [];
+    try{
+      const r = await fetch(`${api(TB_SPED)}/${encodeURIComponent(id)}`, { headers });
+      if (r.ok){
+        const rec = await r.json();
+        const f = rec?.fields || {};
+        // preferisci chiavi che contengono "coll"
+        const entries = Object.entries(f);
+        const candidates = entries
+          .filter(([k,v]) => Array.isArray(v) && v.every(x=>typeof x==='string' && x.startsWith('rec')))
+          .sort((a,b) => (/(coll|coli|collo)/i.test(b[0])?1:0) - (/(coll|coli|collo)/i.test(a[0])?1:0));
+        if (candidates.length) linkedIds = candidates[0][1];
+      }
+    }catch{ /* ignora */ }
+
+    // Se ho gli ID, prendo quei record in TB_COLLI con OR(RECORD_ID()="...")
+    if (linkedIds && linkedIds.length){
+      const rows = await fetchColliByIds(api(TB_COLLI), headers, linkedIds);
+      return res.status(200).json({ ok:true, rows: normalizeRows(rows) });
+    }
+
+    /* B) fallback: cerca nel table COLLI per link “alla vecchia” */
     // 1) tentativi con vari nomi campo (case-sensitive)
     const candidateFieldNames = [
-      process.env.AIRTABLE_COLLI_LINK_FIELD,  // <-- se lo imposti giusto, vince subito
-      'Spedizione',
-      'SPEDIZIONE',
-      'Spedizioni',
-      'Shipment',
-      'Sped',
-      'Spedizione (link)'
+      process.env.AIRTABLE_COLLI_LINK_FIELD,
+      'Spedizione','SPEDIZIONE','Spedizioni','Shipment','Sped','Spedizione (link)'
     ].filter(Boolean);
 
     for (const field of candidateFieldNames){
       const formula = `FIND("${id}", ARRAYJOIN({${field}} & ""))`;
-      const url = `${apiBase}?${new URLSearchParams({ filterByFormula: formula, pageSize:'100' })}`;
+      const url = `${api(TB_COLLI)}?${new URLSearchParams({ filterByFormula: formula, pageSize:'100' })}`;
       const r = await fetch(url, { headers });
-      if (r.status === 422) continue; // campo inesistente, prova il prossimo
+      if (r.status === 422) continue; // campo inesistente, prova la successiva
       if (!r.ok){
         const t = await r.text().catch(()=> '');
-        // errori reali upstream → propaga
         return res.status(r.status).json({ error:'Airtable error', details:t });
       }
       const json = await r.json();
-      const rows = normalizeRows(json.records || []);
-      return res.status(200).json({ ok:true, rows });
+      return res.status(200).json({ ok:true, rows: normalizeRows(json.records || []) });
     }
 
-    // 2) fallback: scarica e filtra lato Node (indipendente dal nome campo)
-    const rowsAll = await listAll(apiBase, headers);
-    const mine = rowsAll.filter(rec => hasLinkedId(rec.fields || {}, id));
-    const rows = normalizeRows(mine);
-    return res.status(200).json({ ok:true, rows });
+    // 2) ultimo fallback: scarica tutto e filtra lato Node sugli array di recID
+    const all = await listAll(`${api(TB_COLLI)}?pageSize=100`, headers);
+    const mine = all.filter(r => hasLinkedId(r.fields||{}, id));
+    return res.status(200).json({ ok:true, rows: normalizeRows(mine) });
 
   }catch(e){
     console.error('[GET colli] error', e);
@@ -60,6 +78,23 @@ export default async function handler(req, res){
 }
 
 /* ───── helpers ───── */
+
+async function fetchColliByIds(apiBase, headers, ids){
+  const out = [];
+  const chunk = (arr,n)=>arr.length<=n?[arr]:arr.reduce((a,_,i)=>i%n? a : [...a, arr.slice(i,i+n)],[]);
+  for (const group of chunk(ids, 15)){ // Airtable tollera formule OR con ~20 condizioni; stiamo larghi
+    const or = `OR(${group.map(x=>`RECORD_ID()="${x}"`).join(',')})`;
+    const url = `${apiBase}?${new URLSearchParams({ filterByFormula: or, pageSize:'50' })}`;
+    const r = await fetch(url, { headers });
+    if (!r.ok){
+      const t = await r.text().catch(()=> '');
+      throw new Error(`Airtable ${r.status}: ${t}`);
+    }
+    const j = await r.json();
+    out.push(...(j.records||[]));
+  }
+  return out;
+}
 
 function normalizeRows(recs){
   const toNum = (v)=> (v==null||v==='') ? null : Number(String(v).replace(',','.')) || null;
@@ -75,29 +110,25 @@ function normalizeRows(recs){
   });
 }
 
-async function listAll(apiBase, headers){
+async function listAll(url, headers){
   const out = [];
-  let url = `${apiBase}?${new URLSearchParams({ pageSize:'100' })}`;
-  for(let i=0;i<10;i++){ // limite sicurezza
+  for(let i=0;i<20;i++){
     const r = await fetch(url, { headers });
-    if (!r.ok) {
+    if (!r.ok){
       const t = await r.text().catch(()=> '');
       throw new Error(`Airtable ${r.status}: ${t}`);
     }
-    const json = await r.json();
-    out.push(...(json.records || []));
-    if (!json.offset) break;
-    url = `${apiBase}?${new URLSearchParams({ pageSize:'100', offset: json.offset })}`;
+    const j = await r.json();
+    out.push(...(j.records||[]));
+    if (!j.offset) break;
+    const u = new URL(url); u.searchParams.set('offset', j.offset); url = u.toString();
   }
   return out;
 }
 
 function hasLinkedId(fields, id){
-  // true se QUALSIASI campo è un array che contiene l'id (tipico dei linked records)
   for (const v of Object.values(fields)){
-    if (Array.isArray(v) && v.some(x => typeof x === 'string' && x.startsWith('rec'))) {
-      if (v.includes(id)) return true;
-    }
+    if (Array.isArray(v) && v.length && v.every(x=>typeof x==='string' && x.startsWith('rec')) && v.includes(id)) return true;
   }
   return false;
 }
