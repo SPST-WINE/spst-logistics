@@ -1,7 +1,8 @@
 // /api/airtable/spedizioni/[id].js
 // PATCH /api/airtable/spedizioni/:id
 // Body accettati:
-//   { fields:{...} }  oppure  { carrier, tracking, statoEvasa, docs:{ chiaveUI:url } }
+//   { fields:{...} }
+//   { carrier, tracking, stato, statoEvasa, docs:{ chiaveUI:url } }
 
 export default async function handler(req, res){
   if (req.method === 'OPTIONS') return sendCORS(req, res);
@@ -14,33 +15,38 @@ export default async function handler(req, res){
 
     const pat    = process.env.AIRTABLE_PAT;
     const baseId = process.env.AIRTABLE_BASE_ID;
-    const table  = process.env.AIRTABLE_TABLE || 'SPEDIZIONI';
+    const table  = process.env.USE_NEW_SHIPMENTS_TABLE
+      ? (process.env.TB_SPEDIZIONI_WEBAPP || 'SpedizioniWebApp')
+      : (process.env.AIRTABLE_TABLE || 'SPEDIZIONI');
     assertEnv({ pat, baseId, table });
 
     const bodyRaw = await readJson(req);
     const fields  = { ...(bodyRaw.fields || {}) };
 
-    // ---- mapping alto livello → campi Airtable ----
-    // Tracking
+    // ---- Tracking number ----
     if (typeof bodyRaw.tracking === 'string' && bodyRaw.tracking.trim()){
       fields['Tracking Number'] = bodyRaw.tracking.trim();
     }
 
-    // Corriere (single select): accetta stringa o oggetto {name}, normalizza sinonimi
+    // ---- Corriere ----
     const rawCarrier = typeof bodyRaw.carrier !== 'undefined'
       ? bodyRaw.carrier
       : undefined;
     if (typeof rawCarrier !== 'undefined'){
-      const norm = normalizeCarrier(rawCarrier); // sempre stringa
+      const norm = normalizeCarrier(rawCarrier);
       if (norm) fields['Corriere'] = norm;
     }
 
-    // Stato evasa (checkbox)
-    if (typeof bodyRaw.statoEvasa === 'boolean'){
-      fields['Stato Spedizione'] = !!bodyRaw.statoEvasa;
+    // ---- Stato spedizione ----
+    if (typeof bodyRaw.stato === 'string' && bodyRaw.stato.trim()) {
+      fields['Stato'] = bodyRaw.stato.trim();
+      delete fields['Stato Spedizione'];
+    } else if (typeof bodyRaw.statoEvasa === 'boolean') {
+      fields['Stato'] = bodyRaw.statoEvasa ? 'Evasa' : 'Nuova';
+      delete fields['Stato Spedizione'];
     }
 
-    // Documenti (attachments + links) dalla tua mappatura
+    // ---- Documenti ----
     if (bodyRaw.docs && typeof bodyRaw.docs === 'object'){
       Object.assign(fields, mapDocsToAirtable(bodyRaw.docs));
     }
@@ -49,23 +55,20 @@ export default async function handler(req, res){
       return res.status(400).json({ error: 'No fields to update' });
     }
 
-    // ---- PATCH verso Airtable con propagazione status (niente 500 “fasulli”) ----
     const { status, ok, data } = await airtablePatch({ baseId, table, id, pat, fields });
 
     if (!ok){
-      // log sintetico lato server per diagnosi (senza token)
       console.warn('[PATCH spedizione] Airtable error', status, data);
     }
 
     res.status(status).json(data);
   }catch(e){
     console.error('[PATCH spedizione] unexpected error', e);
-    // errore di rete / eccezioni non-Airtable
     res.status(502).json({ error:'Upstream error', details: String(e?.message || e) });
   }
 }
 
-/* ───────── helpers (CORS sicuro, fetch, utils) ───────── */
+/* ───────── helpers ───────── */
 
 function sendCORS(req,res){
   const origin = req.headers.origin || '';
@@ -105,7 +108,6 @@ async function readJson(req){
   try{ return JSON.parse(raw||'{}'); }catch{ return {}; }
 }
 
-// --- Normalizza "Corriere" single select ---
 function normalizeCarrier(input){
   if (input == null) return '';
   let s = input;
@@ -124,11 +126,9 @@ function normalizeCarrier(input){
     poste:'Poste', posteitaliane:'Poste',
     altro:'Altro', other:'Altro'
   };
-  return map[k] || s; // se è già “giusto”, lo lascia intatto
+  return map[k] || s;
 }
 
-// Patch “trasparente”: non lancia eccezioni su 4xx/5xx Airtable,
-// ma restituisce {status, ok, data}
 async function airtablePatch({ baseId, table, id, pat, fields }){
   const url = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}/${encodeURIComponent(id)}`;
   const r = await fetch(url, {
@@ -144,20 +144,41 @@ async function airtablePatch({ baseId, table, id, pat, fields }){
 
 function mapDocsToAirtable(docs){
   const out = {};
-  const ATT = {
+  if (!docs || typeof docs !== 'object') return out;
+
+  const LEGACY_ATT = {
     'Lettera_di_Vettura': 'Lettera di Vettura',
     'Fattura_Proforma': 'Fattura Proforma',
     'Dichiarazione_Esportazione': 'Dichiarazione Esportazione',
     'Packing_List': 'Packing List',
     'FDA_Prior_Notice': 'Prior Notice'
   };
-  const LINKS = {
+  const LEGACY_LINKS = {
     'Fattura_Commerciale': 'Fattura Commerciale Caricata',
     'Fattura_Proforma_Caricata': 'Fattura Proforma Caricata'
   };
-  for (const [k,url] of Object.entries(docs||{})){
-    if (ATT[k] && url) out[ATT[k]] = [{ url: String(url) }];
-    else if (LINKS[k] && url) out[LINKS[k]] = String(url);
+
+  const NEW_ATT = {
+    'LDV': 'Allegato LDV',
+    'Fattura': 'Allegato Fattura',
+    'DLE': 'Allegato DLE',
+    'PL': 'Allegato PL',
+    'Allegato1': 'Allegato 1',
+    'Allegato2': 'Allegato 2',
+    'Allegato3': 'Allegato 3',
+  };
+
+  const NEW_CLIENT = {
+    'Fattura_Client': 'Fattura - Allegato Cliente',
+    'Packing_Client': 'Packing List - Allegato Cliente',
+  };
+
+  for (const [k, url] of Object.entries(docs)) {
+    if (!url) continue;
+    if (NEW_ATT[k]) out[NEW_ATT[k]] = [{ url: String(url) }];
+    else if (NEW_CLIENT[k]) out[NEW_CLIENT[k]] = [{ url: String(url) }];
+    else if (LEGACY_ATT[k]) out[LEGACY_ATT[k]] = [{ url: String(url) }];
+    else if (LEGACY_LINKS[k]) out[LEGACY_LINKS[k]] = String(url);
   }
   return out;
 }
