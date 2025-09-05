@@ -24,7 +24,6 @@ function mapDocs(fields) {
     return '';
   };
   return {
-    // nomi attesi da computeRequiredDocs/render
     Lettera_di_Vettura: getAttUrl('Allegato LDV') || getAttUrl('Lettera di Vettura'),
     Fattura_Commerciale: getAttUrl('Allegato Fattura') || getAttUrl('Fattura Commerciale Caricata'),
     Fattura_Proforma: getAttUrl('Fattura Proforma') || '',
@@ -38,8 +37,7 @@ function mapDocs(fields) {
 }
 
 function mapColliFallback(fields) {
-  // Solo se non hai già colli strutturati dal backend; parse grezza da "Lista Colli"
-  const lista = pick(fields, 'Lista Colli') || '';
+  const lista = pick(fields, 'Lista Colli Ordinata', 'Lista Colli') || '';
   if (!lista) return [];
   return String(lista).split(/[;|\n]+/).map((s) => {
     const m = String(s).match(/(\d+)\D+(\d+)\D+(\d+).+?(\d+(?:[\.,]\d+)?)/);
@@ -56,7 +54,7 @@ function badgeFor(stato) {
   return 'yellow';
 }
 
-export function normalizeShipmentRecord(rec /* { id, fields } di Airtable */) {
+export function normalizeShipmentRecord(rec) {
   const f = rec.fields || {};
 
   const idSped = pick(f, 'ID Spedizione') || rec.id;
@@ -86,7 +84,7 @@ export function normalizeShipmentRecord(rec /* { id, fields } di Airtable */) {
 
   const ritiroData = pick(f, 'Ritiro - Data', 'Data Ritiro');
   const incoterm = pick(f, 'Incoterm');
-  const tipoSped = pick(f, 'Sottotipo', 'Tipo Spedizione'); // B2B/B2C/Sample
+  const tipoSped = pick(f, 'Sottotipo', 'Tipo Spedizione');
   const trackingNum = pick(f, 'Tracking Number');
   const trackingUrlField = pick(f, 'Tracking URL');
   const carrier = pick(f, 'Corriere');
@@ -95,7 +93,6 @@ export function normalizeShipmentRecord(rec /* { id, fields } di Airtable */) {
   const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
 
   return {
-    // chiavi usate dalla UI
     id: idSped,
     cliente: dest_rs || mitt_rs || '(sconosciuto)',
     email,
@@ -104,7 +101,6 @@ export function normalizeShipmentRecord(rec /* { id, fields } di Airtable */) {
     incoterm: incoterm || '-',
     tipo_spedizione: tipoSped || '-',
 
-    // mittente
     mittente_paese: mitt_paese,
     mittente_citta: mitt_citta,
     mittente_cap: mitt_cap,
@@ -113,7 +109,6 @@ export function normalizeShipmentRecord(rec /* { id, fields } di Airtable */) {
     piva_mittente: mitt_piva,
     mittente_eori: pick(f, 'Mittente EORI'),
 
-    // destinatario
     dest_paese: dest_paese,
     dest_citta: dest_citta,
     dest_cap: dest_cap,
@@ -121,23 +116,20 @@ export function normalizeShipmentRecord(rec /* { id, fields } di Airtable */) {
     dest_telefono: dest_tel,
     dest_eori: pick(f, 'Codice EORI Destinatario Fattura', 'Destinatario EORI'),
 
-    // tracking
     tracking_carrier: carrier,
     tracking_number: trackingNum,
     tracking_url: trackingUrlField,
 
-    // stato
     stato,
     _badgeClass: badgeFor(stato),
 
-    // liste
     colli,
     docs,
   };
 }
 
 /* ──────────────────────────────────────────────────────────────
-   RENDER UI (immutato, usa i campi normalizzati sopra)
+   RENDER UI
    ────────────────────────────────────────────────────────────── */
 
 function renderLabelPanel(rec){
@@ -187,19 +179,13 @@ function renderPrintGrid(rec){
     ['Destinatario – Indirizzo', rec.dest_indirizzo],
     ['Destinatario – Telefono', rec.dest_telefono],
     ['Destinatario – EORI', rec.dest_eori],
-    ['Colli (lista)', (rec.colli&&rec.colli.length)? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${c.kg}kg`).join(' ; ') : '—']
+    ['Colli (lista)', (rec.colli&&rec.colli.length)? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ') : '—']
   ];
   return `<div class="print-grid">${fields.map(([k,v])=>`<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`).join('')}</div>`;
 }
 
 export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
-  // 🔑 Normalizza i record prima del rendering
-  const normalized = (data || []).map((rec) => {
-    // se arriva già come {id, fields} (Airtable), normalizza
-    if (rec && rec.fields) return normalizeShipmentRecord(rec);
-    // se è già nel formato UI, lascialo com'è
-    return rec;
-  });
+  const normalized = (data || []).map((rec) => rec && rec.fields ? normalizeShipmentRecord(rec) : rec);
 
   const elList = document.getElementById('list');
   elList.innerHTML = '';
