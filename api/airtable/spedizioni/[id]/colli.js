@@ -1,4 +1,4 @@
-// api/airtable/spedizioni/[id]/colli.js
+// /api/airtable/spedizioni/[id]/colli.js
 
 export default async function handler(req, res){
   if (req.method === 'OPTIONS') return sendCORS(req, res);
@@ -9,55 +9,64 @@ export default async function handler(req, res){
     const id = (req.query.id || '').toString();
     if(!id) return res.status(400).json({ error:'Missing record id' });
 
-    const pat    = process.env.AIRTABLE_PAT;
+    // ✅ env compatibili col tuo setup
+    const pat    = process.env.AIRTABLE_PAT || process.env.AIRTABLE_TOKEN;
     const baseId = process.env.AIRTABLE_BASE_ID;
-    // tabelle
-    const TB_SPED = process.env.AIRTABLE_TABLE_SPEDIZIONI_WEBAPP
-                 || process.env.AIRTABLE_TABLE
-                 || 'SpedizioniWebApp';
-    const TB_COLLI = process.env.AIRTABLE_TABLE_COLLI
-                  || process.env.AIRTABLE_TABLE_SPED_COLLI
-                  || process.env.TB_COLLI
-                  || 'SPED_COLLI';
+
+    const TB_SPED =
+      process.env.TB_SPEDIZIONI_WEBAPP ||
+      process.env.AIRTABLE_TABLE_SPEDIZIONI_WEBAPP ||
+      process.env.AIRTABLE_TABLE ||
+      'SpedizioniWebApp';
+
+    const TB_COLLI =
+      process.env.TB_SPED_COLLI ||
+      process.env.AIRTABLE_TABLE_SPED_COLLI ||
+      process.env.AIRTABLE_TABLE_COLLI ||
+      process.env.TB_COLLI ||
+      'SPED_COLLI';
+
     assertEnv({ pat, baseId, table: TB_COLLI });
 
     const api = (t)=>`https://api.airtable.com/v0/${baseId}/${encodeURIComponent(t)}`;
     const headers = { Authorization: `Bearer ${pat}` };
 
-    /* A) prova a leggere dal record spedizione l’elenco dei linked record dei colli */
+    /* A) prova a leggere gli ID dei colli direttamente dal record spedizione */
     let linkedIds = [];
     try{
       const r = await fetch(`${api(TB_SPED)}/${encodeURIComponent(id)}`, { headers });
       if (r.ok){
         const rec = await r.json();
         const f = rec?.fields || {};
-        // preferisci chiavi che contengono "coll"
-        const entries = Object.entries(f);
-        const candidates = entries
-          .filter(([k,v]) => Array.isArray(v) && v.every(x=>typeof x==='string' && x.startsWith('rec')))
-          .sort((a,b) => (/(coll|coli|collo)/i.test(b[0])?1:0) - (/(coll|coli|collo)/i.test(a[0])?1:0));
-        if (candidates.length) linkedIds = candidates[0][1];
+        // se esiste un campo link "COLLI" usalo subito, altrimenti prendi il primo array di recId che sembri legato ai colli
+        const preferred = f['COLLI'];
+        if (Array.isArray(preferred) && preferred.every(x=>typeof x==='string' && x.startsWith('rec'))){
+          linkedIds = preferred;
+        } else {
+          const candidates = Object.entries(f)
+            .filter(([k,v]) => Array.isArray(v) && v.every(x=>typeof x==='string' && x.startsWith('rec')))
+            .sort((a,b) => (/(coll|coli|collo)/i.test(b[0])?1:0) - (/(coll|coli|collo)/i.test(a[0])?1:0));
+          if (candidates.length) linkedIds = candidates[0][1];
+        }
       }
-    }catch{ /* ignora */ }
+    }catch{/* ignore */}
 
-    // Se ho gli ID, prendo quei record in TB_COLLI con OR(RECORD_ID()="...")
-    if (linkedIds && linkedIds.length){
+    if (linkedIds.length){
       const rows = await fetchColliByIds(api(TB_COLLI), headers, linkedIds);
       return res.status(200).json({ ok:true, rows: normalizeRows(rows) });
     }
 
-    /* B) fallback: cerca nel table COLLI per link “alla vecchia” */
-    // 1) tentativi con vari nomi campo (case-sensitive)
+    /* B) fallback: cerca in TB_COLLI filtrando per link testo/array */
     const candidateFieldNames = [
-      process.env.AIRTABLE_COLLI_LINK_FIELD,
-      'Spedizione','SPEDIZIONE','Spedizioni','Shipment','Sped','Spedizione (link)'
+      process.env.AIRTABLE_COLLI_LINK_FIELD, // se specificato a env, è prioritario
+      'Spedizione','SPEDIZIONE','Spedizioni','Shipment','Sped'
     ].filter(Boolean);
 
     for (const field of candidateFieldNames){
       const formula = `FIND("${id}", ARRAYJOIN({${field}} & ""))`;
       const url = `${api(TB_COLLI)}?${new URLSearchParams({ filterByFormula: formula, pageSize:'100' })}`;
       const r = await fetch(url, { headers });
-      if (r.status === 422) continue; // campo inesistente, prova la successiva
+      if (r.status === 422) continue; // il campo non esiste in questa base
       if (!r.ok){
         const t = await r.text().catch(()=> '');
         return res.status(r.status).json({ error:'Airtable error', details:t });
@@ -66,7 +75,7 @@ export default async function handler(req, res){
       return res.status(200).json({ ok:true, rows: normalizeRows(json.records || []) });
     }
 
-    // 2) ultimo fallback: scarica tutto e filtra lato Node sugli array di recID
+    // C) ultimo fallback: lista tutto e filtra lato Node sugli array di recId
     const all = await listAll(`${api(TB_COLLI)}?pageSize=100`, headers);
     const mine = all.filter(r => hasLinkedId(r.fields||{}, id));
     return res.status(200).json({ ok:true, rows: normalizeRows(mine) });
@@ -82,7 +91,7 @@ export default async function handler(req, res){
 async function fetchColliByIds(apiBase, headers, ids){
   const out = [];
   const chunk = (arr,n)=>arr.length<=n?[arr]:arr.reduce((a,_,i)=>i%n? a : [...a, arr.slice(i,i+n)],[]);
-  for (const group of chunk(ids, 15)){ // Airtable tollera formule OR con ~20 condizioni; stiamo larghi
+  for (const group of chunk(ids, 15)){
     const or = `OR(${group.map(x=>`RECORD_ID()="${x}"`).join(',')})`;
     const url = `${apiBase}?${new URLSearchParams({ filterByFormula: or, pageSize:'50' })}`;
     const r = await fetch(url, { headers });
