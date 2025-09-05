@@ -33,10 +33,20 @@ async function loadData(){
   }
 }
 
+// ...imports invariati...
+
+function ritiroDateOf(item){
+  if (item && item.fields){
+    return item.fields['Ritiro - Data'] || item.fields['Data Ritiro'] || (item.createdTime ? item.createdTime.slice(0,10) : '');
+  }
+  return item?.ritiro_data || '';
+}
+
 function applyFilters(){
-  const out = [...DATA].sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
+  const out = [...DATA].sort((a,b)=> dateTs(ritiroDateOf(b)) - dateTs(ritiroDateOf(a)));
   renderList(out, { onUploadForDoc, onSaveTracking, onComplete });
 }
+
 
 /* ───────── actions ───────── */
 async function onUploadForDoc(e, rec, docName){
