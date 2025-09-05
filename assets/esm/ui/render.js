@@ -1,22 +1,23 @@
-aimport { TEMPLATES, CARRIERS } from '../config.js';
-import { toKg } from '../utils/misc.js';
+// assets/esm/ui/render.js
+import { TEMPLATES, CARRIERS } from '../config.js';
+import { toKg, trackingUrl } from '../utils/misc.js';
 import { totalPesoKg } from '../utils/weights.js';
 import { labelInfoFor } from '../rules/labels.js';
 import { computeRequiredDocs } from '../rules/docs.js';
-import { trackingUrl } from '../utils/misc.js';
-import { fetchColliFor } from '../airtable/api.js'; // <-- usa il proxy /colli se presente
+import { fetchColliFor } from '../airtable/api.js';
 
 /* ──────────────────────────────────────────────────────────────
-   PICK “LOOSE”: gestisce -/–, spazi e case-insensitive
+   Helpers: pick “loose” + mapping
    ────────────────────────────────────────────────────────────── */
 
 function normKey(s){
   return String(s || '')
-    .replace(/[–—]/g, '-')       // en/em dash -> hyphen
-    .replace(/\s+/g, ' ')        // collassa spazi
+    .replace(/[–—]/g, '-')      // en/em dash → hyphen
+    .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
 }
+
 function pickLoose(fields, ...names){
   if (!fields) return undefined;
   const map = new Map(Object.keys(fields).map(k => [normKey(k), k]));
@@ -27,16 +28,12 @@ function pickLoose(fields, ...names){
       if (v !== '' && v != null) return v;
     }
   }
-  // fallback: exact (per sicurezza)
+  // fallback exact
   for (const n of names){
     if (n in fields && fields[n] !== '' && fields[n] != null) return fields[n];
   }
   return undefined;
 }
-
-/* ──────────────────────────────────────────────────────────────
-   DOCS MAPPING (nuovo + legacy)
-   ────────────────────────────────────────────────────────────── */
 
 function mapDocs(fields) {
   const getAttUrl = (k) => {
@@ -52,15 +49,10 @@ function mapDocs(fields) {
     Dichiarazione_Esportazione: getAttUrl('Allegato DLE') || getAttUrl('Dichiarazione Esportazione'),
     Packing_List: getAttUrl('Allegato PL') || getAttUrl('Packing List'),
     FDA_Prior_Notice: getAttUrl('Prior Notice') || '',
-    // allegati cliente (nuovi)
     Fattura_Client: getAttUrl('Fattura - Allegato Cliente'),
     Packing_Client: getAttUrl('Packing List - Allegato Cliente'),
   };
 }
-
-/* ──────────────────────────────────────────────────────────────
-   COLLI FALLBACK (solo se manca endpoint /colli)
-   ────────────────────────────────────────────────────────────── */
 
 function mapColliFallback(fields) {
   const lista = pickLoose(fields, 'Lista Colli Ordinata', 'Lista Colli', 'Contenuto Colli') || '';
@@ -81,7 +73,7 @@ function badgeFor(stato) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   NORMALIZZAZIONE RECORD
+   Normalizzazione record Airtable → shape UI
    ────────────────────────────────────────────────────────────── */
 
 export function normalizeShipmentRecord(rec) {
@@ -90,27 +82,27 @@ export function normalizeShipmentRecord(rec) {
   const idSped    = pickLoose(f, 'ID Spedizione') || rec.id;
   const email     = pickLoose(f, 'Creato da', 'Creato da email', 'Mail Cliente');
 
-  // Mittente (copriamo sia “-” sia “–”, maiuscole/minuscole)
-  const mitt_paese     = pickLoose(f, 'Mittente - Paese', 'Mittente – Paese', 'Paese Mittente');
-  const mitt_citta     = pickLoose(f, 'Mittente - Città', 'Mittente – Città', 'Città Mittente');
-  const mitt_cap       = pickLoose(f, 'Mittente - CAP', 'Mittente – CAP', 'CAP Mittente');
-  const mitt_indir     = pickLoose(f, 'Mittente - Indirizzo', 'Mittente – Indirizzo', 'Indirizzo Mittente');
-  const mitt_tel       = pickLoose(f, 'Mittente - Telefono', 'Mittente – Telefono', 'Telefono Mittente');
-  const mitt_piva      = pickLoose(f, 'Mittente - P.IVA/CF', 'Mittente – P.IVA/CF', 'PIVA Mittente');
-  const mitt_rs        = pickLoose(f, 'Mittente - Ragione sociale', 'Mittente – Ragione sociale', 'Mittente – ragione sociale', 'Mittente');
+  // Mittente
+  const mitt_paese = pickLoose(f, 'Mittente - Paese', 'Mittente – Paese', 'Paese Mittente');
+  const mitt_citta = pickLoose(f, 'Mittente - Città', 'Mittente – Città', 'Città Mittente');
+  const mitt_cap   = pickLoose(f, 'Mittente - CAP', 'Mittente – CAP', 'CAP Mittente');
+  const mitt_indir = pickLoose(f, 'Mittente - Indirizzo', 'Mittente – Indirizzo', 'Indirizzo Mittente');
+  const mitt_tel   = pickLoose(f, 'Mittente - Telefono', 'Mittente – Telefono', 'Telefono Mittente');
+  const mitt_piva  = pickLoose(f, 'Mittente - P.IVA/CF', 'Mittente – P.IVA/CF', 'PIVA Mittente');
+  const mitt_rs    = pickLoose(f, 'Mittente - Ragione sociale', 'Mittente – Ragione sociale', 'Mittente – ragione sociale', 'Mittente');
 
   // Destinatario
-  const dest_paese     = pickLoose(f, 'Destinatario - Paese', 'Destinatario – Paese', 'Paese Destinatario');
-  const dest_citta     = pickLoose(f, 'Destinatario - Città', 'Destinatario – Città', 'Città Destinatario');
-  const dest_cap       = pickLoose(f, 'Destinatario - CAP', 'Destinatario – CAP', 'CAP Destinatario');
-  const dest_indir     = pickLoose(f, 'Destinatario - Indirizzo', 'Destinatario – Indirizzo', 'Indirizzo Destinatario');
-  const dest_tel       = pickLoose(f, 'Destinatario - Telefono', 'Destinatario – Telefono', 'Telefono Destinatario');
-  const dest_rs        = pickLoose(f, 'Destinatario - Ragione sociale', 'Destinatario – Ragione sociale', 'Destinatario – ragione sociale', 'Destinatario');
+  const dest_paese = pickLoose(f, 'Destinatario - Paese', 'Destinatario – Paese', 'Paese Destinatario');
+  const dest_citta = pickLoose(f, 'Destinatario - Città', 'Destinatario – Città', 'Città Destinatario');
+  const dest_cap   = pickLoose(f, 'Destinatario - CAP', 'Destinatario – CAP', 'CAP Destinatario');
+  const dest_indir = pickLoose(f, 'Destinatario - Indirizzo', 'Destinatario – Indirizzo', 'Indirizzo Destinatario');
+  const dest_tel   = pickLoose(f, 'Destinatario - Telefono', 'Destinatario – Telefono', 'Telefono Destinatario');
+  const dest_rs    = pickLoose(f, 'Destinatario - Ragione sociale', 'Destinatario – Ragione sociale', 'Destinatario – ragione sociale', 'Destinatario');
 
   // Stato nuovo / legacy
-  const statoNew       = pickLoose(f, 'Stato');
-  const statoLegacyEv  = !!pickLoose(f, 'Stato Spedizione');
-  const stato          = statoNew || (statoLegacyEv ? 'Evasa' : 'Nuova');
+  const statoNew      = pickLoose(f, 'Stato');
+  const statoLegacyEv = !!pickLoose(f, 'Stato Spedizione');
+  const stato         = statoNew || (statoLegacyEv ? 'Evasa' : 'Nuova');
 
   const ritiroData     = pickLoose(f, 'Ritiro - Data', 'Ritiro – Data', 'Data Ritiro');
   const incoterm       = pickLoose(f, 'Incoterm');
@@ -128,19 +120,19 @@ export function normalizeShipmentRecord(rec) {
   const docs  = mapDocs(f);
   const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
 
-  // LOG diagnostico (solo per il primo record della pagina)
+  // Log una volta per aiutare debugging alias
   if (!window.__BO_DEBUG_ONCE__) {
     window.__BO_DEBUG_ONCE__ = true;
     console.group('[BO] Debug primo record');
     console.debug('Keys Airtable:', Object.keys(f));
-    console.debug('RagioneSociale dest:', dest_rs, 'mitt:', mitt_rs);
+    console.debug('Cliente (dest|mitt):', dest_rs || mitt_rs);
     console.debug('Stato:', stato, 'Ritiro:', ritiroData, 'Carrier:', carrier, 'TN:', trackingNum);
-    console.debug('Colli (dal record):', colli);
+    console.debug('Colli (inline):', colli);
     console.groupEnd();
   }
 
   return {
-    _recId: rec.id, // serve per PATCH e lazy colli
+    _recId: rec.id,
     id: idSped,
     cliente: dest_rs || mitt_rs || '(sconosciuto)',
     email,
@@ -182,35 +174,81 @@ export function normalizeShipmentRecord(rec) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   RENDER UI
+   UI blocks
+   ────────────────────────────────────────────────────────────── */
+
+function renderLabelPanel(rec){
+  const info = labelInfoFor(rec);
+  return `
+    <div class="label-panel">
+      <div class="label-title">${info.title}</div>
+      <div class="label-items">${info.must.map(m=>`<span class="label-badge">${m}</span>`).join('')}</div>
+      ${info.extra.length? `<div class="label-note">Note: ${info.extra.join(' • ')}</div>`:''}
+    </div>
+  `;
+}
+
+function renderTrackingBlock(rec){
+  const carrierId = `${rec.id}-carrier`;
+  const tnId = `${rec.id}-tn`;
+  const url = trackingUrl(rec.tracking_carrier, rec.tracking_number) || rec.tracking_url || '#';
+  return `
+    <div class="track" id="${rec.id}-track">
+      <span class="small" style="opacity:.9">Tracking</span>
+      <select id="${carrierId}" aria-label="Corriere">
+        <option value="">— Corriere —</option>
+        ${CARRIERS.map(c=>`<option value="${c}" ${rec.tracking_carrier===c? 'selected':''}>${c}</option>`).join('')}
+      </select>
+      <input id="${tnId}" type="text" placeholder="Numero tracking" value="${rec.tracking_number||''}">
+      <button class="mini-btn save-tracking" data-carrier="${carrierId}" data-tn="${tnId}">Salva tracking</button>
+      <span class="small link">${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>` : ''}</span>
+    </div>
+  `;
+}
+
+function renderPrintGrid(rec){
+  const fields = [
+    ['ID spedizione', rec.id],
+    ['Cliente', rec.cliente],
+    ['Email cliente', rec.email],
+    ['Data ritiro', rec.ritiro_data],
+    ['Incoterm', rec.incoterm],
+    ['Tipo spedizione', rec.tipo_spedizione],
+    ['Peso reale (tot.)', toKg(totalPesoKg(rec))],
+    ['Mittente – Paese/Città (CAP)', `${rec.mittente_paese||'-'} • ${rec.mittente_citta||'-'} ${rec.mittente_cap?('('+rec.mittente_cap+')'):''}`],
+    ['Mittente – Indirizzo', rec.mittente_indirizzo],
+    ['Mittente – Telefono', rec.mittente_telefono],
+    ['Mittente – P.IVA', rec.piva_mittente],
+    ['Mittente – EORI', rec.mittente_eori],
+    ['Destinatario – Paese/Città (CAP)', `${rec.dest_paese||'-'} • ${rec.dest_citta||'-'} ${rec.dest_cap?('('+rec.dest_cap+')'):''}`],
+    ['Destinatario – Indirizzo', rec.dest_indirizzo],
+    ['Destinatario – Telefono', rec.dest_telefono],
+    ['Destinatario – EORI', rec.dest_eori],
+    ['Colli (lista)', (rec.colli&&rec.colli.length)? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ') : '—']
+  ];
+  return `<div class="print-grid">${fields.map(([k,v])=>`<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`).join('')}</div>`;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Render list
    ────────────────────────────────────────────────────────────── */
 
 function ensureListContainer() {
-  // prova #list
   let el = document.getElementById('list');
   if (el) return el;
-
-  // prova contenitore tab spedizioni
   const host = document.getElementById('view-spedizioni') || document.body;
   el = document.createElement('div');
   el.id = 'list';
   host.appendChild(el);
-
   console.warn('[BO] #list non trovato: creato dinamicamente dentro #view-spedizioni');
   return el;
 }
 
 export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
-  // Se arrivano già adattati (adapter), li uso; se arrivano grezzi {id,fields}, li normalizzo qui
   const normalized = (data || []).map((rec) => rec && rec.fields ? normalizeShipmentRecord(rec) : rec);
 
   const elList = ensureListContainer();
-  try {
-    elList.innerHTML = '';
-  } catch (e) {
-    console.error('[BO] impossibile scrivere in #list', e);
-    return;
-  }
+  try { elList.innerHTML = ''; } catch (e) { console.error('[BO] impossibile scrivere in #list', e); return; }
 
   console.debug('[BO] renderList — items:', normalized.length);
 
@@ -225,7 +263,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
 
     const card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = /* …tutto il markup identico a prima… */ `
+    card.innerHTML = `
       <div class="row spaced">
         <h3>${rec.id} — ${rec.cliente}</h3>
         <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
@@ -240,7 +278,8 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
         <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
         <div class="k">Lista colli</div>
-        <div class="bo-colli-holder">${(rec.colli&&rec.colli.length)?`
+        <div class="bo-colli-holder">
+          ${(rec.colli&&rec.colli.length)?`
           <table class="colli">
             <thead><tr><th>Dim. (L×W×H cm)</th><th>Peso reale</th></tr></thead>
             <tbody>
@@ -252,6 +291,34 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
 
       <div class="hr"></div>
 
+      <div class="small" style="margin:4px 0 6px 0"><strong>Documenti necessari per spedire in ${country} (${tipo})</strong>: ${required.join(', ').replaceAll('_',' ')}</div>
+      <div class="small" style="opacity:.9; margin-bottom:8px"><em>ATTENZIONE:</em> il destinatario deve necessariamente avere un permesso/abilitazione all'importazione nel Paese di riferimento.</div>
+
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <div class="small" style="margin-bottom:6px">Checklist documenti <span class="badge ${missing.length? 'yellow':'green'}" style="margin-left:8px">${missing.length?`mancano ${missing.length}`:'completa'}</span></div>
+        <div class="row" style="gap:8px">
+          <button class="btn ghost toggle-labels">Verifica etichette</button>
+          <button class="btn ghost toggle-details">Espandi record</button>
+        </div>
+      </div>
+
+      <div class="docs">
+        ${required.map(name=>{
+          const ok = rec.docs && !!rec.docs[name];
+          const cls = ok ? 'ok' : 'missing';
+          const templateLink = TEMPLATES[name] ? `<a href="${TEMPLATES[name]}" target="_blank">template</a>` : '';
+          const openLink = ok ? `<a href="${rec.docs[name]}" target="_blank">apri</a>` : '';
+          const inputId = `${rec.id}-${name}-input`;
+          return `<div class="doc ${cls}">
+              <strong>${name.replaceAll('_',' ')}</strong>
+              ${[openLink, templateLink].filter(Boolean).length? ' · ' + [openLink, templateLink].filter(Boolean).join(' · ') : ''}
+              · <button class="mini-btn upload-doc" data-doc="${name}" data-input="${inputId}">Carica</button>
+              <input id="${inputId}" type="file" class="hidden per-doc-upload" accept=".pdf,.png,.jpg,.jpeg" data-doc="${name}">
+            </div>`;
+        }).join('')}
+      </div>
+      ${notes.length? `<div class="small" style="margin-top:6px; color:#c7cfdf">Note: ${notes.join(' ')}</div>`: ''}
+
       ${renderLabelPanel(rec)}
       ${renderTrackingBlock(rec)}
       <div class="details">${renderPrintGrid(rec)}</div>
@@ -261,7 +328,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       </div>
     `;
 
-    // 🔹 Lazy-load colli, ora cerca il holder in modo esplicito
+    // Lazy-load colli se non presenti
     (async ()=>{
       try{
         if (!rec.colli || !rec.colli.length) {
@@ -287,20 +354,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       }
     })();
 
-    // …(listeners upload, complete, toggle, tracking) restano identici…
-
-    try {
-      elList.appendChild(card);
-    } catch (e) {
-      console.error('[BO] append card fallito', e);
-    }
-
-    console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, colli: rec.colli?.length||0 });
-  });
-}
-
-
-    // Upload per-doc
+    // Upload per doc
     card.querySelectorAll('.upload-doc').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const input = card.querySelector(`#${btn.dataset.input}`);
@@ -312,31 +366,43 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
     });
 
     // Complete
-    card.querySelector('.complete').addEventListener('click', ()=>onComplete(rec));
+    const completeBtn = card.querySelector('.complete');
+    if (completeBtn) completeBtn.addEventListener('click', ()=>onComplete(rec));
 
     // Toggle dettagli
     const btnToggle = card.querySelector('.toggle-details');
     const details = card.querySelector('.details');
-    btnToggle.addEventListener('click', ()=>{
-      details.classList.toggle('show');
-      btnToggle.textContent = details.classList.contains('show') ? 'Comprimi record' : 'Espandi record';
-    });
+    if (btnToggle && details){
+      btnToggle.addEventListener('click', ()=>{
+        details.classList.toggle('show');
+        btnToggle.textContent = details.classList.contains('show') ? 'Comprimi record' : 'Espandi record';
+      });
+    }
 
     // Toggle etichette
     const btnLabels = card.querySelector('.toggle-labels');
     const labelPanel = card.querySelector('.label-panel');
-    btnLabels.addEventListener('click', ()=>{
-      labelPanel.classList.toggle('show');
-      btnLabels.textContent = labelPanel.classList.contains('show') ? 'Nascondi etichette' : 'Verifica etichette';
-    });
+    if (btnLabels && labelPanel){
+      btnLabels.addEventListener('click', ()=>{
+        labelPanel.classList.toggle('show');
+        btnLabels.textContent = labelPanel.classList.contains('show') ? 'Nascondi etichette' : 'Verifica etichette';
+      });
+    }
 
     // Salva tracking
     const saveBtn = card.querySelector('.save-tracking');
-    const carrierSel = card.querySelector('#'+saveBtn.dataset.carrier);
-    const tnInput = card.querySelector('#'+saveBtn.dataset.tn);
-    saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel.value, tnInput.value));
+    if (saveBtn){
+      const carrierSel = card.querySelector('#'+saveBtn.dataset.carrier);
+      const tnInput = card.querySelector('#'+saveBtn.dataset.tn);
+      saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
+    }
 
-    // Log sintetico della card
-    console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, dest_rs: rec.dest_paese && (rec.dest_paese+' / '+rec.dest_citta), colli: rec.colli?.length||0 });
+    try {
+      elList.appendChild(card);
+    } catch (e) {
+      console.error('[BO] append card fallito', e);
+    }
+
+    console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, colli: rec.colli?.length||0 });
   });
 }
