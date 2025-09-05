@@ -109,6 +109,7 @@ export function normalizeShipmentRecord(rec) {
   const tipoSped       = pickLoose(f, 'Sottotipo', 'Tipo Spedizione'); // B2B | B2C | Sample
   const trackingNum    = pickLoose(f, 'Tracking Number');
   const trackingUrlFld = pickLoose(f, 'Tracking URL');
+  const pesoTot = Number(pickLoose(f, 'Peso reale tot', 'Peso Reale tot', 'Peso reale (tot)', 'Peso tariffato tot') || 0);
   const carrier        = (function(){
     const c = pickLoose(f, 'Corriere');
     if (!c) return null;
@@ -168,6 +169,7 @@ export function normalizeShipmentRecord(rec) {
     _badgeClass: badgeFor(stato),
 
     // liste
+    _peso_tot_kg: pesoTot,
     colli,
     docs,
   };
@@ -214,7 +216,7 @@ function renderPrintGrid(rec){
     ['Data ritiro', rec.ritiro_data],
     ['Incoterm', rec.incoterm],
     ['Tipo spedizione', rec.tipo_spedizione],
-    ['Peso reale (tot.)', toKg(totalPesoKg(rec))],
+    ['Peso reale (tot.)', toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))],
     ['Mittente – Paese/Città (CAP)', `${rec.mittente_paese||'-'} • ${rec.mittente_citta||'-'} ${rec.mittente_cap?('('+rec.mittente_cap+')'):''}`],
     ['Mittente – Indirizzo', rec.mittente_indirizzo],
     ['Mittente – Telefono', rec.mittente_telefono],
