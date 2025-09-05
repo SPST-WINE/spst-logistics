@@ -9,9 +9,10 @@ export const TB_PREVENTIVI = process.env.TB_PREVENTIVI || "Preventivi";
 export const TB_OPZIONI    = process.env.TB_OPZIONI    || "OpzioniPreventivo";
 
 // 🚚 Nuove tabelle per spedizioni WebApp
-export const TB_SPED_WEBAPP = process.env.TB_SPEDIZIONI_WEBAPP || "SpedizioniWebApp";
-export const TB_SPED_COLLI  = process.env.TB_SPED_COLLI        || "SPED_COLLI";
-export const TB_SPED_PL     = process.env.TB_SPED_PL           || "SPED_PL";
+// 👇 Alias di compatibilità: se il codice altrove usa ancora TB_SPEDIZIONI, lo reindirizziamo
+export const TB_SPEDIZIONI_WEBAPP = process.env.TB_SPEDIZIONI_WEBAPP || "SpedizioniWebApp";
+export const TB_SPEDIZIONI = process.env.USE_NEW_SHIPMENTS_TABLE ? TB_SPEDIZIONI_WEBAPP : "SPEDIZIONI";
+
 
 export function apiUrl(table) {
   return `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(table)}`;
