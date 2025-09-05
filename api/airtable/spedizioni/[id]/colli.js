@@ -1,76 +1,56 @@
-// /api/airtable/spedizioni/[id]/colli.js
-// GET /api/airtable/spedizioni/:id/colli  → { ok:true, rows:[{L,W,H,kg,qty}], total:number }
+// GET /api/airtable/spedizioni/:id/colli
+// Ritorna { ok:true, rows:[{lunghezza_cm,larghezza_cm,altezza_cm,peso_kg,quantita}] }
 
-export default async function handler(req, res) {
+export default async function handler(req, res){
   if (req.method === 'OPTIONS') return sendCORS(req, res);
   sendCORS(req, res);
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  try {
+  try{
     const id = (req.query.id || '').toString();
-    if (!id) return res.status(400).json({ ok:false, error: 'Missing shipment record id' });
+    if(!id) return res.status(400).json({ error:'Missing record id' });
 
     const pat    = process.env.AIRTABLE_PAT;
     const baseId = process.env.AIRTABLE_BASE_ID;
-    const tbColli = process.env.TB_SPED_COLLI || 'SPED_COLLI';
-    assertEnv({ pat, baseId, tbColli });
+    // nome tabella colli (compat): prima prova con env specifici, poi fallback comuni
+    const table  = process.env.AIRTABLE_TABLE_COLLI
+                || process.env.AIRTABLE_TABLE_SPED_COLLI
+                || process.env.TB_COLLI
+                || 'SPED_COLLI';
+    const linkField = process.env.AIRTABLE_COLLI_LINK_FIELD || 'Spedizione';
+    assertEnv({ pat, baseId, table });
 
-    const baseUrl = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(tbColli)}`;
-    const headers = { Authorization: `Bearer ${pat}` };
+    const apiBase = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`;
+    // Nota: usiamo ARRAYJOIN su linked IDs. È ok per questa semplice API.
+    const formula = `FIND("${id}", ARRAYJOIN({${linkField}} & ""))`;
+    const url = `${apiBase}?${new URLSearchParams({ filterByFormula: formula, pageSize:'100' }).toString()}`;
 
-    // 1) prendiamo i colli (tutti, con paginazione) e filtriAMO in Node sugli ID linkati
-    let offset = '';
-    const all = [];
-    do {
-      const params = new URLSearchParams();
-      params.set('pageSize', '100');
-      if (offset) params.set('offset', offset);
-      // Niente filterByFormula su ARRAYJOIN: filtriamo in Node per robustezza
-      const url = `${baseUrl}?${params.toString()}`;
-      const page = await airtableFetch(url, { headers });
-      (page.records || []).forEach(r => all.push(r));
-      offset = page.offset || '';
-    } while (offset);
-
-    // 2) Filtra colli per Spedizione linkata = id
-    const mine = all.filter(r => {
-      const links = r?.fields?.Spedizione || r?.fields?.['Spedizione'] || [];
-      return Array.isArray(links) && links.includes(id);
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${pat}` } });
+    if (!r.ok){
+      const t = await r.text().catch(()=> '');
+      return res.status(r.status).json({ error:'Airtable error', details:t });
+    }
+    const json = await r.json();
+    const rows = (json.records||[]).map(rec => {
+      const f = rec.fields || {};
+      const num = (v)=> (v==null||v==='') ? null : Number(String(v).replace(',','.')) || null;
+      return {
+        lunghezza_cm: num(f['L_cm'] || f['Lunghezza'] || f['L'] || f['Lunghezza (cm)']),
+        larghezza_cm: num(f['W_cm'] || f['Larghezza'] || f['W'] || f['Larghezza (cm)']),
+        altezza_cm:   num(f['H_cm'] || f['Altezza']   || f['H'] || f['Altezza (cm)']),
+        peso_kg:      num(f['Peso'] || f['Peso_Kg']   || f['Kg'] || f['Peso (kg)']) || 0,
+        quantita:     Number(f['Quantita'] || f['Quantità'] || f['Qty'] || 1) || 1,
+      };
     });
 
-    // 3) Normalizza
-    const rows = mine.map(r => normalizeCollo(r.fields || {}));
-
-    res.status(200).json({ ok: true, rows, total: rows.length });
-  } catch (e) {
+    return res.status(200).json({ ok:true, rows });
+  }catch(e){
     console.error('[GET colli] error', e);
-    res.status(502).json({ ok:false, error: 'Upstream error', details: String(e?.message || e) });
+    return res.status(502).json({ error:'Upstream error', details:String(e?.message||e) });
   }
 }
 
-/* ───────── helpers ───────── */
-
-function normalizeCollo(f) {
-  // Alias robusti: lunghezza/larghezza/altezza cm, peso (kg), quantita
-  const L = num(pick(f, 'Lunghezza (cm)', 'Lunghezza', 'L_cm', 'L', 'Lunghezza_cm'));
-  const W = num(pick(f, 'Larghezza (cm)', 'Larghezza', 'W_cm', 'W', 'Larghezza_cm'));
-  const H = num(pick(f, 'Altezza (cm)', 'Altezza', 'H_cm', 'H', 'Altezza_cm'));
-  const kg = num(pick(f, 'Peso (kg)', 'Peso', 'Kg', 'Peso_Kg', 'Peso_kg'));
-  const qty = int(pick(f, 'Quantità', 'Quantita', 'Qty', 'Qta', 'Qtà')) || 1;
-
-  return {
-    L: isFinite(L) ? L : '-',
-    W: isFinite(W) ? W : '-',
-    H: isFinite(H) ? H : '-',
-    kg: isFinite(kg) ? kg : 0,
-    qty
-  };
-}
-
-function pick(obj, ...keys){ for (const k of keys){ if (k in obj && obj[k] != null && obj[k] !== '') return obj[k]; } }
-function num(v){ const n = Number(String(v).replace(',', '.')); return Number.isFinite(n) ? n : NaN; }
-function int(v){ const n = parseInt(String(v), 10); return Number.isFinite(n) ? n : NaN; }
-
+/* ───── helpers ───── */
 function sendCORS(req,res){
   const origin = req.headers.origin || '';
   const list = (process.env.ORIGIN_ALLOWLIST || '*').split(',').map(s=>s.trim()).filter(Boolean);
@@ -88,22 +68,4 @@ function safeWildcardMatch(input, pattern){
   return new RegExp(rx).test(input);
 }
 function escapeRegex(str){ return str.replace(/[|\\{}()[\]^$+?.]/g, '\\$&'); }
-
-function assertEnv({ pat, baseId, tbColli }){
-  if(!pat) throw new Error('AIRTABLE_PAT missing');
-  if(!baseId) throw new Error('AIRTABLE_BASE_ID missing');
-  if(!tbColli) throw new Error('TB_SPED_COLLI missing');
-}
-
-async function airtableFetch(url, init = {}, tries = 3, backoff = 500){
-  for(let i=0;i<tries;i++){
-    const r = await fetch(url, init);
-    if (r.ok) return r.json();
-    const body = await r.text().catch(()=> '');
-    if ([429,500,502,503,504].includes(r.status) && i<tries-1){
-      await new Promise(rs=>setTimeout(rs, backoff*Math.pow(2,i)));
-      continue;
-    }
-    throw new Error(`Airtable ${r.status}: ${body}`);
-  }
-}
+function assertEnv({ pat, baseId, table }){ if(!pat) throw new Error('AIRTABLE_PAT missing'); if(!baseId) throw new Error('AIRTABLE_BASE_ID missing'); if(!table) throw new Error('AIRTABLE_TABLE missing'); }
