@@ -1,3 +1,4 @@
+// assets/esm/airtable/api.js
 import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
 import { airtableRecordToRec } from './adapter.js';
 import { showBanner, toast } from '../utils/dom.js';
@@ -17,20 +18,30 @@ export async function fetchShipments({q='',status='all',onlyOpen=false}={}){
   const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({q: q.trim(), status, onlyOpen})}`;
   try{
     const res = await fetch(url, FETCH_OPTS);
-    if(!res.ok){ const text = await res.text().catch(()=> ''); throw new Error(`Proxy ${res.status}: ${text.slice(0,180)}`); }
+    if(!res.ok){
+      const text = await res.text().catch(()=> '');
+      throw new Error(`Proxy ${res.status}: ${text.slice(0,180)}`);
+    }
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
+    // Torniamo il formato UI legacy (adapter), render.js sa gestire sia questo
+    // che {id,fields} grezzo (nuovo normalizzatore).
     return records.map(airtableRecordToRec);
   }catch(err){
     console.error('[fetchShipments] failed, uso MOCK', { url, err });
-    showBanner(`Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). <span class="small">Dettagli: ${String(err.message||err)}</span>`);
+    showBanner(
+      `Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). ` +
+      `<span class="small">Dettagli: ${String(err.message||err)}</span>`
+    );
     return [];
   }
 }
 
 export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEvasa, docs}){
-  const id = (typeof recOrId === 'string') ? recOrId : (recOrId? (recOrId._airId||recOrId._recId||recOrId.recordId||recOrId.id) : '');
+  const id = (typeof recOrId === 'string')
+    ? recOrId
+    : (recOrId ? (recOrId._airId||recOrId._recId||recOrId.recordId||recOrId.id) : '');
   if(!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
@@ -95,21 +106,9 @@ export async function uploadAttachment(recordId, docName, file){
   return { url: json.url };
 }
 
-export async function fetchColliFor(shipmentRecId){
-  if(!shipmentRecId) return [];
-  const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(shipmentRecId)}/colli`;
-  try{
-    const res = await fetch(url, FETCH_OPTS);
-    if(!res.ok){ const t = await res.text().catch(()=> ''); throw new Error(`Proxy ${res.status}: ${t.slice(0,180)}`); }
-    const json = await res.json();
-    return Array.isArray(json.rows) ? json.rows : [];
-  }catch(err){
-    console.error('[fetchColliFor] failed', err);
-    return [];
-  }
-}
-
-// --- NEW: fetch colli di una spedizione dal proxy ---
+/* ──────────────────────────────────────────────────────────────
+   NEW: colli per spedizione (proxy /spedizioni/:id/colli)
+   ────────────────────────────────────────────────────────────── */
 export async function fetchColliFor(recordId){
   try{
     if(!recordId) return [];
@@ -149,4 +148,3 @@ export async function fetchColliFor(recordId){
     return [];
   }
 }
-
