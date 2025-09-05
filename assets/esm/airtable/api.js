@@ -109,3 +109,44 @@ export async function fetchColliFor(shipmentRecId){
   }
 }
 
+// --- NEW: fetch colli di una spedizione dal proxy ---
+export async function fetchColliFor(recordId){
+  try{
+    if(!recordId) return [];
+    const base = AIRTABLE?.proxyBase || '';
+    if(!base){
+      console.warn('[fetchColliFor] proxyBase mancante, ritorno []');
+      return [];
+    }
+    const url = `${base}/spedizioni/${encodeURIComponent(recordId)}/colli`;
+
+    const res = await fetch(url, FETCH_OPTS);
+    if(!res.ok){
+      const t = await res.text().catch(()=> '');
+      console.warn('[fetchColliFor] HTTP', res.status, t.slice(0,180));
+      return [];
+    }
+
+    const json = await res.json().catch(()=> ({}));
+    const rows = Array.isArray(json?.rows) ? json.rows : (Array.isArray(json) ? json : []);
+    // Normalizzazione → [{L,W,H,kg}] (replica per Quantita se presente)
+    const toNum = (v)=> (v==null||v==='') ? null : Number(String(v).replace(',','.')) || null;
+
+    const out = [];
+    for (const r of rows){
+      const L = toNum(r.lunghezza_cm ?? r.L ?? r.l1_cm);
+      const W = toNum(r.larghezza_cm ?? r.W ?? r.l2_cm);
+      const H = toNum(r.altezza_cm   ?? r.H ?? r.l3_cm);
+      const kg= toNum(r.peso_kg      ?? r.kg ?? r.Peso ?? r['Peso (kg)']) || 0;
+      const q = Math.max(1, Number(r.quantita ?? r.qty ?? r.Quantita ?? 1));
+      for (let i=0;i<q;i++){
+        out.push({ L: L ?? '-', W: W ?? '-', H: H ?? '-', kg });
+      }
+    }
+    return out;
+  }catch(e){
+    console.warn('[fetchColliFor] errore', e);
+    return [];
+  }
+}
+
