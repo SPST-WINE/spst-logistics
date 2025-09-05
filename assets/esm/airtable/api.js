@@ -1,6 +1,7 @@
 // assets/esm/airtable/api.js
 import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
-import { airtableRecordToRec } from './adapter.js';
+// ⛔️ rimuoviamo l'adapter legacy: il render normalizza già i record grezzi
+// import { airtableRecordToRec } from './adapter.js';
 import { showBanner, toast } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
@@ -25,11 +26,11 @@ export async function fetchShipments({q='',status='all',onlyOpen=false}={}){
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    // Torniamo il formato UI legacy (adapter), render.js sa gestire sia questo
-    // che {id,fields} grezzo (nuovo normalizzatore).
-    return records.map(airtableRecordToRec);
+    // ✅ RITORNIAMO i record grezzi di Airtable ({id, fields, createdTime...})
+    // Il normalizzatore moderno vive in assets/esm/ui/render.js
+    return records;
   }catch(err){
-    console.error('[fetchShipments] failed, uso MOCK', { url, err });
+    console.error('[fetchShipments] failed', { url, err });
     showBanner(
       `Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). ` +
       `<span class="small">Dettagli: ${String(err.message||err)}</span>`
@@ -107,7 +108,7 @@ export async function uploadAttachment(recordId, docName, file){
 }
 
 /* ──────────────────────────────────────────────────────────────
-   NEW: colli per spedizione (proxy /spedizioni/:id/colli)
+   Colli per spedizione (proxy /spedizioni/:id/colli)
    ────────────────────────────────────────────────────────────── */
 export async function fetchColliFor(recordId){
   try{
@@ -128,7 +129,6 @@ export async function fetchColliFor(recordId){
 
     const json = await res.json().catch(()=> ({}));
     const rows = Array.isArray(json?.rows) ? json.rows : (Array.isArray(json) ? json : []);
-    // Normalizzazione → [{L,W,H,kg}] (replica per Quantita se presente)
     const toNum = (v)=> (v==null||v==='') ? null : Number(String(v).replace(',','.')) || null;
 
     const out = [];
