@@ -94,3 +94,18 @@ export async function uploadAttachment(recordId, docName, file){
   if (!json || !json.url) throw new Error('Upload: URL non ricevuta dal proxy');
   return { url: json.url };
 }
+
+export async function fetchColliFor(shipmentRecId){
+  if(!shipmentRecId) return [];
+  const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(shipmentRecId)}/colli`;
+  try{
+    const res = await fetch(url, FETCH_OPTS);
+    if(!res.ok){ const t = await res.text().catch(()=> ''); throw new Error(`Proxy ${res.status}: ${t.slice(0,180)}`); }
+    const json = await res.json();
+    return Array.isArray(json.rows) ? json.rows : [];
+  }catch(err){
+    console.error('[fetchColliFor] failed', err);
+    return [];
+  }
+}
+
