@@ -5,6 +5,141 @@ import { labelInfoFor } from '../rules/labels.js';
 import { computeRequiredDocs } from '../rules/docs.js';
 import { trackingUrl } from '../utils/misc.js';
 
+/* ──────────────────────────────────────────────────────────────
+   ADAPTER: normalizza record Airtable (nuovo/legacy) → UI shape
+   ────────────────────────────────────────────────────────────── */
+
+function pick(fields, ...names) {
+  for (const n of names) {
+    if (n in fields && fields[n] != null && fields[n] !== '') return fields[n];
+  }
+  return undefined;
+}
+
+function mapDocs(fields) {
+  const getAttUrl = (k) => {
+    const v = fields[k];
+    if (Array.isArray(v) && v.length && v[0]?.url) return v[0].url;
+    if (typeof v === 'string' && v) return v; // legacy link
+    return '';
+  };
+  return {
+    // nomi attesi da computeRequiredDocs/render
+    Lettera_di_Vettura: getAttUrl('Allegato LDV') || getAttUrl('Lettera di Vettura'),
+    Fattura_Commerciale: getAttUrl('Allegato Fattura') || getAttUrl('Fattura Commerciale Caricata'),
+    Fattura_Proforma: getAttUrl('Fattura Proforma') || '',
+    Dichiarazione_Esportazione: getAttUrl('Allegato DLE') || getAttUrl('Dichiarazione Esportazione'),
+    Packing_List: getAttUrl('Allegato PL') || getAttUrl('Packing List'),
+    FDA_Prior_Notice: getAttUrl('Prior Notice') || '',
+    // allegati cliente (nuovi)
+    Fattura_Client: getAttUrl('Fattura - Allegato Cliente'),
+    Packing_Client: getAttUrl('Packing List - Allegato Cliente'),
+  };
+}
+
+function mapColliFallback(fields) {
+  // Solo se non hai già colli strutturati dal backend; parse grezza da "Lista Colli"
+  const lista = pick(fields, 'Lista Colli') || '';
+  if (!lista) return [];
+  return String(lista).split(/[;|\n]+/).map((s) => {
+    const m = String(s).match(/(\d+)\D+(\d+)\D+(\d+).+?(\d+(?:[\.,]\d+)?)/);
+    if (!m) return { L: '-', W: '-', H: '-', kg: 0 };
+    return { L: m[1], W: m[2], H: m[3], kg: Number(String(m[4]).replace(',', '.')) || 0 };
+  });
+}
+
+function badgeFor(stato) {
+  if (!stato) return 'gray';
+  const s = String(stato).toLowerCase();
+  if (s === 'pronta alla spedizione' || s === 'evasa') return 'green';
+  if (s === 'nuova') return 'gray';
+  return 'yellow';
+}
+
+export function normalizeShipmentRecord(rec /* { id, fields } di Airtable */) {
+  const f = rec.fields || {};
+
+  const idSped = pick(f, 'ID Spedizione') || rec.id;
+  const email = pick(f, 'Creato da', 'Mail Cliente');
+
+  // Mittente
+  const mitt_paese = pick(f, 'Mittente - Paese', 'Paese Mittente');
+  const mitt_citta = pick(f, 'Mittente - Città', 'Città Mittente');
+  const mitt_cap = pick(f, 'Mittente - CAP', 'CAP Mittente');
+  const mitt_indir = pick(f, 'Mittente - Indirizzo', 'Indirizzo Mittente');
+  const mitt_tel = pick(f, 'Mittente - Telefono', 'Telefono Mittente');
+  const mitt_piva = pick(f, 'Mittente - P.IVA/CF', 'PIVA Mittente');
+  const mitt_rs = pick(f, 'Mittente - Ragione sociale', 'Mittente');
+
+  // Destinatario
+  const dest_paese = pick(f, 'Destinatario - Paese', 'Paese Destinatario');
+  const dest_citta = pick(f, 'Destinatario - Città', 'Città Destinatario');
+  const dest_cap = pick(f, 'Destinatario - CAP', 'CAP Destinatario');
+  const dest_indir = pick(f, 'Destinatario - Indirizzo', 'Indirizzo Destinatario');
+  const dest_tel = pick(f, 'Destinatario - Telefono', 'Telefono Destinatario');
+  const dest_rs = pick(f, 'Destinatario - Ragione sociale', 'Destinatario');
+
+  // Stato nuovo (single select) + compat legacy
+  const statoNew = pick(f, 'Stato');
+  const statoLegacyEv = !!pick(f, 'Stato Spedizione');
+  const stato = statoNew || (statoLegacyEv ? 'Evasa' : 'Nuova');
+
+  const ritiroData = pick(f, 'Ritiro - Data', 'Data Ritiro');
+  const incoterm = pick(f, 'Incoterm');
+  const tipoSped = pick(f, 'Sottotipo', 'Tipo Spedizione'); // B2B/B2C/Sample
+  const trackingNum = pick(f, 'Tracking Number');
+  const trackingUrlField = pick(f, 'Tracking URL');
+  const carrier = pick(f, 'Corriere');
+
+  const docs = mapDocs(f);
+  const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
+
+  return {
+    // chiavi usate dalla UI
+    id: idSped,
+    cliente: dest_rs || mitt_rs || '(sconosciuto)',
+    email,
+
+    ritiro_data: ritiroData || '-',
+    incoterm: incoterm || '-',
+    tipo_spedizione: tipoSped || '-',
+
+    // mittente
+    mittente_paese: mitt_paese,
+    mittente_citta: mitt_citta,
+    mittente_cap: mitt_cap,
+    mittente_indirizzo: mitt_indir,
+    mittente_telefono: mitt_tel,
+    piva_mittente: mitt_piva,
+    mittente_eori: pick(f, 'Mittente EORI'),
+
+    // destinatario
+    dest_paese: dest_paese,
+    dest_citta: dest_citta,
+    dest_cap: dest_cap,
+    dest_indirizzo: dest_indir,
+    dest_telefono: dest_tel,
+    dest_eori: pick(f, 'Codice EORI Destinatario Fattura', 'Destinatario EORI'),
+
+    // tracking
+    tracking_carrier: carrier,
+    tracking_number: trackingNum,
+    tracking_url: trackingUrlField,
+
+    // stato
+    stato,
+    _badgeClass: badgeFor(stato),
+
+    // liste
+    colli,
+    docs,
+  };
+}
+
+/* ──────────────────────────────────────────────────────────────
+   RENDER UI (immutato, usa i campi normalizzati sopra)
+   ────────────────────────────────────────────────────────────── */
+
 function renderLabelPanel(rec){
   const info = labelInfoFor(rec);
   return `
@@ -19,7 +154,7 @@ function renderLabelPanel(rec){
 function renderTrackingBlock(rec){
   const carrierId = `${rec.id}-carrier`;
   const tnId = `${rec.id}-tn`;
-  const url = trackingUrl(rec.tracking_carrier, rec.tracking_number);
+  const url = trackingUrl(rec.tracking_carrier, rec.tracking_number) || rec.tracking_url || '#';
   return `
     <div class="track" id="${rec.id}-track">
       <span class="small" style="opacity:.9">Tracking</span>
@@ -58,20 +193,28 @@ function renderPrintGrid(rec){
 }
 
 export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
+  // 🔑 Normalizza i record prima del rendering
+  const normalized = (data || []).map((rec) => {
+    // se arriva già come {id, fields} (Airtable), normalizza
+    if (rec && rec.fields) return normalizeShipmentRecord(rec);
+    // se è già nel formato UI, lascialo com'è
+    return rec;
+  });
+
   const elList = document.getElementById('list');
   elList.innerHTML = '';
-  if (!data.length){ elList.innerHTML = '<div class="small" style="opacity:.8">Nessun risultato</div>'; return; }
+  if (!normalized.length){ elList.innerHTML = '<div class="small" style="opacity:.8">Nessun risultato</div>'; return; }
 
-  data.forEach(rec=>{
+  normalized.forEach(rec=>{
     const {required, missing, notes, country, tipo} = computeRequiredDocs(rec);
-    const badgeClass = rec.stato === 'Pronta alla spedizione' ? 'green' : (rec.stato === 'Nuova' ? 'gray' : 'yellow');
+    const badgeClass = rec._badgeClass || (rec.stato === 'Nuova' ? 'gray' : 'yellow');
 
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
       <div class="row spaced">
         <h3>${rec.id} — ${rec.cliente}</h3>
-        <span class="badge ${badgeClass}">${rec.stato}</span>
+        <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
       </div>
       <div class="kv">
         <div class="k">Email cliente</div><div>${rec.email||'-'}</div>
@@ -79,7 +222,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Indirizzo partenza</div><div>${rec.mittente_indirizzo||'-'}</div>
         <div class="k">Arrivo</div><div>${(rec.dest_paese||rec.paese||'-')} • ${(rec.dest_citta||rec.citta||'-')} ${(rec.dest_cap?('('+rec.dest_cap+')'):'')}</div>
         <div class="k">Indirizzo destinazione</div><div>${rec.dest_indirizzo||'-'}</div>
-        <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione}</div>
+        <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
         <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
         <div class="k">Lista colli</div>
@@ -133,7 +276,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       </div>
     `;
 
-    // Upload per-doc (mock UI)
+    // Upload per-doc
     card.querySelectorAll('.upload-doc').forEach(btn=>{
       btn.addEventListener('click', ()=>{
         const input = card.querySelector(`#${btn.dataset.input}`);
@@ -172,4 +315,3 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
     elList.appendChild(card);
   });
 }
-
