@@ -4,23 +4,45 @@ import { totalPesoKg } from '../utils/weights.js';
 import { labelInfoFor } from '../rules/labels.js';
 import { computeRequiredDocs } from '../rules/docs.js';
 import { trackingUrl } from '../utils/misc.js';
+import { fetchColliFor } from '../airtable/api.js'; // <-- usa il proxy /colli se presente
 
 /* ──────────────────────────────────────────────────────────────
-   ADAPTER: normalizza record Airtable (nuovo/legacy) → UI shape
+   PICK “LOOSE”: gestisce -/–, spazi e case-insensitive
    ────────────────────────────────────────────────────────────── */
 
-function pick(fields, ...names) {
-  for (const n of names) {
-    if (n in fields && fields[n] != null && fields[n] !== '') return fields[n];
+function normKey(s){
+  return String(s || '')
+    .replace(/[–—]/g, '-')       // en/em dash -> hyphen
+    .replace(/\s+/g, ' ')        // collassa spazi
+    .trim()
+    .toLowerCase();
+}
+function pickLoose(fields, ...names){
+  if (!fields) return undefined;
+  const map = new Map(Object.keys(fields).map(k => [normKey(k), k]));
+  for (const wanted of names){
+    const real = map.get(normKey(wanted));
+    if (real != null) {
+      const v = fields[real];
+      if (v !== '' && v != null) return v;
+    }
+  }
+  // fallback: exact (per sicurezza)
+  for (const n of names){
+    if (n in fields && fields[n] !== '' && fields[n] != null) return fields[n];
   }
   return undefined;
 }
 
+/* ──────────────────────────────────────────────────────────────
+   DOCS MAPPING (nuovo + legacy)
+   ────────────────────────────────────────────────────────────── */
+
 function mapDocs(fields) {
   const getAttUrl = (k) => {
-    const v = fields[k];
+    const v = pickLoose(fields, k);
     if (Array.isArray(v) && v.length && v[0]?.url) return v[0].url;
-    if (typeof v === 'string' && v) return v; // legacy link
+    if (typeof v === 'string' && v) return v;
     return '';
   };
   return {
@@ -36,8 +58,12 @@ function mapDocs(fields) {
   };
 }
 
+/* ──────────────────────────────────────────────────────────────
+   COLLI FALLBACK (solo se manca endpoint /colli)
+   ────────────────────────────────────────────────────────────── */
+
 function mapColliFallback(fields) {
-  const lista = pick(fields, 'Lista Colli Ordinata', 'Lista Colli') || '';
+  const lista = pickLoose(fields, 'Lista Colli Ordinata', 'Lista Colli', 'Contenuto Colli') || '';
   if (!lista) return [];
   return String(lista).split(/[;|\n]+/).map((s) => {
     const m = String(s).match(/(\d+)\D+(\d+)\D+(\d+).+?(\d+(?:[\.,]\d+)?)/);
@@ -49,80 +75,107 @@ function mapColliFallback(fields) {
 function badgeFor(stato) {
   if (!stato) return 'gray';
   const s = String(stato).toLowerCase();
-  if (s === 'pronta alla spedizione' || s === 'evasa') return 'green';
+  if (s === 'pronta alla spedizione' || s === 'evasa' || s === 'in transito' || s === 'consegnata') return 'green';
   if (s === 'nuova') return 'gray';
   return 'yellow';
 }
 
+/* ──────────────────────────────────────────────────────────────
+   NORMALIZZAZIONE RECORD
+   ────────────────────────────────────────────────────────────── */
+
 export function normalizeShipmentRecord(rec) {
   const f = rec.fields || {};
 
-  const idSped = pick(f, 'ID Spedizione') || rec.id;
-  const email = pick(f, 'Creato da', 'Mail Cliente');
+  const idSped    = pickLoose(f, 'ID Spedizione') || rec.id;
+  const email     = pickLoose(f, 'Creato da', 'Creato da email', 'Mail Cliente');
 
-  // Mittente
-  const mitt_paese = pick(f, 'Mittente - Paese', 'Paese Mittente');
-  const mitt_citta = pick(f, 'Mittente - Città', 'Città Mittente');
-  const mitt_cap = pick(f, 'Mittente - CAP', 'CAP Mittente');
-  const mitt_indir = pick(f, 'Mittente - Indirizzo', 'Indirizzo Mittente');
-  const mitt_tel = pick(f, 'Mittente - Telefono', 'Telefono Mittente');
-  const mitt_piva = pick(f, 'Mittente - P.IVA/CF', 'PIVA Mittente');
-  const mitt_rs = pick(f, 'Mittente - Ragione sociale', 'Mittente');
+  // Mittente (copriamo sia “-” sia “–”, maiuscole/minuscole)
+  const mitt_paese     = pickLoose(f, 'Mittente - Paese', 'Mittente – Paese', 'Paese Mittente');
+  const mitt_citta     = pickLoose(f, 'Mittente - Città', 'Mittente – Città', 'Città Mittente');
+  const mitt_cap       = pickLoose(f, 'Mittente - CAP', 'Mittente – CAP', 'CAP Mittente');
+  const mitt_indir     = pickLoose(f, 'Mittente - Indirizzo', 'Mittente – Indirizzo', 'Indirizzo Mittente');
+  const mitt_tel       = pickLoose(f, 'Mittente - Telefono', 'Mittente – Telefono', 'Telefono Mittente');
+  const mitt_piva      = pickLoose(f, 'Mittente - P.IVA/CF', 'Mittente – P.IVA/CF', 'PIVA Mittente');
+  const mitt_rs        = pickLoose(f, 'Mittente - Ragione sociale', 'Mittente – Ragione sociale', 'Mittente – ragione sociale', 'Mittente');
 
   // Destinatario
-  const dest_paese = pick(f, 'Destinatario - Paese', 'Paese Destinatario');
-  const dest_citta = pick(f, 'Destinatario - Città', 'Città Destinatario');
-  const dest_cap = pick(f, 'Destinatario - CAP', 'CAP Destinatario');
-  const dest_indir = pick(f, 'Destinatario - Indirizzo', 'Indirizzo Destinatario');
-  const dest_tel = pick(f, 'Destinatario - Telefono', 'Telefono Destinatario');
-  const dest_rs = pick(f, 'Destinatario - Ragione sociale', 'Destinatario');
+  const dest_paese     = pickLoose(f, 'Destinatario - Paese', 'Destinatario – Paese', 'Paese Destinatario');
+  const dest_citta     = pickLoose(f, 'Destinatario - Città', 'Destinatario – Città', 'Città Destinatario');
+  const dest_cap       = pickLoose(f, 'Destinatario - CAP', 'Destinatario – CAP', 'CAP Destinatario');
+  const dest_indir     = pickLoose(f, 'Destinatario - Indirizzo', 'Destinatario – Indirizzo', 'Indirizzo Destinatario');
+  const dest_tel       = pickLoose(f, 'Destinatario - Telefono', 'Destinatario – Telefono', 'Telefono Destinatario');
+  const dest_rs        = pickLoose(f, 'Destinatario - Ragione sociale', 'Destinatario – Ragione sociale', 'Destinatario – ragione sociale', 'Destinatario');
 
-  // Stato nuovo (single select) + compat legacy
-  const statoNew = pick(f, 'Stato');
-  const statoLegacyEv = !!pick(f, 'Stato Spedizione');
-  const stato = statoNew || (statoLegacyEv ? 'Evasa' : 'Nuova');
+  // Stato nuovo / legacy
+  const statoNew       = pickLoose(f, 'Stato');
+  const statoLegacyEv  = !!pickLoose(f, 'Stato Spedizione');
+  const stato          = statoNew || (statoLegacyEv ? 'Evasa' : 'Nuova');
 
-  const ritiroData = pick(f, 'Ritiro - Data', 'Data Ritiro');
-  const incoterm = pick(f, 'Incoterm');
-  const tipoSped = pick(f, 'Sottotipo', 'Tipo Spedizione');
-  const trackingNum = pick(f, 'Tracking Number');
-  const trackingUrlField = pick(f, 'Tracking URL');
-  const carrier = pick(f, 'Corriere');
+  const ritiroData     = pickLoose(f, 'Ritiro - Data', 'Ritiro – Data', 'Data Ritiro');
+  const incoterm       = pickLoose(f, 'Incoterm');
+  const tipoSped       = pickLoose(f, 'Sottotipo', 'Tipo Spedizione'); // B2B | B2C | Sample
+  const trackingNum    = pickLoose(f, 'Tracking Number');
+  const trackingUrlFld = pickLoose(f, 'Tracking URL');
+  const carrier        = (function(){
+    const c = pickLoose(f, 'Corriere');
+    if (!c) return null;
+    if (typeof c === 'string') return c;
+    if (typeof c === 'object' && c.name) return c.name;
+    return null;
+  })();
 
-  const docs = mapDocs(f);
+  const docs  = mapDocs(f);
   const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
 
+  // LOG diagnostico (solo per il primo record della pagina)
+  if (!window.__BO_DEBUG_ONCE__) {
+    window.__BO_DEBUG_ONCE__ = true;
+    console.group('[BO] Debug primo record');
+    console.debug('Keys Airtable:', Object.keys(f));
+    console.debug('RagioneSociale dest:', dest_rs, 'mitt:', mitt_rs);
+    console.debug('Stato:', stato, 'Ritiro:', ritiroData, 'Carrier:', carrier, 'TN:', trackingNum);
+    console.debug('Colli (dal record):', colli);
+    console.groupEnd();
+  }
+
   return {
+    _recId: rec.id, // serve per PATCH e lazy colli
     id: idSped,
     cliente: dest_rs || mitt_rs || '(sconosciuto)',
     email,
 
     ritiro_data: ritiroData || '-',
     incoterm: incoterm || '-',
-    tipo_spedizione: tipoSped || '-',
+    tipo_spedizione: (String(tipoSped || 'B2B') === 'Sample') ? 'Campionatura' : (tipoSped || 'B2B'),
 
+    // mittente
     mittente_paese: mitt_paese,
     mittente_citta: mitt_citta,
     mittente_cap: mitt_cap,
     mittente_indirizzo: mitt_indir,
     mittente_telefono: mitt_tel,
     piva_mittente: mitt_piva,
-    mittente_eori: pick(f, 'Mittente EORI'),
+    mittente_eori: pickLoose(f, 'Mittente EORI'),
 
+    // destinatario
     dest_paese: dest_paese,
     dest_citta: dest_citta,
     dest_cap: dest_cap,
     dest_indirizzo: dest_indir,
     dest_telefono: dest_tel,
-    dest_eori: pick(f, 'Codice EORI Destinatario Fattura', 'Destinatario EORI'),
+    dest_eori: pickLoose(f, 'Codice EORI Destinatario Fattura', 'Destinatario EORI'),
 
+    // tracking
     tracking_carrier: carrier,
     tracking_number: trackingNum,
-    tracking_url: trackingUrlField,
+    tracking_url: trackingUrlFld,
 
+    // stato
     stato,
     _badgeClass: badgeFor(stato),
 
+    // liste
     colli,
     docs,
   };
@@ -185,6 +238,7 @@ function renderPrintGrid(rec){
 }
 
 export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
+  // Se arrivano già adattati (api/airtable/adapter.js), li uso; se arrivano grezzi {id,fields}, li normalizzo qui
   const normalized = (data || []).map((rec) => rec && rec.fields ? normalizeShipmentRecord(rec) : rec);
 
   const elList = document.getElementById('list');
@@ -262,6 +316,32 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       </div>
     `;
 
+    // ── Lazy load colli se assenti: usa il proxy /colli se disponibile
+    (async ()=>{
+      try{
+        if (!rec.colli || !rec.colli.length) {
+          const holder = card.querySelector('.kv > div:last-child');
+          if (holder) holder.innerHTML = '<span class="small">Carico colli…</span>';
+          const rows = await fetchColliFor(rec._recId || rec.id);
+          if (Array.isArray(rows) && rows.length){
+            const html = `
+              <table class="colli">
+                <thead><tr><th>Dim. (L×W×H cm)</th><th>Peso reale</th></tr></thead>
+                <tbody>
+                  ${rows.map(c=>`<tr><td>${c.L}×${c.W}×${c.H}</td><td>${toKg(c.kg)}</td></tr>`).join('')}
+                </tbody>
+              </table>`;
+            holder.innerHTML = html;
+            rec.colli = rows;
+          } else {
+            holder.innerHTML = '<span class="small">—</span>';
+          }
+        }
+      }catch(err){
+        console.warn('[BO] fetchColliFor error per', rec.id, err);
+      }
+    })();
+
     // Upload per-doc
     card.querySelectorAll('.upload-doc').forEach(btn=>{
       btn.addEventListener('click', ()=>{
@@ -298,6 +378,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
     const tnInput = card.querySelector('#'+saveBtn.dataset.tn);
     saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel.value, tnInput.value));
 
-    elList.appendChild(card);
+    // Log sintetico della card
+    console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, dest_rs: rec.dest_paese && (rec.dest_paese+' / '+rec.dest_citta), colli: rec.colli?.length||0 });
   });
 }
