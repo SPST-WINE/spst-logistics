@@ -238,3 +238,7 @@ a.link-orange:hover{ opacity:.9 }
   0%{ box-shadow:0 0 0 0 rgba(79,124,255,.55) }
   100%{ box-shadow:0 0 0 14px rgba(79,124,255,0) }
 }
+
+/* Rendi la topbar non fissa */
+.bo-header{ position: static; backdrop-filter:none; background: transparent; border-bottom:none; }
+
