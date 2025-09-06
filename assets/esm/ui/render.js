@@ -109,7 +109,7 @@ export function normalizeShipmentRecord(rec) {
   const tipoSped       = pickLoose(f, 'Sottotipo', 'Tipo Spedizione'); // B2B | B2C | Sample
   const trackingNum    = pickLoose(f, 'Tracking Number');
   const trackingUrlFld = pickLoose(f, 'Tracking URL');
-  const pesoTot = Number(pickLoose(f, 'Peso reale tot', 'Peso Reale tot', 'Peso reale (tot)', 'Peso tariffato tot') || 0);
+  const pesoTot        = Number(pickLoose(f, 'Peso reale tot', 'Peso Reale tot', 'Peso reale (tot)', 'Peso tariffato tot') || 0);
   const carrier        = (function(){
     const c = pickLoose(f, 'Corriere');
     if (!c) return null;
@@ -278,7 +278,8 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Indirizzo destinazione</div><div>${rec.dest_indirizzo||'-'}</div>
         <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
-        <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
+-       <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
++       <div class="k">Peso reale</div><div id="wr-${rec.id}">${toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))}</div>
         <div class="k">Lista colli</div>
         <div class="bo-colli-holder">
           ${(rec.colli&&rec.colli.length)?`
@@ -338,15 +339,39 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
           if (holder) holder.innerHTML = '<span class="small">Carico colli…</span>';
           const rows = await fetchColliFor(rec._recId || rec.id);
           if (Array.isArray(rows) && rows.length){
-            const html = `
-              <table class="colli">
-                <thead><tr><th>Dim. (L×W×H cm)</th><th>Peso reale</th></tr></thead>
-                <tbody>
-                  ${rows.map(c=>`<tr><td>${c.L}×${c.W}×${c.H}</td><td>${toKg(c.kg)}</td></tr>`).join('')}
-                </tbody>
-              </table>`;
-            if (holder) holder.innerHTML = html;
-            rec.colli = rows;
+            // espandi per Quantità e calcola il peso totale
+            const expanded = rows.flatMap(r=>{
+              const q = Math.max(1, Number(r.quantita || 1));
+              const L = r.L ?? r.lunghezza_cm ?? '-';
+              const W = r.W ?? r.larghezza_cm ?? '-';
+              const H = r.H ?? r.altezza_cm   ?? '-';
+              const kg = Number(r.kg ?? r.peso_kg ?? 0);
+              return Array.from({length:q}, ()=>({ L, W, H, kg }));
+            });
+            const sumKg = rows.reduce(
+              (tot, r)=> tot + (Number(r.kg ?? r.peso_kg || 0) * Math.max(1, Number(r.quantita||1))),
+              0
+            );
+
+            // aggiorna stato record
+            rec.colli = expanded;
+            rec._peso_tot_kg = sumKg;
+
+            // aggiorna tabella colli
+            if (holder){
+              holder.innerHTML = `
+                <table class="colli">
+                  <thead><tr><th>Dim. (L×W×H cm)</th><th>Peso reale</th></tr></thead>
+                  <tbody>
+                    ${expanded.map(c=>`<tr><td>${c.L}×${c.W}×${c.H}</td><td>${toKg(c.kg)}</td></tr>`).join('')}
+                  </tbody>
+                </table>`;
+            }
+
+            // aggiorna cella "Peso reale"
+            const wr = card.querySelector(`#wr-${rec.id}`);
+            if (wr) wr.textContent = toKg(sumKg);
+
           } else if (holder) {
             holder.innerHTML = '<span class="small">—</span>';
           }
