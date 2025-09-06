@@ -278,8 +278,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Indirizzo destinazione</div><div>${rec.dest_indirizzo||'-'}</div>
         <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
--       <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
-+       <div class="k">Peso reale</div><div id="wr-${rec.id}">${toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))}</div>
+        <div class="k">Peso reale</div><div id="wr-${rec.id}">${toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))}</div>
         <div class="k">Lista colli</div>
         <div class="bo-colli-holder">
           ${(rec.colli&&rec.colli.length)?`
