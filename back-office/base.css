@@ -248,3 +248,27 @@ a.link-orange:hover{ opacity:.9 }
 /* Rendi la topbar non fissa */
 .bo-header{ position: static; backdrop-filter:none; background: transparent; border-bottom:none; }
 
+/* ID pill */
+.id-chip{
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .85rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: #10131a;
+  letter-spacing: .02em;
+  display: inline-block;
+}
+.id-chip--spst{
+  background: var(--warn);          /* arancione SPST già definito */
+  color: #0b1020;                   /* testo scuro per contrasto */
+  border-color: transparent;
+  font-weight: 700;
+}
+/* header titolo pulito */
+.card .title-line{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+.card .dest{ font-weight:600; opacity:.95; }
+
+
