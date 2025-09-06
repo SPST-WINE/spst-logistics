@@ -4,6 +4,7 @@ import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
 import './back-office-tabs.js';
+import './header-compact.js';
 
 
 const elSearch   = document.getElementById('search');
