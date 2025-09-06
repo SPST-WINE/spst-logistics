@@ -227,7 +227,7 @@ function renderPrintGrid(rec){
     ['Mittente – Telefono', rec.mittente_telefono],
     ['Mittente – P.IVA', rec.piva_mittente],
     ['Mittente – EORI', rec.mittente_eori],
-    ['Destinatario – Paese/Città (CAP)', `${rec.dest_paese||'-'} • ${rec.dest_citta||'-'} ${rec.dest_cap?('('+rec.dest_cap+')'):'')}`],
+    ['Destinatario – Paese/Città (CAP)', `${rec.dest_paese||'-'} • ${rec.dest_citta||'-'} ${rec.dest_cap?('('+rec.dest_cap+')'):''}`],
     ['Destinatario – Indirizzo', rec.dest_indirizzo],
     ['Destinatario – Telefono', rec.dest_telefono],
     ['Destinatario – EORI', rec.dest_eori],
@@ -235,6 +235,7 @@ function renderPrintGrid(rec){
   ];
   return `<div class="print-grid">${fields.map(([k,v])=>`<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`).join('')}</div>`;
 }
+
 
 /* ──────────────────────────────────────────────────────────────
    Render list
