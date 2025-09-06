@@ -15,8 +15,8 @@
   --ok:#1fbf75;
   --warn:#ffb020;
   --err:#ff5a65;
-
-  --spst-orange:#FF8A00;            /* brand */
+  --brand-orange: #f7911e;
+  --spst-orange:#f7911e;            /* brand */
   --elev-bg: rgba(19,22,30,.72);     /* header translucido */
 }
 
@@ -259,9 +259,11 @@ a.link-orange:hover{ opacity:.9 }
   letter-spacing: .02em;
   display: inline-block;
 }
+
+/* Chip ID arancione */
 .id-chip--spst{
-  background: var(--warn); /* arancione SPST già definito */
-  color: #0b1020;
+  background: var(--brand-orange) !important;
+  color: #0b1020;          /* testo scuro per contrasto */
   border-color: transparent;
   font-weight: 700;
 }
