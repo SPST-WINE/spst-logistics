@@ -39,10 +39,8 @@ export async function fetchShipments({q='',status='all',onlyOpen=false}={}){
   }
 }
 
-export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEvasa, docs}){
-  const id = (typeof recOrId === 'string')
-    ? recOrId
-    : (recOrId ? (recOrId._airId||recOrId._recId||recOrId.recordId||recOrId.id) : '');
+export async function patchShipmentTracking(recOrId, { carrier, tracking, statoEvasa, docs, fields }){
+  const id = (typeof recOrId === 'string') ? recOrId : (recOrId? (recOrId._airId||recOrId._recId||recOrId.recordId||recOrId.id) : '');
   if(!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
@@ -51,11 +49,12 @@ export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEv
   if (tracking) base.tracking = String(tracking).trim();
   if (typeof statoEvasa === 'boolean') base.statoEvasa = statoEvasa;
   if (docs && typeof docs === 'object') base.docs = docs;
+  if (fields && typeof fields === 'object') base.fields = fields; // 👈 NEW
 
   const attempts = [];
   if (norm) attempts.push({ carrier: norm });
   if (norm) attempts.push({ carrier: { name: norm } });
-  attempts.push({}); // senza carrier (es. solo docs)
+  attempts.push({}); // senza carrier (es. solo docs/fields)
 
   let lastErrTxt = '';
   for (const extra of attempts){
@@ -77,9 +76,9 @@ export async function patchShipmentTracking(recOrId, {carrier, tracking, statoEv
       if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(lastErrTxt)) throw e;
     }
   }
-  toast('Errore: il campo Corriere è Single Select. Usa una delle opzioni disponibili.');
   throw new Error('PATCH failed (tentativi esauriti): '+lastErrTxt);
 }
+
 
 /**
  * Carica un file sullo storage del proxy (Vercel Blob) e ritorna una URL pubblica.
