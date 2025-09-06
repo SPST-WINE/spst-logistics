@@ -4,10 +4,10 @@ import { toKg, trackingUrl } from '../utils/misc.js';
 import { totalPesoKg } from '../utils/weights.js';
 import { labelInfoFor } from '../rules/labels.js';
 import { computeRequiredDocs } from '../rules/docs.js';
-import { fetchColliFor, patchShipmentTracking } from '../airtable/api.js';
+import { fetchColliFor } from '../airtable/api.js';
 
 /* ──────────────────────────────────────────────────────────────
-   Helpers
+   Helpers: pick “loose” + mapping
    ────────────────────────────────────────────────────────────── */
 
 function normKey(s){
@@ -28,6 +28,7 @@ function pickLoose(fields, ...names){
       if (v !== '' && v != null) return v;
     }
   }
+  // fallback exact
   for (const n of names){
     if (n in fields && fields[n] !== '' && fields[n] != null) return fields[n];
   }
@@ -89,7 +90,6 @@ export function normalizeShipmentRecord(rec) {
   const mitt_tel   = pickLoose(f, 'Mittente - Telefono', 'Mittente – Telefono', 'Telefono Mittente');
   const mitt_piva  = pickLoose(f, 'Mittente - P.IVA/CF', 'Mittente – P.IVA/CF', 'PIVA Mittente');
   const mitt_rs    = pickLoose(f, 'Mittente - Ragione sociale', 'Mittente – Ragione sociale', 'Mittente – ragione sociale', 'Mittente');
-  const mitt_ref   = pickLoose(f, 'Mittente - Referente', 'Mittente – Referente');
 
   // Destinatario
   const dest_paese = pickLoose(f, 'Destinatario - Paese', 'Destinatario – Paese', 'Paese Destinatario');
@@ -98,17 +98,6 @@ export function normalizeShipmentRecord(rec) {
   const dest_indir = pickLoose(f, 'Destinatario - Indirizzo', 'Destinatario – Indirizzo', 'Indirizzo Destinatario');
   const dest_tel   = pickLoose(f, 'Destinatario - Telefono', 'Destinatario – Telefono', 'Telefono Destinatario');
   const dest_rs    = pickLoose(f, 'Destinatario - Ragione sociale', 'Destinatario – Ragione sociale', 'Destinatario – ragione sociale', 'Destinatario');
-  const dest_ref   = pickLoose(f, 'Destinatario - Referente', 'Destinatario – Referente');
-
-  const dest_pivacf = pickLoose(
-    f,
-    'Destinatario - P.IVA/CF','Destinatario – P.IVA/CF',
-    'FATT - P.IVA/CF','Fatturazione - P.IVA/CF',
-    'Tax ID Destinatario Fattura','Destinatario Tax','TaxID'
-  );
-
-  // Flag abil. import
-  const dest_import = !!pickLoose(f, 'Destinatario abilitato import');
 
   // Stato nuovo / legacy
   const statoNew      = pickLoose(f, 'Stato');
@@ -120,9 +109,8 @@ export function normalizeShipmentRecord(rec) {
   const tipoSped       = pickLoose(f, 'Sottotipo', 'Tipo Spedizione'); // B2B | B2C | Sample
   const trackingNum    = pickLoose(f, 'Tracking Number');
   const trackingUrlFld = pickLoose(f, 'Tracking URL');
-  const pesoTot        = Number(pickLoose(f, 'Peso reale tot', 'Peso Reale tot', 'Peso reale (tot)', 'Peso tariffato tot') || 0);
-
-  const carrier = (function(){
+  const pesoTot = Number(pickLoose(f, 'Peso reale tot', 'Peso Reale tot', 'Peso reale (tot)', 'Peso tariffato tot') || 0);
+  const carrier        = (function(){
     const c = pickLoose(f, 'Corriere');
     if (!c) return null;
     if (typeof c === 'string') return c;
@@ -132,6 +120,17 @@ export function normalizeShipmentRecord(rec) {
 
   const docs  = mapDocs(f);
   const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
+
+  // Log una volta per aiutare debugging alias
+  if (!window.__BO_DEBUG_ONCE__) {
+    window.__BO_DEBUG_ONCE__ = true;
+    console.group('[BO] Debug primo record');
+    console.debug('Keys Airtable:', Object.keys(f));
+    console.debug('Cliente (dest|mitt):', dest_rs || mitt_rs);
+    console.debug('Stato:', stato, 'Ritiro:', ritiroData, 'Carrier:', carrier, 'TN:', trackingNum);
+    console.debug('Colli (inline):', colli);
+    console.groupEnd();
+  }
 
   return {
     _recId: rec.id,
@@ -144,24 +143,21 @@ export function normalizeShipmentRecord(rec) {
     tipo_spedizione: (String(tipoSped || 'B2B') === 'Sample') ? 'Campionatura' : (tipoSped || 'B2B'),
 
     // mittente
-    mittente_nome: mitt_rs,
-    mittente_referente: mitt_ref,
     mittente_paese: mitt_paese,
     mittente_citta: mitt_citta,
     mittente_cap: mitt_cap,
     mittente_indirizzo: mitt_indir,
     mittente_telefono: mitt_tel,
     piva_mittente: mitt_piva,
+    mittente_eori: pickLoose(f, 'Mittente EORI'),
 
     // destinatario
-    destinatario_nome: dest_rs,
-    destinatario_referente: dest_ref,
     dest_paese: dest_paese,
     dest_citta: dest_citta,
     dest_cap: dest_cap,
     dest_indirizzo: dest_indir,
     dest_telefono: dest_tel,
-    destinatario_pivacf: dest_pivacf,
+    dest_eori: pickLoose(f, 'Codice EORI Destinatario Fattura', 'Destinatario EORI'),
 
     // tracking
     tracking_carrier: carrier,
@@ -174,7 +170,6 @@ export function normalizeShipmentRecord(rec) {
 
     // liste
     _peso_tot_kg: pesoTot,
-    dest_abilitato_import: dest_import,
     colli,
     docs,
   };
@@ -209,17 +204,16 @@ function renderTrackingBlock(rec){
       <input id="${tnId}" type="text" placeholder="Numero tracking" value="${rec.tracking_number||''}">
       <button class="mini-btn save-tracking" data-carrier="${carrierId}" data-tn="${tnId}">Salva tracking</button>
       <span class="small link">${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>` : ''}</span>
+
+      <!-- CTA finale sull'allineamento del tracking -->
+      <div style="margin-left:auto; display:flex; gap:8px">
+        <button class="btn complete" data-id="${rec.id}">Evasione completata</button>
+      </div>
     </div>
   `;
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Print grid (Espandi record) — version richiesta
-   ────────────────────────────────────────────────────────────── */
-
 function renderPrintGrid(rec){
-  const pesoTot = rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec);
-
   const fields = [
     ['ID spedizione', rec.id],
     ['Cliente', rec.cliente],
@@ -227,25 +221,18 @@ function renderPrintGrid(rec){
     ['Data ritiro', rec.ritiro_data],
     ['Incoterm', rec.incoterm],
     ['Tipo spedizione', rec.tipo_spedizione],
-    ['Peso reale (tot.)', toKg(pesoTot)],
-
-    // Mittente (NO EORI)
-    ['Mittente', rec.mittente_nome],
-    ['Mittente – Referente', rec.mittente_referente],
+    ['Peso reale (tot.)', toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))],
     ['Mittente – Paese/Città (CAP)', `${rec.mittente_paese||'-'} • ${rec.mittente_citta||'-'} ${rec.mittente_cap?('('+rec.mittente_cap+')'):''}`],
     ['Mittente – Indirizzo', rec.mittente_indirizzo],
     ['Mittente – Telefono', rec.mittente_telefono],
     ['Mittente – P.IVA', rec.piva_mittente],
-
-    // Destinatario (NO EORI)
-    ['Destinatario', rec.destinatario_nome],
-    ['Destinatario – Referente', rec.destinatario_referente],
-    ['Destinatario – Paese/Città (CAP)', `${rec.dest_paese||'-'} • ${rec.dest_citta||'-'} ${rec.dest_cap?('('+rec.dest_cap+')'):''}`],
+    ['Mittente – EORI', rec.mittente_eori],
+    ['Destinatario – Paese/Città (CAP)', `${rec.dest_paese||'-'} • ${rec.dest_citta||'-'} ${rec.dest_cap?('('+rec.dest_cap+')'):'')}`],
     ['Destinatario – Indirizzo', rec.dest_indirizzo],
     ['Destinatario – Telefono', rec.dest_telefono],
-    ['Destinatario – P.IVA/CF', rec.destinatario_pivacf],
+    ['Destinatario – EORI', rec.dest_eori],
+    ['Colli (lista)', (rec.colli&&rec.colli.length)? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ') : '—']
   ];
-
   return `<div class="print-grid">${fields.map(([k,v])=>`<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`).join('')}</div>`;
 }
 
@@ -270,26 +257,24 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
   const elList = ensureListContainer();
   try { elList.innerHTML = ''; } catch (e) { console.error('[BO] impossibile scrivere in #list', e); return; }
 
+  console.debug('[BO] renderList — items:', normalized.length);
+
   if (!normalized.length){
     elList.innerHTML = '<div class="small" style="opacity:.8">Nessun risultato</div>';
     return;
   }
 
   normalized.forEach(rec=>{
-    const {required, missing, notes, country, tipo} = computeRequiredDocs(rec);
+    const {required, /* missing, */ notes, country, tipo} = computeRequiredDocs(rec);
     const badgeClass = rec._badgeClass || (rec.stato === 'Nuova' ? 'gray' : 'yellow');
 
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-       <div class="card-head">
-         <div class="title-line">
-           <span class="id-chip" title="ID spedizione">${rec.id}</span>
-          <span class="dest">${rec.cliente||'—'}</span>
-        </div>
+      <div class="row spaced">
+        <h3>${rec.id} — ${rec.cliente}</h3>
         <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
       </div>
-
       <div class="kv">
         <div class="k">Email cliente</div><div>${rec.email||'-'}</div>
         <div class="k">Partenza</div><div>${(rec.mittente_paese||'-')} • ${(rec.mittente_citta||'-')} ${(rec.mittente_cap?('('+rec.mittente_cap+')'):'')}</div>
@@ -298,16 +283,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Indirizzo destinazione</div><div>${rec.dest_indirizzo||'-'}</div>
         <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
-        <div class="k">Peso reale</div><div>${toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))}</div>
-
-        <div class="k">Dest. abilitato import</div>
-        <div>
-          <label class="small" style="display:inline-flex;align-items:center;gap:8px">
-            <input type="checkbox" class="toggle-dest-import" ${rec.dest_abilitato_import ? 'checked' : ''} />
-            <span>${rec.dest_abilitato_import ? 'Sì' : 'No'}</span>
-          </label>
-        </div>
-
+        <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
         <div class="k">Lista colli</div>
         <div class="bo-colli-holder">
           ${(rec.colli&&rec.colli.length)?`
@@ -325,12 +301,10 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       <div class="small" style="margin:4px 0 6px 0"><strong>Documenti necessari per spedire in ${country} (${tipo})</strong>: ${required.join(', ').replaceAll('_',' ')}</div>
       <div class="small" style="opacity:.9; margin-bottom:8px"><em>ATTENZIONE:</em> il destinatario deve necessariamente avere un permesso/abilitazione all'importazione nel Paese di riferimento.</div>
 
-      <div class="row" style="justify-content:space-between; align-items:center">
-        <div class="small" style="margin-bottom:6px">Checklist documenti <span class="badge ${missing.length? 'yellow':'green'}" style="margin-left:8px">${missing.length?`mancano ${missing.length}`:'completa'}</span></div>
-        <div class="row" style="gap:8px">
-          <button class="btn ghost toggle-labels">Verifica etichette</button>
-          <button class="btn ghost toggle-details">Espandi record</button>
-        </div>
+      <!-- SOLO i due pulsanti, niente “Checklist documenti … mancano N” -->
+      <div class="row" style="justify-content:flex-end; gap:8px; margin-bottom:6px">
+        <button class="btn ghost toggle-labels">Verifica etichette</button>
+        <button class="btn ghost toggle-details">Espandi record</button>
       </div>
 
       <div class="docs">
@@ -353,10 +327,6 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       ${renderLabelPanel(rec)}
       ${renderTrackingBlock(rec)}
       <div class="details">${renderPrintGrid(rec)}</div>
-
-      <div class="actions">
-        <button class="btn complete" data-id="${rec.id}">Evasione completata</button>
-      </div>
     `;
 
     // Lazy-load colli se non presenti
@@ -385,22 +355,6 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       }
     })();
 
-    // Toggle: Destinatario abilitato import (salva se l'API supporta fields)
-    const importTgl = card.querySelector('.toggle-dest-import');
-    if (importTgl){
-      importTgl.addEventListener('change', async ()=>{
-        const val = !!importTgl.checked;
-        try{
-          await patchShipmentTracking(rec._recId || rec.id, {
-            fields: { 'Destinatario abilitato import': val }
-          });
-        }catch(e){
-          console.warn('[BO] toggle dest_import PATCH fallito, ripristino UI', e);
-          importTgl.checked = !val; // rollback
-        }
-      });
-    }
-
     // Upload per doc
     card.querySelectorAll('.upload-doc').forEach(btn=>{
       btn.addEventListener('click', ()=>{
@@ -412,7 +366,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       inp.addEventListener('change', (e)=>onUploadForDoc(e, rec, e.target.dataset.doc));
     });
 
-    // Complete
+    // Complete (ora è nel blocco Tracking)
     const completeBtn = card.querySelector('.complete');
     if (completeBtn) completeBtn.addEventListener('click', ()=>onComplete(rec));
 
@@ -436,10 +390,20 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       });
     }
 
+    // Salva tracking
+    const saveBtn = card.querySelector('.save-tracking');
+    if (saveBtn){
+      const carrierSel = card.querySelector('#'+saveBtn.dataset.carrier);
+      const tnInput = card.querySelector('#'+saveBtn.dataset.tn);
+      saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
+    }
+
     try {
       elList.appendChild(card);
     } catch (e) {
       console.error('[BO] append card fallito', e);
     }
+
+    console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, colli: rec.colli?.length||0 });
   });
 }
