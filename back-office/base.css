@@ -222,3 +222,56 @@ a.link-orange:hover{opacity:.9}
 .anchor{position:absolute; width:0; height:0; overflow:hidden}
 .view{display:none}
 #view-spedizioni{display:block} /* default: mostra Spedizioni finché il JS non interviene */
+
+/* --- Topbar sticky compatta --- */
+.bo-header{
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: saturate(120%) blur(6px);
+  background: rgba(19,22,30,.72);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+  transition: padding .15s ease, backdrop-filter .2s ease;
+}
+.bo-header.is-compact{ padding-block: 6px; }
+
+/* nascondi elementi non cruciali su schermi stretti */
+@media (max-width: 1024px){
+  .bo-header .env-chip{ display:none; }
+}
+
+/* --- Header card pulito --- */
+.card .card-head{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.card .title-line{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+}
+.id-chip{
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .85rem;
+  background: #10131a;
+  border: 1px solid rgba(255,255,255,.12);
+  padding: 3px 8px;
+  border-radius: 10px;
+  letter-spacing: .02em;
+}
+.card .dest{ font-weight: 600; opacity: .95; }
+
+/* --- Tabella colli più leggibile --- */
+table.colli{ width:100%; border-collapse: collapse; }
+table.colli th, table.colli td{
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+table.colli tbody tr:nth-child(odd){ background: rgba(255,255,255,.02); }
+table.colli td:last-child, table.colli th:last-child{ text-align: right; }
+
+/* --- Chip documenti coerenti --- */
+.doc{ border:1px dashed rgba(255,255,255,.12); padding:8px 10px; border-radius:10px; }
+.doc.ok{ border-style: solid; }
+
