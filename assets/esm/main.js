@@ -1,16 +1,13 @@
+// assets/esm/main.js
 import { DEBUG } from './config.js';
 import { fetchShipments, patchShipmentTracking, uploadAttachment } from './airtable/api.js';
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
 import './back-office-tabs.js';
-import './header-compact.js';
-import './header-tidy.js';
-
 
 const elSearch   = document.getElementById('search');
 const elOnlyOpen = document.getElementById('only-open');
-
 
 let DATA = [];
 
@@ -24,8 +21,9 @@ async function loadData(){
   try{
     const q = (elSearch?.value || '').trim();
     const onlyOpen = !!elOnlyOpen?.checked;
+    const status = 'all'; // fisso: abbiamo rimosso il filtro stato
 
-    const items = await fetchShipments({ q, onlyOpen });
+    const items = await fetchShipments({ q, status, onlyOpen });
     DATA = items || [];
     applyFilters();
   }catch(err){
@@ -34,20 +32,10 @@ async function loadData(){
   }
 }
 
-// ...imports invariati...
-
-function ritiroDateOf(item){
-  if (item && item.fields){
-    return item.fields['Ritiro - Data'] || item.fields['Data Ritiro'] || (item.createdTime ? item.createdTime.slice(0,10) : '');
-  }
-  return item?.ritiro_data || '';
-}
-
 function applyFilters(){
-  const out = [...DATA].sort((a,b)=> dateTs(ritiroDateOf(b)) - dateTs(ritiroDateOf(a)));
+  const out = [...DATA].sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
   renderList(out, { onUploadForDoc, onSaveTracking, onComplete });
 }
-
 
 /* ───────── actions ───────── */
 async function onUploadForDoc(e, rec, docName){
@@ -63,7 +51,7 @@ async function onUploadForDoc(e, rec, docName){
 
     toast('Upload in corso…');
 
-    // 1) carica il file su storage (proxy → Vercel Blob) e ottieni una URL pubblica
+    // 1) carica file (proxy → Vercel Blob) → URL pubblica
     const { url } = await uploadAttachment(recId, docName, file);
 
     // 2) patch su Airtable: mappa il docName al campo attachment
@@ -75,7 +63,6 @@ async function onUploadForDoc(e, rec, docName){
     console.error('[onUploadForDoc] errore upload', err);
     toast('Errore caricamento documento');
   }finally{
-    // reset input file per permettere ri-upload dello stesso nome
     if (e?.target) e.target.value = '';
   }
 }
@@ -95,9 +82,6 @@ async function onSaveTracking(rec, carrier, tn){
   }
 
   try{
-    // Compatibile con entrambe le firme della API:
-    // - patchShipmentTracking(id, { carrier, tracking })
-    // - patchShipmentTracking(id, carrier, tracking)
     const res = await patchShipmentTracking(recId, { carrier, tracking: tn });
     if (DEBUG) console.log('[TRACK PATCH OK]', res);
     toast(`${rec.id}: tracking salvato`);
@@ -129,7 +113,6 @@ async function onComplete(rec){
 /* ───────── listeners ───────── */
 if (elSearch)   elSearch.addEventListener('input', debounce(()=>loadData(), 250));
 if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
-if (elStatus)   elStatus.addEventListener('change', ()=>loadData());
 
 /* ───────── bootstrap ───────── */
 loadData().catch(e=>console.warn('init loadData failed', e));
