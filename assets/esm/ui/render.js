@@ -282,8 +282,11 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-      <div class="row spaced">
-        <h3>${rec.id} — ${rec.cliente}</h3>
+       <div class="card-head">
+         <div class="title-line">
+           <span class="id-chip" title="ID spedizione">${rec.id}</span>
+          <span class="dest">${rec.cliente||'—'}</span>
+        </div>
         <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
       </div>
 
