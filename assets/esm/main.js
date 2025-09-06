@@ -5,11 +5,12 @@ import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
 import './back-office-tabs.js';
 import './header-compact.js';
+import './header-tidy.js';
 
 
 const elSearch   = document.getElementById('search');
 const elOnlyOpen = document.getElementById('only-open');
-const elStatus   = document.getElementById('status-filter');
+
 
 let DATA = [];
 
@@ -22,10 +23,9 @@ function debounce(fn, ms=250){
 async function loadData(){
   try{
     const q = (elSearch?.value || '').trim();
-    const status = elStatus?.value || 'all';
     const onlyOpen = !!elOnlyOpen?.checked;
 
-    const items = await fetchShipments({ q, status, onlyOpen });
+    const items = await fetchShipments({ q, onlyOpen });
     DATA = items || [];
     applyFilters();
   }catch(err){
