@@ -1,42 +1,124 @@
 // assets/esm/header-tidy.js
+// Pulisce e ri-organizza la topbar del Back Office senza cambiare l’HTML lato server.
 (function () {
-  // 1) trova header e tabbar
-  const tabbar = document.querySelector('.tabbar');
-  const header = (tabbar && (tabbar.closest('header') || tabbar.parentElement))
-              || document.querySelector('header');
-  if (!header) return;
-  header.classList.add('bo-header');
+  const $ = (sel, root = document) => root.querySelector(sel);
+  const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+  const txt = (el) => (el?.textContent || '').trim().toLowerCase();
 
-  // 2) rimuovi pill/label superflue
-  const kill = (pred) => {
-    const n = [...document.querySelectorAll('span,div,small,strong,em')]
-      .find(el => pred(el.textContent || ''));
-    if (n) n.remove();
-  };
-  // “Evasione Ordini • ACTIVE”
-  kill(txt => /evasione\s+ordini/i.test(txt));
-  // “Ambiente: Airtable via Vercel”
-  kill(txt => /ambiente:|airtable via vercel/i.test(txt));
+  function ensureBrandbar() {
+    let bb = $('.brandbar');
+    if (!bb) {
+      bb = document.createElement('div');
+      bb.className = 'brandbar';
+      const wrap = document.createElement('div');
+      wrap.className = 'wrap brandbar-row';
+      const left = document.createElement('div');
+      left.className = 'brand-left';
 
-  // 3) elimina il selettore stato
-  const status = document.getElementById('status-filter');
-  (status?.closest('label'))?.remove();
-  status?.remove();
+      const logo = document.createElement('img');
+      logo.className = 'logo';
+      logo.src = '/assets/spst-logo.svg';
+      logo.alt = 'SPST';
 
-  // 4) crea riga strumenti (checkbox + search) sotto le TAB
-  const search = document.getElementById('search');
-  const only   = document.getElementById('only-open');
-  if (tabbar && (search || only)) {
-    let row3 = document.querySelector('.bo-tools');
-    if (!row3) {
-      row3 = document.createElement('div');
-      row3.className = 'bo-tools';
-      tabbar.insertAdjacentElement('afterend', row3);
+      const title = document.createElement('span');
+      title.className = 'title';
+      title.textContent = 'Back Office';
+
+      left.append(logo, title);
+      wrap.append(left);
+      bb.append(wrap);
+
+      // mettila sopra l’header se esiste, altrimenti in cima al body
+      const hdr = $('header');
+      (hdr?.parentNode || document.body).insertBefore(bb, hdr || document.body.firstChild);
     }
-    const wrap = (el) => el?.closest('.field') || el?.closest('label') || el;
-    const onlyWrap   = wrap(document.querySelector('label[for="only-open"]')) || wrap(only);
-    const searchWrap = wrap(search);
-    if (onlyWrap)  row3.appendChild(onlyWrap);
-    if (searchWrap) row3.appendChild(searchWrap);
+    return $('.brandbar .wrap') || bb;
+  }
+
+  function moveTrackingLinkToBrandbar() {
+    const wrap = ensureBrandbar();
+
+    // trova un link col testo "Tracking Back-Office" ovunque
+    let link = $$('a').find((a) => txt(a).includes('tracking back-office'));
+    if (!link) {
+      link = document.createElement('a');
+      link.href = 'https://www.spst.it/tracking-back-office';
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = 'Tracking Back-Office';
+    }
+    link.classList.add('link-orange');
+
+    // se non è già in brandbar, spostalo in fondo (a destra)
+    if (link.parentElement !== wrap) wrap.appendChild(link);
+  }
+
+  function stripEnvAndStatus() {
+    // rimuovi chip/label con quei testi
+    $$('.chip, .pill, .badge').forEach((el) => {
+      const t = txt(el);
+      if (t.includes('evasione ordini') || t.includes('ambiente: airtable')) el.remove();
+    });
+
+    // rimuovi select “Tutte/Nuove/…” (se presente)
+    const byId = $('#status-filter');
+    if (byId) byId.remove();
+    else {
+      const suspects = $$('select');
+      suspects.forEach((s) => {
+        const hasStates = $$('option', s).some((o) =>
+          /tutte|nuove spedizioni|evase|in elaborazione/i.test(o.textContent)
+        );
+        if (hasStates) s.remove();
+      });
+    }
+  }
+
+  function arrangeToolbar() {
+    const hdrWrap = $('.bo-header .wrap') || $('header .wrap') || $('header') || document.body;
+
+    // toolbar (o creala)
+    let tb = $('.bo-header .toolbar', hdrWrap);
+    if (!tb) {
+      tb = document.createElement('div');
+      tb.className = 'toolbar';
+      hdrWrap.appendChild(tb);
+    }
+
+    // sposta la search nella toolbar (a sinistra)
+    const search =
+      $('#search') ||
+      $$('input[type="text"]').find((i) => /cerca|search/i.test(i.placeholder || ''));
+    if (search && search.parentElement !== tb) tb.insertBefore(search, tb.firstChild);
+
+    // porta “Solo non evase” a destra, dentro una chip
+    let only = $('#only-open') || $$('input[type="checkbox"]').find((c) => c.id === 'only-open');
+    if (only) {
+      let chip = only.closest('label.chip');
+      if (!chip) {
+        chip = document.createElement('label');
+        chip.className = 'chip';
+        const text = document.createTextNode(' Solo non evase');
+        chip.append(only, text);
+      }
+      chip.style.marginLeft = 'auto';
+      tb.appendChild(chip);
+    }
+  }
+
+  function init() {
+    try {
+      moveTrackingLinkToBrandbar();
+      stripEnvAndStatus();
+      arrangeToolbar();
+    } catch (e) {
+      console.warn('[header-tidy] init failed', e);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
   }
 })();
