@@ -12,13 +12,11 @@ import { normalizeCarrier } from '../utils/misc.js';
    u.set('pageSize', '50');
    return u.toString();
 }
-diff
-Copia codice
 
 
-export async function fetchShipments({q='',status='all',onlyOpen=false}={}){
+export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
   if(!USE_PROXY){ console.warn('USE_PROXY=false – uso MOCK'); return []; }
-  const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({q: q.trim(), status, onlyOpen})}`;
+  const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({ q: q.trim(), onlyOpen })}`;
   try{
     const res = await fetch(url, FETCH_OPTS);
     if(!res.ok){
