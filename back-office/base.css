@@ -239,6 +239,12 @@ a.link-orange:hover{ opacity:.9 }
   100%{ box-shadow:0 0 0 14px rgba(79,124,255,0) }
 }
 
+.brandbar .wrap{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.brand-left{ display:flex; align-items:center; gap:10px; }
+.brandbar .title{ font-weight:700; letter-spacing:.2px; }
+
+
+
 /* Rendi la topbar non fissa */
 .bo-header{ position: static; backdrop-filter:none; background: transparent; border-bottom:none; }
 
