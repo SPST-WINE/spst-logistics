@@ -5,14 +5,16 @@ import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
 import { showBanner, toast } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
-export function buildFilterQuery({q,status,onlyOpen}){
-  const u = new URLSearchParams();
-  if(q) u.set('search', q);
-  if(status) u.set('status', status);
-  u.set('onlyOpen', onlyOpen ? '1' : '0');
-  u.set('pageSize','50');
-  return u.toString();
+ export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
+   const u = new URLSearchParams();
+   if (q) u.set('search', q);
+   u.set('onlyOpen', onlyOpen ? '1' : '0');
+   u.set('pageSize', '50');
+   return u.toString();
 }
+diff
+Copia codice
+
 
 export async function fetchShipments({q='',status='all',onlyOpen=false}={}){
   if(!USE_PROXY){ console.warn('USE_PROXY=false – uso MOCK'); return []; }
