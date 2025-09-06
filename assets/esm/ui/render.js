@@ -271,31 +271,43 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
 
     const card = document.createElement('div');
     card.className = 'card';
-    card.innerHTML = `
-      <div class="row spaced">
-        <h3>${rec.id} — ${rec.cliente}</h3>
-        <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
-      </div>
-      <div class="kv">
-        <div class="k">Email cliente</div><div>${rec.email||'-'}</div>
-        <div class="k">Partenza</div><div>${(rec.mittente_paese||'-')} • ${(rec.mittente_citta||'-')} ${(rec.mittente_cap?('('+rec.mittente_cap+')'):'')}</div>
-        <div class="k">Indirizzo partenza</div><div>${rec.mittente_indirizzo||'-'}</div>
-        <div class="k">Arrivo</div><div>${(rec.dest_paese||rec.paese||'-')} • ${(rec.dest_citta||rec.citta||'-')} ${(rec.dest_cap?('('+rec.dest_cap+')'):'')}</div>
-        <div class="k">Indirizzo destinazione</div><div>${rec.dest_indirizzo||'-'}</div>
-        <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
-        <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
-        <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
-        <div class="k">Lista colli</div>
-        <div class="bo-colli-holder">
-          ${(rec.colli&&rec.colli.length)?`
-          <table class="colli">
-            <thead><tr><th>Dim. (L×W×H cm)</th><th>Peso reale</th></tr></thead>
-            <tbody>
-              ${rec.colli.map((c)=>`<tr><td>${c.L}×${c.W}×${c.H}</td><td>${toKg(c.kg)}</td></tr>`).join('')}
-            </tbody>
-          </table>` : '<span class="small">—</span>'}
-        </div>
-      </div>
+// HEADER della card (ID in pill arancione + cliente) + badge stato a destra
+card.innerHTML = `
+  <div class="row spaced card-header">
+    <h3 class="title-line">
+      <span class="id-chip id-chip--spst">${rec.id}</span>
+      <span class="dest">${rec.cliente}</span>
+    </h3>
+    <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
+  </div>
+
+  <div class="kv">
+    ...resto della kv...
+  </div>
+
+  <div class="hr"></div>
+
+  <div class="small" style="margin:4px 0 6px 0"><strong>Documenti necessari per spedire in ${country} (${tipo})</strong>: ${required.join(', ').replaceAll('_',' ')}</div>
+  <div class="small" style="opacity:.9; margin-bottom:8px"><em>ATTENZIONE:</em> il destinatario deve necessariamente avere un permesso/abilitazione all'importazione nel Paese di riferimento.</div>
+
+  <!-- ✅ Bottoni spostati a sinistra -->
+  <div class="row" style="gap:8px; align-items:center; margin-bottom:8px">
+    <button class="btn ghost toggle-labels">Verifica etichette</button>
+    <button class="btn ghost toggle-details">Espandi record</button>
+  </div>
+
+  <div class="docs"> ...allegati... </div>
+  ${notes.length? `<div class="small" style="margin-top:6px; color:#c7cfdf">Note: ${notes.join(' ')}</div>`: ''}
+
+  ${renderLabelPanel(rec)}
+  ${renderTrackingBlock(rec)}
+
+  <div class="details">${renderPrintGrid(rec)}</div>
+
+  <div class="actions">
+    <button class="btn complete" data-id="${rec.id}">Evasione completata</button>
+  </div>
+`;
 
       <div class="hr"></div>
 
