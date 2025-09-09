@@ -157,6 +157,7 @@ async function onSendMail(rec, typedEmail){
         tracking: rec.tracking_number,
         trackingUrl: trackingUrl(rec.tracking_carrier, rec.tracking_number) || rec.tracking_url || '',
         ritiroData: rec.ritiro_data || '',
+        stato: rec.stato,  
       })
     });
     if (!res.ok){
