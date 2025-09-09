@@ -3,8 +3,9 @@ import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
 import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
-/* ───────── Doc mapping UI → Airtable fields ─────────
+/* ───────── Mappa doc UI → nomi campi Airtable ─────────
    Campi attachment in “SpedizioniWebApp”:
+
    - Fattura - Allegato Cliente
    - Packing List - Allegato Cliente
    - Allegato LDV
@@ -16,20 +17,16 @@ import { normalizeCarrier } from '../utils/misc.js';
    - Allegato 3
 */
 export const DOC_FIELD_MAP = {
-  // principali (sempre campo dedicato):
+  // principali (sempre su campo dedicato)
   Lettera_di_Vettura: 'Allegato LDV',
   Fattura_Commerciale: 'Allegato Fattura',
-  Packing_List: 'Allegato PL',
   Dichiarazione_Esportazione: 'Allegato DLE',
+  Packing_List: 'Allegato PL',
 
-  // allegati cliente (valgono come “ok” in checklist)
+  // caricati dal cliente (valgono come “ok” per la checklist)
   Fattura_Client: 'Fattura - Allegato Cliente',
   Packing_Client: 'Packing List - Allegato Cliente',
 };
-
-// tutto ciò che NON è una “main doc” finisce in Allegato 1 → 2 → 3
-const MAIN_DOC_KEYS = new Set(Object.keys(DOC_FIELD_MAP));
-const SPARE_FIELDS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
 
 export function docFieldFor(docKey) {
   return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
@@ -57,31 +54,68 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    return records;
+    return records; // normalizzazione lato render.js
   } catch (err) {
     console.error('[fetchShipments] failed', { url, err });
-    showBanner(
-      `Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). ` +
-      `<span class="small">Dettagli: ${String(err.message||err)}</span>`
-    );
+    showBanner(`Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). <span class="small">Dettagli: ${String(err.message||err)}</span>`);
     return [];
   }
 }
 
-// prendi un singolo record (ci serve per capire quali “Allegato N” sono liberi)
-export async function fetchShipmentById(id) {
-  if (!USE_PROXY || !id) return null;
-  const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
-  const res = await fetch(url, FETCH_OPTS);
-  if (!res.ok) return null;
-  return res.json().catch(() => null);
+/* ───────── Fetch singolo record (robusto) ─────────
+   1) prova /spedizioni/:id
+   2) fallback /spedizioni?search=:id e prendi rec.id===id
+*/
+export async function fetchShipmentById(recordId) {
+  if (!USE_PROXY || !recordId) return null;
+  const base = AIRTABLE.proxyBase;
+
+  // Tentativo 1: diretto
+  try {
+    const res = await fetch(`${base}/spedizioni/${encodeURIComponent(recordId)}`, FETCH_OPTS);
+    if (res.ok) {
+      const json = await res.json().catch(() => ({}));
+      if (json && (json.id || json.fields)) return json;
+      if (Array.isArray(json?.records)) {
+        const m = json.records.find(r => r.id === recordId) || json.records[0];
+        if (m) return m;
+      }
+    } else if (res.status !== 405 && res.status !== 404) {
+      const t = await res.text().catch(() => '');
+      console.warn('[fetchShipmentById] direct failed', res.status, t.slice(0, 180));
+    }
+  } catch (e) {
+    console.warn('[fetchShipmentById] direct threw', e);
+  }
+
+  // Tentativo 2: search
+  try {
+    const url = `${base}/spedizioni?${new URLSearchParams({ search: recordId, pageSize: '5' })}`;
+    const res = await fetch(url, FETCH_OPTS);
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      console.warn('[fetchShipmentById] search failed', res.status, t.slice(0, 180));
+      return null;
+    }
+    const json = await res.json().catch(() => ({}));
+    const records = Array.isArray(json.records) ? json.records : [];
+    return records.find(r => r.id === recordId) || records[0] || null;
+  } catch (e) {
+    console.warn('[fetchShipmentById] search threw', e);
+    return null;
+  }
 }
 
-/* ───────── PATCH “tollerante” ───────── */
+/* ───────── PATCH “tollerante” ─────────
+   Accetta:
+   - { carrier, tracking }
+   - { statoEvasa: true }
+   - { fields: { "Allegato Fattura": [{url}] } }
+   - { "Allegato Fattura": [{url}] }  ← le chiavi “sconosciute” vanno in fields
+*/
 export async function patchShipmentTracking(recOrId, payload = {}) {
-  const id = (typeof recOrId === 'string')
-    ? recOrId
-    : (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
+  const id = (typeof recOrId === 'string') ? recOrId :
+             (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
   if (!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
@@ -95,7 +129,6 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   if (docs && typeof docs === 'object') base.docs = docs;
   if (fields && typeof fields === 'object') base.fields = fields;
 
-  // sposta chiavi “sconosciute” (es. "Allegato Fattura") dentro fields
   const KNOWN = new Set(['carrier','tracking','statoEvasa','docs','fields']);
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
   if (unknownKeys.length) {
@@ -110,7 +143,7 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   const attempts = [];
   if (norm) attempts.push({ carrier: norm });
   if (norm) attempts.push({ carrier: { name: norm } });
-  attempts.push({}); // anche senza carrier
+  attempts.push({});
 
   let lastErrTxt = '';
   for (const extra of attempts) {
@@ -136,45 +169,7 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   throw new Error('PATCH failed (tentativi esauriti): ' + lastErrTxt);
 }
 
-/* ✔️ wrapper allegati
-   - Se docKey è “main” (LDV, Fattura, PL, DLE) → scrivi sul campo dedicato
-   - Altrimenti → scegli il primo libero tra Allegato 1/2/3; se tutti pieni, accoda su Allegato 3
-*/
-export async function patchDocAttachment(recordId, docKey, attachmentsArray) {
-  if (!recordId) throw new Error('patchDocAttachment: missing recordId');
-  const att = Array.isArray(attachmentsArray) && attachmentsArray.length ? attachmentsArray : [];
-  if (!att.length) throw new Error('patchDocAttachment: attachmentsArray vuoto');
-
-  // main doc: patch diretto
-  if (MAIN_DOC_KEYS.has(docKey)) {
-    const fieldName = DOC_FIELD_MAP[docKey];
-    return patchShipmentTracking(recordId, { fields: { [fieldName]: att } });
-  }
-
-  // doc “dinamico” → Allegato 1/2/3
-  const rec = await fetchShipmentById(recordId);
-  const fields = rec?.fields || {};
-
-  // individua il primo slot libero
-  let target = SPARE_FIELDS.find(f => emptyAttachment(fields[f]));
-  if (!target) {
-    // se 1/2/3 sono pieni, accodiamo su Allegato 3
-    target = 'Allegato 3';
-    const current = Array.isArray(fields[target]) ? fields[target] : [];
-    return patchShipmentTracking(recordId, { fields: { [target]: [...current, ...att] } });
-  }
-
-  // slot libero trovato: scrivi lì
-  return patchShipmentTracking(recordId, { fields: { [target]: att } });
-}
-
-function emptyAttachment(v) {
-  if (!v) return true;
-  if (Array.isArray(v)) return v.length === 0;
-  return false;
-}
-
-/* ───────── Upload verso Vercel Blob ───────── */
+/* ───────── Upload → Vercel Blob (CORS lato server) ───────── */
 export async function uploadAttachment(recordId, docKey, file) {
   if (!USE_PROXY) {
     const url = `https://files.dev/mock/${recordId}-${docKey}-${Date.now()}-${file?.name||'file'}`;
@@ -196,7 +191,7 @@ export async function uploadAttachment(recordId, docKey, file) {
   return { url: json.url, attachments };
 }
 
-/* ───────── Colli per spedizione ───────── */
+/* ───────── Colli ───────── */
 export async function fetchColliFor(recordId) {
   try {
     if (!recordId) return [];
@@ -205,7 +200,7 @@ export async function fetchColliFor(recordId) {
     const url = `${base}/spedizioni/${encodeURIComponent(recordId)}/colli`;
 
     const res = await fetch(url, FETCH_OPTS);
-    if (!res.ok) return [];
+    if (!res.ok) { return []; }
 
     const json = await res.json().catch(() => ({}));
     const rows = Array.isArray(json?.rows) ? json.rows : (Array.isArray(json) ? json : []);
@@ -225,4 +220,49 @@ export async function fetchColliFor(recordId) {
     console.warn('[fetchColliFor] errore', e);
     return [];
   }
+}
+
+/* ───────── Logica documenti “extra” → Allegato 1/2/3 ─────────
+   - I principali (LDV/Fattura/DLE/PL) vanno sempre nei loro campi.
+   - Tutti gli altri riempiono il primo slot libero tra A1→A2→A3.
+   - Se sono tutti pieni, appende su “Allegato 3”.
+*/
+const PRIMARY_FIELDS = new Set(['Allegato LDV', 'Allegato Fattura', 'Allegato DLE', 'Allegato PL']);
+const EXTRA_SLOTS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
+
+export async function patchDocAttachment(recordId, docKey, attachments) {
+  if (!recordId) throw new Error('Missing record id');
+  const mapped = docFieldFor(docKey);
+
+  // Caso 1: campo principale
+  if (PRIMARY_FIELDS.has(mapped)) {
+    return patchShipmentTracking(recordId, { fields: { [mapped]: attachments } });
+  }
+
+  // Caso 2: documento “extra” → scegli A1/A2/A3
+  let chosen = null;
+  let existing = [];
+
+  // prova a leggere il record per verificare gli slot
+  const rec = await fetchShipmentById(recordId).catch(() => null);
+  const fields = rec?.fields || null;
+
+  if (fields) {
+    for (const slot of EXTRA_SLOTS) {
+      const cur = Array.isArray(fields[slot]) ? fields[slot] : [];
+      if (!cur.length) { chosen = slot; existing = []; break; }
+    }
+    if (!chosen) {
+      // tutti pieni → append su Allegato 3
+      chosen = 'Allegato 3';
+      existing = Array.isArray(fields[chosen]) ? fields[chosen] : [];
+    }
+  } else {
+    // fallback se non riusciamo a leggere il record (es. 405)
+    chosen = 'Allegato 1';
+    existing = [];
+  }
+
+  const next = [...existing, ...attachments];
+  return patchShipmentTracking(recordId, { fields: { [chosen]: next } });
 }
