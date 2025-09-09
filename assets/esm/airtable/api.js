@@ -4,7 +4,7 @@ import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
 /* ──────────────────────────────────────────────────────────────
-   Mappa doc UI -> nome campo Airtable (allegati)
+   Mappa di base (nomi “canonici” in Airtable, già usati nel tuo base)
    ────────────────────────────────────────────────────────────── */
 const DOC_FIELD_MAP = {
   Lettera_di_Vettura: 'Allegato LDV',
@@ -13,17 +13,52 @@ const DOC_FIELD_MAP = {
   Dichiarazione_Esportazione: 'Allegato DLE',
   Packing_List: 'Allegato PL',
   FDA_Prior_Notice: 'Prior Notice',
-  // allegati caricati dal cliente (se presenti in base)
   Fattura_Client: 'Fattura - Allegato Cliente',
   Packing_Client: 'Packing List - Allegato Cliente',
+
+  // 👉 nuovo: e-DAS (il tuo Airtable probabilmente NON usa il nome secco “e-DAS”)
+  'e-DAS': 'e-DAS - Allegato',
 };
 
-function resolveDocField(docKey){
-  return DOC_FIELD_MAP[docKey] || String(docKey || '').replaceAll('_',' ');
+/* Candidati extra: se la mappa sopra non torna, proviamo questi nomi in fallback */
+function candidateFieldNamesFor(docKey){
+  const pretty = String(docKey || '').replaceAll('_',' ').trim(); // es. "Fattura Commerciale"
+  const base = DOC_FIELD_MAP[docKey] ? [DOC_FIELD_MAP[docKey]] : [];
+
+  // fallback euristici
+  const extras = [
+    pretty,
+    `${pretty} - Allegato`,
+    `Allegato ${pretty}`,
+  ];
+
+  // special case
+  if (docKey === 'Dichiarazione_Esportazione'){
+    extras.unshift('Dichiarazione Esportazione');
+  }
+  if (docKey === 'Packing_List'){
+    extras.unshift('Packing List');
+  }
+  if (docKey === 'Lettera_di_Vettura'){
+    extras.unshift('Lettera di Vettura', 'LDV');
+  }
+  if (docKey === 'Fattura_Commerciale'){
+    extras.unshift('Fattura Commerciale Caricata');
+  }
+  if (docKey === 'e-DAS'){
+    extras.unshift('Allegato e-DAS', 'e-DAS');
+  }
+
+  // de-dup
+  const out = [];
+  for (const n of [...base, ...extras]){
+    if (n && !out.includes(n)) out.push(n);
+  }
+  return out;
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Query / lista spedizioni
+   Lista spedizioni via proxy
    ────────────────────────────────────────────────────────────── */
 function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   const u = new URLSearchParams();
@@ -42,8 +77,7 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    // Ritorniamo i record grezzi Airtable ({id, fields,...})
-    return records;
+    return records; // record grezzi Airtable
   }catch(err){
     console.error('[fetchShipments] failed', { url, err });
     showBanner(
@@ -55,8 +89,7 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   PATCH spedizione
-   - accetta: carrier, tracking, stato, statoEvasa (legacy), docs:{}, fields:{}
+   PATCH generico (tracking, stato, docs, campi arbitrari)
    ────────────────────────────────────────────────────────────── */
 export async function patchShipmentTracking(recOrId, patch = {}){
   const id =
@@ -67,38 +100,30 @@ export async function patchShipmentTracking(recOrId, patch = {}){
   if (!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
-
-  // Costruiamo SEMPRE "fields" per Airtable
   const fields = {};
 
-  // Tracking / Corriere
-  if (patch.tracking){
-    fields['Tracking Number'] = String(patch.tracking).trim();
-  }
+  if (patch.tracking) fields['Tracking Number'] = String(patch.tracking).trim();
   if (patch.carrier){
     const norm = normalizeCarrier(patch.carrier || '');
     if (norm) fields['Corriere'] = norm;
   }
 
-  // Stato: valore esplicito ha precedenza
   if (patch.stato){
     fields['Stato'] = String(patch.stato);
   } else if (typeof patch.statoEvasa === 'boolean'){
-    // retro-compatibilità (non usata più nel BO, ma lasciamo)
     fields['Stato'] = patch.statoEvasa ? 'Evasa' : 'Nuova';
   }
 
-  // Allegati: docs = { UI_KEY: [ {url}, ... ] }
   if (patch.docs && typeof patch.docs === 'object'){
+    // questa strada resta per chiamate “multiple”; per affidabilità meglio patchDocAttachment per singolo campo
     for (const [docKey, attVal] of Object.entries(patch.docs)){
-      const fieldName = resolveDocField(docKey);
+      const candidates = candidateFieldNamesFor(docKey);
       const attArray = Array.isArray(attVal) ? attVal : (attVal ? [attVal] : []);
-      // Airtable attachment vuole [{ url, filename?, type? }, ...]
-      fields[fieldName] = attArray;
+      // prendi il primo candidato e affida agli altri tentativi in una chiamata separata
+      if (candidates[0]) fields[candidates[0]] = attArray;
     }
   }
 
-  // Campi arbitrari (usa con cautela)
   if (patch.fields && typeof patch.fields === 'object'){
     Object.assign(fields, patch.fields);
   }
@@ -107,14 +132,11 @@ export async function patchShipmentTracking(recOrId, patch = {}){
     throw new Error('PATCH failed (client): no fields to update');
   }
 
-  const body = { fields };
-
   const res = await fetch(url, {
     method: 'PATCH',
     headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify({ fields })
   });
-
   if (!res.ok){
     const t = await res.text().catch(()=> '');
     throw new Error(`PATCH failed ${res.status}: ${t}`);
@@ -122,8 +144,31 @@ export async function patchShipmentTracking(recOrId, patch = {}){
   return await res.json();
 }
 
+/* Patch di UN documento con fallback su più possibili nomi colonna */
+export async function patchDocAttachment(recordId, docKey, attArray){
+  const candidates = candidateFieldNamesFor(docKey);
+  let lastErr = null;
+
+  for (const fieldName of candidates){
+    try{
+      return await patchShipmentTracking(recordId, { fields: { [fieldName]: attArray } });
+    }catch(e){
+      const msg = String(e?.message || '');
+      // se il problema è proprio “campo inesistente”, prova il prossimo candidato
+      if (/UNKNOWN_FIELD_NAME|Unknown field name/i.test(msg)) {
+        lastErr = e;
+        continue;
+      }
+      // altri errori: esci subito
+      throw e;
+    }
+  }
+  // tutti i tentativi falliti
+  throw (lastErr || new Error('Nessun nome campo valido per '+docKey));
+}
+
 /* ──────────────────────────────────────────────────────────────
-   Upload allegato → URL pubblica (Vercel Blob lato proxy)
+   Upload allegato (proxy)
    ────────────────────────────────────────────────────────────── */
 export async function uploadAttachment(recordId, docName, file){
   if (!USE_PROXY){
@@ -144,7 +189,7 @@ export async function uploadAttachment(recordId, docName, file){
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Colli per spedizione (proxy /spedizioni/:id/colli)
+   Colli (proxy /spedizioni/:id/colli)
    ────────────────────────────────────────────────────────────── */
 export async function fetchColliFor(recordId){
   try{
