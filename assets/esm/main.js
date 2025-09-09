@@ -60,8 +60,9 @@ async function onUploadForDoc(e, rec, docKey){
     const { url, attachments } = await uploadAttachment(recId, docKey, file);
     const attArray = Array.isArray(attachments) && attachments.length ? attachments : [{ url }];
 
-    // 2) patch nel campo corretto (wrapper che usa docFieldFor + patchShipmentTracking)
-    await patchDocAttachment(recId, docKey, attArray);
+    // 2) PATCH su Airtable — scegli campo corretto e append sicuro
+await patchDocAttachment(recId, docKey, attArray, rec._rawFields);
+
 
     toast(`${docKey.replaceAll('_',' ')} caricato`);
     await loadData();
