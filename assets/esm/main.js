@@ -44,21 +44,7 @@ async function loadData(){
 }
 
 function applyFilters(){
-  // Applica SEMPRE il filtro lato client per “Solo non evase”
-  const onlyOpen = !!elOnlyOpen?.checked;
-  let items = [...DATA];
-
-  if (onlyOpen){
-    items = items.filter((rec)=>{
-      const stato = String(rec?.stato || rec?.fields?.['Stato'] || '')
-        .trim()
-        .toLowerCase();
-      // mostra solo “Nuova” (o vuoto trattato come nuova)
-      return stato === 'nuova' || stato === '';
-    });
-  }
-
-  const out = items.sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
+  const out = [...DATA].sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
   renderList(out, { onUploadForDoc, onSaveTracking, onComplete, onSendMail });
 }
 
@@ -119,10 +105,12 @@ async function onSaveTracking(rec, carrier, tn){
   if (!recId){ toast('Errore: id record mancante'); return; }
 
   try{
-    await patchShipmentTracking(recId, { carrier, tracking: tn }); // ← non cambiamo lo “Stato”
-    // aggiorna UI locale (card resta visibile nella vista "Solo non evase")
+    await patchShipmentTracking(recId, { carrier, tracking: tn }); // ← non cambiamo lo Stato qui
+    // aggiorna UI locale
     rec.tracking_carrier = carrier;
     rec.tracking_number  = tn;
+    enableNotify(rec.id); // abilita invio mail ora che c'è il tracking
+
     toast(`${rec.id}: tracking salvato`);
   }catch(err){
     console.error('Errore salvataggio tracking', err);
@@ -130,7 +118,8 @@ async function onSaveTracking(rec, carrier, tn){
   }
 }
 
-async function onSendMail(rec, typedEmail){
+/* ───────── notify mail (Resend) ───────── */
+async function onSendMail(rec, typedEmail, opts = {}){
   try{
     const to = String(typedEmail || '').trim();
     const hint = String(rec?.email || '').trim();
@@ -143,8 +132,9 @@ async function onSendMail(rec, typedEmail){
       toast('L’email digitata non coincide con quella del record');
       return;
     }
-    if (String(rec?.stato || '').toLowerCase() !== 'in transito'){
-      toast('Disponibile solo quando la spedizione è “In transito”');
+    // nuova regola: si può inviare quando è presente il tracking
+    if (!(rec.tracking_carrier && rec.tracking_number)){
+      toast('Salva prima corriere e numero tracking');
       return;
     }
 
@@ -169,6 +159,10 @@ async function onSendMail(rec, typedEmail){
       throw new Error(`HTTP ${r.status}: ${t}`);
     }
 
+    // flag locale anti-doppione nella sessione
+    rec._mailSent = true;
+    opts.onSuccess && opts.onSuccess();
+
     toast('Mail inviata al cliente');
   }catch(err){
     console.error('[sendMail] error', err);
@@ -185,7 +179,6 @@ async function onComplete(rec){
     return;
   }
   try{
-    // qui cambiamo lo Stato → "In transito"
     await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
     toast(`${rec.id}: evasione completata`);
     await loadData(); // con "Solo non evase" attivo scompare perché non è più "Nuova"
@@ -196,22 +189,8 @@ async function onComplete(rec){
 }
 
 /* ───────── listeners ───────── */
-// di default: checkbox “Solo non evase” attivo (persisti scelta utente)
-const ONLY_OPEN_KEY = 'bo_only_open';
-if (elOnlyOpen){
-  const saved = localStorage.getItem(ONLY_OPEN_KEY);
-  if (saved == null) {
-    elOnlyOpen.checked = true;          // attivo di default al primo accesso
-  } else {
-    elOnlyOpen.checked = saved === '1'; // ripristina scelta
-  }
-  elOnlyOpen.addEventListener('change', ()=>{
-    localStorage.setItem(ONLY_OPEN_KEY, elOnlyOpen.checked ? '1' : '0');
-    loadData();
-  });
-}
-
-if (elSearch) elSearch.addEventListener('input', debounce(()=>loadData(), 250));
+if (elSearch)   elSearch.addEventListener('input', debounce(()=>loadData(), 250));
+if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
 
 /* ───────── bootstrap ───────── */
 loadData().catch(e=>console.warn('init loadData failed', e));
