@@ -4,61 +4,51 @@ import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
 /* ──────────────────────────────────────────────────────────────
-   Mappa di base (nomi “canonici” in Airtable, già usati nel tuo base)
+   Mappa 1:1 verso i CAMPI REALI di "SpedizioniWebApp"
+   (quelli che mi hai indicato)
    ────────────────────────────────────────────────────────────── */
 const DOC_FIELD_MAP = {
-  Lettera_di_Vettura: 'Allegato LDV',
-  Fattura_Commerciale: 'Allegato Fattura',
-  Fattura_Proforma: 'Fattura Proforma',
+  // back-office
+  Lettera_di_Vettura:      'Allegato LDV',
+  Fattura_Commerciale:     'Allegato Fattura',
   Dichiarazione_Esportazione: 'Allegato DLE',
-  Packing_List: 'Allegato PL',
-  FDA_Prior_Notice: 'Prior Notice',
-  Fattura_Client: 'Fattura - Allegato Cliente',
-  Packing_Client: 'Packing List - Allegato Cliente',
+  Packing_List:            'Allegato PL',
 
-  // 👉 nuovo: e-DAS (il tuo Airtable probabilmente NON usa il nome secco “e-DAS”)
-  'e-DAS': 'e-DAS - Allegato',
+  // “generici” (scegli tu la corrispondenza — posso variarli)
+  Fattura_Proforma:        'Allegato 1',
+  FDA_Prior_Notice:        'Allegato 2',
+  'e-DAS':                 'Allegato 3',
+
+  // allegati cliente (le usiamo anche come fallback “validi”)
+  Fattura_Client:          'Fattura - Allegato Cliente',
+  Packing_Client:          'Packing List - Allegato Cliente',
 };
 
-/* Candidati extra: se la mappa sopra non torna, proviamo questi nomi in fallback */
+/* Se per qualche docKey il campo non esistesse, proviamo alias */
 function candidateFieldNamesFor(docKey){
+  const mapped = DOC_FIELD_MAP[docKey];
   const pretty = String(docKey || '').replaceAll('_',' ').trim(); // es. "Fattura Commerciale"
-  const base = DOC_FIELD_MAP[docKey] ? [DOC_FIELD_MAP[docKey]] : [];
+  const out = [];
+  if (mapped) out.push(mapped);
 
-  // fallback euristici
-  const extras = [
+  // alias generici
+  out.push(
     pretty,
     `${pretty} - Allegato`,
-    `Allegato ${pretty}`,
-  ];
+    `Allegato ${pretty}`
+  );
 
-  // special case
-  if (docKey === 'Dichiarazione_Esportazione'){
-    extras.unshift('Dichiarazione Esportazione');
-  }
-  if (docKey === 'Packing_List'){
-    extras.unshift('Packing List');
-  }
-  if (docKey === 'Lettera_di_Vettura'){
-    extras.unshift('Lettera di Vettura', 'LDV');
-  }
-  if (docKey === 'Fattura_Commerciale'){
-    extras.unshift('Fattura Commerciale Caricata');
-  }
-  if (docKey === 'e-DAS'){
-    extras.unshift('Allegato e-DAS', 'e-DAS');
-  }
+  // casi pratici utili
+  if (docKey === 'Lettera_di_Vettura') out.unshift('Lettera di Vettura', 'LDV');
+  if (docKey === 'Packing_List')       out.unshift('Packing List');
+  if (docKey === 'Dichiarazione_Esportazione') out.unshift('Dichiarazione Esportazione');
 
   // de-dup
-  const out = [];
-  for (const n of [...base, ...extras]){
-    if (n && !out.includes(n)) out.push(n);
-  }
-  return out;
+  return out.filter((v,i,a)=>v && a.indexOf(v)===i);
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Lista spedizioni via proxy
+   Query spedizioni via proxy
    ────────────────────────────────────────────────────────────── */
 function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   const u = new URLSearchParams();
@@ -115,11 +105,9 @@ export async function patchShipmentTracking(recOrId, patch = {}){
   }
 
   if (patch.docs && typeof patch.docs === 'object'){
-    // questa strada resta per chiamate “multiple”; per affidabilità meglio patchDocAttachment per singolo campo
     for (const [docKey, attVal] of Object.entries(patch.docs)){
       const candidates = candidateFieldNamesFor(docKey);
       const attArray = Array.isArray(attVal) ? attVal : (attVal ? [attVal] : []);
-      // prendi il primo candidato e affida agli altri tentativi in una chiamata separata
       if (candidates[0]) fields[candidates[0]] = attArray;
     }
   }
@@ -144,7 +132,7 @@ export async function patchShipmentTracking(recOrId, patch = {}){
   return await res.json();
 }
 
-/* Patch di UN documento con fallback su più possibili nomi colonna */
+/* Patch di UN documento con fallback sui possibili nomi colonna */
 export async function patchDocAttachment(recordId, docKey, attArray){
   const candidates = candidateFieldNamesFor(docKey);
   let lastErr = null;
@@ -154,16 +142,12 @@ export async function patchDocAttachment(recordId, docKey, attArray){
       return await patchShipmentTracking(recordId, { fields: { [fieldName]: attArray } });
     }catch(e){
       const msg = String(e?.message || '');
-      // se il problema è proprio “campo inesistente”, prova il prossimo candidato
       if (/UNKNOWN_FIELD_NAME|Unknown field name/i.test(msg)) {
-        lastErr = e;
-        continue;
+        lastErr = e; continue; // prova il prossimo alias
       }
-      // altri errori: esci subito
-      throw e;
+      throw e; // errori diversi → esci
     }
   }
-  // tutti i tentativi falliti
   throw (lastErr || new Error('Nessun nome campo valido per '+docKey));
 }
 
@@ -189,7 +173,7 @@ export async function uploadAttachment(recordId, docName, file){
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Colli (proxy /spedizioni/:id/colli)
+   Colli
    ────────────────────────────────────────────────────────────── */
 export async function fetchColliFor(recordId){
   try{
