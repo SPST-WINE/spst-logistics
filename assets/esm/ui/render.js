@@ -258,7 +258,17 @@ function renderTrackingBlock(rec){
         <option value="">Scegli corriere</option>
         ${CARRIERS.map(c=>`<option value="${c}" ${rec.tracking_carrier===c? 'selected':''}>${c}</option>`).join('')}
       </select>
-      <input id="${tnId}" type="text" placeholder="Numero tracking" value="${rec.tracking_number||''}">
+      <input
+  type="email"
+  class="mail-input notify-email"
+  id="mail-${rec.id}"
+  placeholder="${rec.email || 'email@cliente.com'}"
+  inputmode="email"
+  autocomplete="off"
+  autocapitalize="off"
+  spellcheck="false"
+  ${canNotify ? '' : 'disabled'}
+>
       <button class="mini-btn save-tracking" data-carrier="${carrierId}" data-tn="${tnId}">Salva tracking</button>
       <span class="small link">${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>` : ''}</span>
     </div>
