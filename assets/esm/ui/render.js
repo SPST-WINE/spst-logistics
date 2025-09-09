@@ -197,19 +197,16 @@ function renderTrackingBlock(rec){
     <div class="track" id="${rec.id}-track">
       <span class="small" style="opacity:.9">Tracking</span>
       <select id="${carrierId}" aria-label="Corriere">
-        <option value="">— Corriere —</option>
+        <option value="">Scegli corriere</option>
         ${CARRIERS.map(c=>`<option value="${c}" ${rec.tracking_carrier===c? 'selected':''}>${c}</option>`).join('')}
       </select>
       <input id="${tnId}" type="text" placeholder="Numero tracking" value="${rec.tracking_number||''}">
       <button class="mini-btn save-tracking" data-carrier="${carrierId}" data-tn="${tnId}">Salva tracking</button>
-      <span class="small link">
-        ${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>` : ''}
-      </span>
-      <span style="flex:1"></span>
-      <button class="btn complete" data-id="${rec.id}">Evasione completata</button>
+      <span class="small link">${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>` : ''}</span>
     </div>
   `;
 }
+
 
 function renderPrintGrid(rec){
   const fields = [
