@@ -381,3 +381,29 @@ table.colli td:first-child{
 }
 .mini-btn.primary:hover{ filter: brightness(1.05); }
 
+/* Input coerente + placeholder evidente */
+.nice-input {
+  width: 340px;
+  max-width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.15);
+  background: rgba(255,255,255,.06);
+  color: #e9eef7;
+  outline: none;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.nice-input:focus {
+  border-color: #f7911e;
+  background: rgba(255,255,255,.10);
+  box-shadow: 0 0 0 3px rgba(247,145,30,.18);
+}
+.nice-input::placeholder {
+  color: #9fb2cc;         /* più chiaro del testo */
+  opacity: .9;
+  font-style: italic;     /* differenza visiva chiara */
+}
+.mail-row.disabled .nice-input { opacity: .6; cursor: not-allowed; }
+
+
