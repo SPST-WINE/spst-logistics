@@ -4,50 +4,21 @@ import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
 /* ──────────────────────────────────────────────────────────────
-   Mappa Documenti: UI key → Campo Airtable (nuova base)
+   Mappa Documenti: UI key → Campo Airtable (NUOVA BASE)
    ────────────────────────────────────────────────────────────── */
-
 export const DOC_FIELD_MAP = {
-  // Operativi SPST (nuovi nomi tabella SpedizioniWebApp)
   Lettera_di_Vettura:         'Allegato LDV',
   Fattura_Commerciale:        'Allegato Fattura',
   Fattura_Proforma:           'Fattura Proforma',
   Dichiarazione_Esportazione: 'Allegato DLE',
   Packing_List:               'Allegato PL',
   FDA_Prior_Notice:           'Prior Notice',
-  // Allegati caricati dal cliente
+  // opzionali (cliente)
   Fattura_Client:             'Fattura - Allegato Cliente',
   Packing_Client:             'Packing List - Allegato Cliente',
 };
 
-export function docFieldFor(docKey){
-  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_',' ');
-}
-
-/* Extra: per i doc principali, prova più nomi (nuovi + legacy) */
-function fieldCandidatesForDoc(uiKey){
-  const k = String(uiKey || '').trim();
-  const legacy = k.replaceAll('_', ' ');
-  const extra = {
-    Lettera_di_Vettura:         ['Allegato LDV', 'Lettera di Vettura'],
-    Fattura_Commerciale:        ['Allegato Fattura', 'Fattura Commerciale Caricata', 'Fattura Commerciale'],
-    Fattura_Proforma:           ['Fattura Proforma'],
-    Dichiarazione_Esportazione: ['Allegato DLE', 'Dichiarazione Esportazione'],
-    Packing_List:               ['Allegato PL', 'Packing List'],
-    FDA_Prior_Notice:           ['Prior Notice'],
-  };
-  const out = new Set();
-  if (DOC_FIELD_MAP[k]) out.add(DOC_FIELD_MAP[k]);
-  if (extra[k]) extra[k].forEach(n => out.add(n));
-  out.add(legacy); // sempre anche il legacy “con spazi”
-  return Array.from(out).filter(Boolean);
-}
-
-/* ──────────────────────────────────────────────────────────────
-   Query spedizioni (lista)
-   ────────────────────────────────────────────────────────────── */
-
-export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
+function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   const u = new URLSearchParams();
   if (q) u.set('search', q);
   u.set('onlyOpen', onlyOpen ? '1' : '0');
@@ -55,6 +26,9 @@ export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   return u.toString();
 }
 
+/* ──────────────────────────────────────────────────────────────
+   LISTA SPEDIZIONI
+   ────────────────────────────────────────────────────────────── */
 export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
   if (!USE_PROXY){ console.warn('USE_PROXY=false – uso MOCK'); return []; }
   const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({ q: q.trim(), onlyOpen })}`;
@@ -67,8 +41,7 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    // Ritorniamo i record grezzi Airtable (normalizzazione in render.js)
-    return records;
+    return records; // normalizzazione la fa render.js
   }catch(err){
     console.error('[fetchShipments] failed', { url, err });
     showBanner(
@@ -80,12 +53,10 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   PATCH spedizione (tracking / stato / allegati)
-   - Costruiamo SEMPRE { fields }.
-   - Se per qualche motivo non mappiamo nulla ma abbiamo docs,
-     passiamo anche docs (fallback legacy).
+   PATCH SPEDIZIONE (tracking / stato / allegati)
+   - Costruiamo SEMPRE { fields } con i nomi NUOVI
+   - NIENTE fallback legacy → evitiamo 422 "Unknown field name"
    ────────────────────────────────────────────────────────────── */
-
 export async function patchShipmentTracking(recOrId, patch = {}){
   const id =
     (typeof recOrId === 'string') ? recOrId
@@ -93,11 +64,9 @@ export async function patchShipmentTracking(recOrId, patch = {}){
   if(!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
-
   const fields = {};
-  let hadDocs = false;
 
-  // Tracking → campi tabella
+  // Tracking
   if (patch.carrier){
     const norm = normalizeCarrier(patch.carrier || '');
     if (norm) fields['Corriere'] = norm;
@@ -106,48 +75,37 @@ export async function patchShipmentTracking(recOrId, patch = {}){
     fields['Tracking Number'] = String(patch.tracking).trim();
   }
 
-  // Stato (interpreta statoEvasa come “Evasa” nella nuova base)
+  // Stato (se serve)
   if (typeof patch.statoEvasa === 'boolean'){
+    // nella nuova base usiamo single select "Stato"
     fields['Stato'] = patch.statoEvasa ? 'Evasa' : 'Nuova';
   }
 
-  // Documenti → attachment fields
+  // Documenti → mappa diretta NUOVA BASE
   if (patch.docs && typeof patch.docs === 'object'){
-    hadDocs = true;
     for (const [uiKey, value] of Object.entries(patch.docs)){
-      const attachments =
+      const fieldName = DOC_FIELD_MAP[uiKey];
+      if (!fieldName){
+        console.warn('[patchShipmentTracking] doc senza mapping:', uiKey);
+        continue;
+      }
+      const att =
         typeof value === 'string' ? [{ url: value }] :
         (Array.isArray(value) ? value : []);
-      if (!attachments.length) continue;
-
-      const candidates = fieldCandidatesForDoc(uiKey);
-      candidates.forEach(fn => { fields[fn] = attachments; });
+      if (!att.length) continue;
+      fields[fieldName] = att;
     }
   }
 
-  // Log utile (una volta per sessione)
-  if (!window.__PATCH_DOC_LOG__){
-    window.__PATCH_DOC_LOG__ = true;
-    if (hadDocs){
-      console.debug('[patchShipmentTracking] docs IN:', Object.keys(patch.docs||{}));
-      console.debug('[patchShipmentTracking] fields OUT:', Object.keys(fields));
-    }
-  }
-
-  // Costruisci body: preferiamo fields; aggiungiamo docs come fallback legacy
-  const body = {};
-  if (Object.keys(fields).length) body.fields = fields;
-  if (hadDocs) body.docs = patch.docs; // fallback per proxy legacy
-
-  // Se davvero non c’è nulla da inviare, fermiamoci (caso anomalo)
-  if (!Object.keys(body).length){
+  if (!Object.keys(fields).length){
+    console.debug('[patchShipmentTracking] nessun campo mappato. Input:', patch);
     throw new Error('PATCH failed (client): no fields to update');
   }
 
   const res = await fetch(url, {
     method: 'PATCH',
     headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
-    body: JSON.stringify(body)
+    body: JSON.stringify({ fields }) // <-- SOLO fields
   });
 
   if (res.ok) return res.json();
@@ -157,22 +115,17 @@ export async function patchShipmentTracking(recOrId, patch = {}){
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Upload allegato → Vercel Blob → URL pubblica
+   UPLOAD allegato (→ URL pubblica)
    ────────────────────────────────────────────────────────────── */
-
 export async function uploadAttachment(recordId, docName, file){
-  if(!USE_PROXY){ // mock offline
+  if(!USE_PROXY){
     return { url: `https://files.dev/mock/${recordId}-${docName}-${Date.now()}-${file?.name||'file'}` };
   }
   const safe = (s)=> String(s||'').replace(/[^\w.\-]+/g,'_');
   const filename = `${safe(recordId)}__${safe(docName)}__${Date.now()}__${safe(file?.name||'file')}`;
   const url = `${AIRTABLE.proxyBase}/upload?filename=${encodeURIComponent(filename)}&contentType=${encodeURIComponent(file?.type || 'application/octet-stream')}`;
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Accept':'application/json' },
-    body: file
-  });
+  const res = await fetch(url, { method: 'POST', headers: { 'Accept':'application/json' }, body: file });
   if (!res.ok){
     const t = await res.text().catch(()=> '');
     throw new Error(`Upload proxy ${res.status}: ${t.slice(0,180)}`);
@@ -183,7 +136,7 @@ export async function uploadAttachment(recordId, docName, file){
 }
 
 /* ──────────────────────────────────────────────────────────────
-   Colli per spedizione (proxy /spedizioni/:id/colli)
+   COLLI per spedizione
    ────────────────────────────────────────────────────────────── */
 export async function fetchColliFor(recordId){
   try{
