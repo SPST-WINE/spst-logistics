@@ -20,6 +20,15 @@ const API_BASE =
     .replace(/\/airtable\/?$/i, '')  // es. https://spst-logistics.vercel.app/api
   || 'https://spst-logistics.vercel.app/api';
 
+/* ───────── Persistenza locale: “mail inviata” ───────── */
+const MAIL_KEY = 'boMailSent_v1';
+function loadMailMap(){ try { return JSON.parse(localStorage.getItem(MAIL_KEY) || '{}'); } catch { return {}; } }
+function hasMailSent(id){ const m = loadMailMap(); return !!m[id]; }
+function markMailSent(id){ const m = loadMailMap(); m[id] = Date.now(); localStorage.setItem(MAIL_KEY, JSON.stringify(m)); }
+
+/* Default: “Solo non evase” attivo all’apertura */
+if (elOnlyOpen) elOnlyOpen.checked = true;
+
 let DATA = [];
 
 /* ───────── utils ───────── */
@@ -31,8 +40,10 @@ function debounce(fn, ms = 250){
 async function loadData(){
   try{
     const q = (elSearch?.value || '').trim();
-    const onlyOpen = !!elOnlyOpen?.checked;
-    const status = 'all';
+
+    // Con checkbox attivo mostriamo SOLO stato=Nuova
+    const status   = elOnlyOpen?.checked ? 'nuova' : 'all';
+    const onlyOpen = false; // non lo usiamo più per filtrare “in transito”
 
     const items = await fetchShipments({ q, status, onlyOpen });
     DATA = items || [];
@@ -45,28 +56,13 @@ async function loadData(){
 
 function applyFilters(){
   const out = [...DATA].sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
-  renderList(out, { onUploadForDoc, onSaveTracking, onComplete, onSendMail });
-}
-
-/* ───────── helpers DOM ───────── */
-function setBadge(recId, text, cls){
-  const card = document.getElementById(`card-${recId}`);
-  const badge = card?.querySelector('.badge');
-  if (badge){
-    badge.textContent = text;
-    badge.className = `badge ${cls||'green'}`;
-  }
-}
-function enableNotify(recId){
-  const card = document.getElementById(`card-${recId}`);
-  const btn = card?.querySelector('.send-mail');
-  const inp = card?.querySelector('.notify-email');
-  if (btn && inp){
-    btn.disabled = false;
-    inp.disabled = false;
-    btn.title = '';
-    inp.title = '';
-  }
+  renderList(out, {
+    onUploadForDoc,
+    onSaveTracking,
+    onComplete,
+    onSendMail,
+    isMailSent: hasMailSent,         // ➜ per mostrare “Email inviata ✓” in card
+  });
 }
 
 /* ───────── actions ───────── */
@@ -96,7 +92,6 @@ async function onUploadForDoc(e, rec, docKey){
   }
 }
 
-/* Salva tracking: NON cambia lo stato */
 async function onSaveTracking(rec, carrier, tn){
   carrier = (carrier||'').trim();
   tn = (tn||'').trim();
@@ -106,11 +101,13 @@ async function onSaveTracking(rec, carrier, tn){
   if (!recId){ toast('Errore: id record mancante'); return; }
 
   try{
-    await patchShipmentTracking(recId, { carrier, tracking: tn }); // ← nessun cambio 'Stato'
-    // aggiorna UI locale (card resta visibile nella vista "Solo non evase")
+    // Solo salvataggio carrier + tracking (lo stato passerà a “In transito” con Evasione completata)
+    await patchShipmentTracking(recId, { carrier, tracking: tn });
+
+    // aggiorna UI locale senza ricaricare
     rec.tracking_carrier = carrier;
     rec.tracking_number  = tn;
-    enableNotify(rec.id);
+
     toast(`${rec.id}: tracking salvato`);
   }catch(err){
     console.error('Errore salvataggio tracking', err);
@@ -118,8 +115,11 @@ async function onSaveTracking(rec, carrier, tn){
   }
 }
 
-/* Invio mail sicuro: solo se in transito e email coincide */
-async function onSendMail(rec, typedEmail){
+/**
+ * Invio mail sicuro con Resend.
+ * Accetta un terzo parametro opzionale { onSuccess } per aggiornare la UI della card (flag “inviata”).
+ */
+async function onSendMail(rec, typedEmail, opts = {}){
   try{
     const to = String(typedEmail || '').trim();
     const hint = String(rec?.email || '').trim();
@@ -128,10 +128,12 @@ async function onSendMail(rec, typedEmail){
       toast('Digita l’email del cliente');
       return;
     }
+    // sicurezza: deve coincidere con quella del record
     if (hint && to.toLowerCase() !== hint.toLowerCase()){
       toast('L’email digitata non coincide con quella del record');
       return;
     }
+    // disponibile solo quando Stato = “In transito”
     if (String(rec?.stato || '').toLowerCase() !== 'in transito'){
       toast('Disponibile solo quando la spedizione è “In transito”');
       return;
@@ -158,6 +160,9 @@ async function onSendMail(rec, typedEmail){
       throw new Error(`HTTP ${r.status}: ${t}`);
     }
 
+    markMailSent(rec.id);           // ✓ ricordiamo che è stata inviata
+    if (typeof opts.onSuccess === 'function') opts.onSuccess();
+
     toast('Mail inviata al cliente');
   }catch(err){
     console.error('[sendMail] error', err);
@@ -165,19 +170,16 @@ async function onSendMail(rec, typedEmail){
   }
 }
 
-/* Evasione completata: qui SI passa a "In transito" e si ricarica la lista */
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
   if (!recId){
     rec.stato = 'In transito';
-    setBadge(rec.id, 'In transito', 'green');
     toast(`${rec.id}: evasione completata (locale)`);
     applyFilters();
     return;
   }
   try{
     await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
-    setBadge(rec.id, 'In transito', 'green');
     toast(`${rec.id}: evasione completata`);
     await loadData(); // con "Solo non evase" attivo scompare perché non è più "Nuova"
   }catch(err){
