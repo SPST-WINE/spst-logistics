@@ -5,6 +5,25 @@ import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
 import { showBanner, toast } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
+// --- Mappa doc UI -> nome campo Airtable (allegati) ---
+export const DOC_FIELD_MAP = {
+  Lettera_di_Vettura: 'Allegato LDV',
+  Fattura_Commerciale: 'Allegato Fattura',
+  Fattura_Proforma: 'Fattura Proforma',
+  Dichiarazione_Esportazione: 'Allegato DLE',
+  Packing_List: 'Allegato PL',
+  FDA_Prior_Notice: 'Prior Notice',
+  // allegati caricati dal cliente (se usi anche questi)
+  Fattura_Client: 'Fattura - Allegato Cliente',
+  Packing_Client: 'Packing List - Allegato Cliente',
+};
+
+export function docFieldFor(docKey){
+  // es. 'Lettera_di_Vettura' -> 'Allegato LDV'
+  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
+}
+
+
  export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
    const u = new URLSearchParams();
    if (q) u.set('search', q);
