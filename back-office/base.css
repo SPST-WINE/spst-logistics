@@ -301,3 +301,23 @@ table.colli td:first-child{
     inset 0 0 0 1px rgba(255,255,255,.06); /* “luce” interna sul bordo */
   padding: 16px;
 }
+
+.import-flag{
+  display:inline-block;
+  padding:4px 8px;
+  border-radius:999px;
+  font-weight:600;
+  font-size:12px;
+  border:1px solid transparent;
+}
+.import-flag.yes{
+  background:rgba(31,191,117,.12);
+  color:#8ff0c1;
+  border-color:rgba(31,191,117,.35);
+}
+.import-flag.no{
+  background:rgba(255,90,101,.12);
+  color:#ffc0c5;
+  border-color:rgba(255,90,101,.35);
+}
+
