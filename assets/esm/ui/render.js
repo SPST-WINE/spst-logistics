@@ -181,6 +181,7 @@ export function normalizeShipmentRecord(rec) {
 
   return {
     _recId: rec.id,
+     _rawFields: f, 
     id: idSped,
     cliente: dest_rs || mitt_rs || '(sconosciuto)',
     email,
