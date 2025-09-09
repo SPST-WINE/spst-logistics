@@ -322,15 +322,21 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
 
-        <div class="k">Dest. abilitato import</div>
+                <div class="k">Dest. abilitato import</div>
         <div>
-          <label class="chip small">
-            <input id="imp-${rec.id}" type="checkbox" ${rec.dest_import_ok ? 'checked' : ''}>
-            <span id="imp-txt-${rec.id}">${rec.dest_import_ok ? 'Sì' : 'No'}</span>
-          </label>
+          <span class="import-flag ${rec.dest_import_ok ? 'yes' : 'no'}">
+            ${rec.dest_import_ok ? 'Sì' : 'No'}
+          </span>
         </div>
 
-        <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
+
+                <div class="k">Peso reale</div>
+        <div>
+          <span class="bo-peso-reale" id="peso-${rec.id}">
+            ${toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))}
+          </span>
+        </div>
+
 
         <div class="k">Lista colli</div>
         <div class="bo-colli-holder">
@@ -452,6 +458,11 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
               </table>`;
             if (holder) holder.innerHTML = html;
             rec.colli = rows;
+
+                         // ➜ aggiorna "Peso reale" nella card
+            const pesoEl = card.querySelector(`#peso-${rec.id}`);
+            if (pesoEl) pesoEl.textContent = toKg(totalPesoKg(rec));
+
 
             // ➜ aggiorna la “Colli (lista)” nel riquadro Dettagli/Print
             const printCell = card.querySelector(`#print-colli-${rec.id}`);
