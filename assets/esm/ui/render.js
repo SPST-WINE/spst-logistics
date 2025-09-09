@@ -71,7 +71,7 @@ function mapDocs(fields) {
     Dichiarazione_Esportazione: dle,
     Packing_List: plBO || packingCli,
     FDA_Prior_Notice: FDA_PN,
-    'e-DAS': EDAS,                       // ⬅️ NEW: segna ok se presente in 1/2/3
+    'e-DAS': EDAS,
 
     // visibilità separata (se vorrai mostrarli)
     Fattura_Client: fatturaCli,
@@ -409,6 +409,20 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
 
       ${renderLabelPanel(rec)}
       ${renderTrackingBlock(rec)}
+
+      ${String(rec.stato||'').toLowerCase()==='in transito' ? `
+        <div class="notify-mail" style="margin:10px 0 4px; padding:10px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(255,255,255,.03)">
+          <div class="small" style="opacity:.9;margin-bottom:6px">
+            Notifica cliente (spedizione <strong>in transito</strong>) — <em>digita l’email per confermare</em>
+          </div>
+          <div class="row" style="gap:8px; align-items:center">
+            <input id="mail-${rec.id}" type="email" placeholder="${rec.email || 'email@cliente.com'}" style="min-width:260px">
+            <button class="mini-btn send-mail" data-mailid="mail-${rec.id}">Invia mail</button>
+            <span class="small" style="opacity:.7">L’indirizzo deve coincidere con quello del record.</span>
+          </div>
+        </div>
+      ` : ''}
+
       <div class="actions">
         <button class="btn complete" data-id="${rec.id}">Evasione completata</button>
       </div>
@@ -460,6 +474,34 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       const carrierSel = card.querySelector('#'+saveBtn.dataset.carrier);
       const tnInput = card.querySelector('#'+saveBtn.dataset.tn);
       saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
+    }
+
+    // Invio mail cliente (solo se "In transito")
+    const sendBtn = card.querySelector('.send-mail');
+    if (sendBtn){
+      const input = card.querySelector('#'+sendBtn.dataset.mailid);
+      sendBtn.addEventListener('click', async ()=>{
+        const okState = String(rec.stato||'').toLowerCase()==='in transito';
+        if (!okState) { alert('La spedizione non è in stato "In transito".'); return; }
+
+        const typed = (input?.value || '').trim();
+        const ref   = (rec.email || '').trim();
+        if (!typed || typed.toLowerCase() !== ref.toLowerCase()){
+          alert('L’email digitata non coincide con quella del record.');
+          return;
+        }
+        try{
+          sendBtn.disabled = true; sendBtn.textContent = 'Invio…';
+          const { sendTransitEmail } = await import('../airtable/api.js');
+          await sendTransitEmail(rec._recId || rec.id, typed);
+          alert('Email inviata al cliente.');
+        }catch(e){
+          console.error('[notify/transit] fail', e);
+          alert('Errore invio email.');
+        }finally{
+          sendBtn.disabled = false; sendBtn.textContent = 'Invia mail';
+        }
+      });
     }
 
     // Lazy-load colli se assenti + aggiorna anche la print-grid
