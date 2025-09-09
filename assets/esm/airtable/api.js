@@ -230,22 +230,19 @@ export async function fetchColliFor(recordId) {
 const PRIMARY_FIELDS = new Set(['Allegato LDV', 'Allegato Fattura', 'Allegato DLE', 'Allegato PL']);
 const EXTRA_SLOTS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
 
-export async function patchDocAttachment(recordId, docKey, attachments) {
+export async function patchDocAttachment(recordId, docKey, attachments, rawFields = null) {
   if (!recordId) throw new Error('Missing record id');
   const mapped = docFieldFor(docKey);
 
-  // Caso 1: campo principale
+  // Caso 1: documenti principali → campo dedicato (sovrascrivi/gestisci array)
   if (PRIMARY_FIELDS.has(mapped)) {
     return patchShipmentTracking(recordId, { fields: { [mapped]: attachments } });
   }
 
-  // Caso 2: documento “extra” → scegli A1/A2/A3
+  // Caso 2: documenti “extra” → scegli A1/A2/A3 usando i campi già presenti in pagina
+  let fields = rawFields;
   let chosen = null;
   let existing = [];
-
-  // prova a leggere il record per verificare gli slot
-  const rec = await fetchShipmentById(recordId).catch(() => null);
-  const fields = rec?.fields || null;
 
   if (fields) {
     for (const slot of EXTRA_SLOTS) {
@@ -258,7 +255,7 @@ export async function patchDocAttachment(recordId, docKey, attachments) {
       existing = Array.isArray(fields[chosen]) ? fields[chosen] : [];
     }
   } else {
-    // fallback se non riusciamo a leggere il record (es. 405)
+    // fallback ultra-conservativo se non abbiamo i campi (evita GET al proxy)
     chosen = 'Allegato 1';
     existing = [];
   }
@@ -266,3 +263,4 @@ export async function patchDocAttachment(recordId, docKey, attachments) {
   const next = [...existing, ...attachments];
   return patchShipmentTracking(recordId, { fields: { [chosen]: next } });
 }
+
