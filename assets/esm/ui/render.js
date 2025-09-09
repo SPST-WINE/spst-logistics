@@ -11,13 +11,8 @@ import { fetchColliFor } from '../airtable/api.js';
    ────────────────────────────────────────────────────────────── */
 
 function normKey(s){
-  return String(s || '')
-    .replace(/[–—]/g, '-')      // en/em dash → hyphen
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
+  return String(s || '').replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim().toLowerCase();
 }
-
 function pickLoose(fields, ...names){
   if (!fields) return undefined;
   const map = new Map(Object.keys(fields).map(k => [normKey(k), k]));
@@ -28,7 +23,6 @@ function pickLoose(fields, ...names){
       if (v !== '' && v != null) return v;
     }
   }
-  // fallback esatto
   for (const n of names){
     if (n in fields && fields[n] !== '' && fields[n] != null) return fields[n];
   }
@@ -58,13 +52,12 @@ function mapDocs(fields) {
   const att2      = getAttUrl('Allegato 2');
   const att3      = getAttUrl('Allegato 3');
 
-  // priorità elastiche per coprire gli slot anche se non rispettano l’ordine “ideale”
+  // priorità elastiche
   const PROFORMA = att1 || att2 || att3;
   const FDA_PN   = att2 || att1 || att3;
   const EDAS     = att3 || att2 || att1;
 
   return {
-    // chiavi usate nella UI/rules
     Lettera_di_Vettura: ldv,
     Fattura_Commerciale: fatturaBO || fatturaCli,
     Fattura_Proforma: PROFORMA,
@@ -73,11 +66,9 @@ function mapDocs(fields) {
     FDA_Prior_Notice: FDA_PN,
     'e-DAS': EDAS,
 
-    // visibilità separata (se vorrai mostrarli)
     Fattura_Client: fatturaCli,
     Packing_Client: packingCli,
 
-    // utili se vuoi elencarli altrove
     Allegato_1: att1,
     Allegato_2: att2,
     Allegato_3: att3,
@@ -134,12 +125,7 @@ export function normalizeShipmentRecord(rec) {
   // P.IVA/CF destinatario
   const dest_piva  = pickLoose(
     f,
-    'Destinatario - P.IVA/CF',
-    'P.IVA/CF Destinatario',
-    'PIVA Destinatario',
-    'P.IVA Destinatario',
-    'CF Destinatario',
-    'Codice Fiscale Destinatario'
+    'Destinatario - P.IVA/CF','P.IVA/CF Destinatario','PIVA Destinatario','P.IVA Destinatario','CF Destinatario','Codice Fiscale Destinatario'
   );
 
   // Stato nuovo / legacy
@@ -173,7 +159,7 @@ export function normalizeShipmentRecord(rec) {
   const docs  = mapDocs(f);
   const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
 
-  // Log una volta per aiutare debugging
+  // Debug (una sola volta)
   if (!window.__BO_DEBUG_ONCE__) {
     window.__BO_DEBUG_ONCE__ = true;
     console.group('[BO] Debug primo record');
@@ -251,6 +237,10 @@ function renderTrackingBlock(rec){
   const carrierId = `${rec.id}-carrier`;
   const tnId = `${rec.id}-tn`;
   const url = trackingUrl(rec.tracking_carrier, rec.tracking_number) || rec.tracking_url || '#';
+
+  // Blocco “notifica email sicura”: mostra solo con stato “in transito” e tracking presente
+  const canNotify = String(rec.stato||'').toLowerCase() === 'in transito' && !!(rec.tracking_number && rec.tracking_carrier);
+
   return `
     <div class="track" id="${rec.id}-track">
       <span class="small" style="opacity:.9">Tracking</span>
@@ -262,10 +252,29 @@ function renderTrackingBlock(rec){
       <button class="mini-btn save-tracking" data-carrier="${carrierId}" data-tn="${tnId}">Salva tracking</button>
       <span class="small link">${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>` : ''}</span>
     </div>
+
+    <div class="mail-row ${canNotify? '' : 'disabled'}">
+      <div class="small" style="opacity:.9">Notifica cliente (stato <em>in transito</em>) — digita l’email per confermare</div>
+      <div class="mail-controls">
+        <input
+          type="email"
+          class="mail-input"
+          id="mail-${rec.id}"
+          placeholder="${rec.email || 'email@cliente.com'}"
+          ${canNotify? '' : 'disabled'}
+        >
+        <button class="mini-btn primary send-mail"
+                data-id="${rec.id}"
+                ${canNotify? '' : 'disabled'}>
+          Invia mail
+        </button>
+        <span class="small" style="opacity:.75">L’indirizzo deve coincidere con quello del record.</span>
+      </div>
+    </div>
   `;
 }
 
-/* print-grid: aggiungo un ID al campo “Colli (lista)” per aggiornamento post fetch */
+/* print-grid */
 function renderPrintGrid(rec){
   const colliListHtml = (rec.colli && rec.colli.length)
     ? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ')
@@ -290,9 +299,7 @@ function renderPrintGrid(rec){
   ];
 
   let html = `<div class="print-grid">`;
-  for (const [k,v] of fields){
-    html += `<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`;
-  }
+  for (const [k,v] of fields){ html += `<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`; }
   html += `<div class='k'>Colli (lista)</div><div id="print-colli-${rec.id}">${colliListHtml}</div>`;
   html += `</div>`;
   return html;
@@ -313,7 +320,7 @@ function ensureListContainer() {
   return el;
 }
 
-export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
+export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, onSendMail}){
   const normalized = (data || []).map((rec) => rec && rec.fields ? normalizeShipmentRecord(rec) : rec);
 
   const elList = ensureListContainer();
@@ -409,20 +416,6 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
 
       ${renderLabelPanel(rec)}
       ${renderTrackingBlock(rec)}
-
-      ${String(rec.stato||'').toLowerCase()==='in transito' ? `
-        <div class="notify-mail" style="margin:10px 0 4px; padding:10px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:rgba(255,255,255,.03)">
-          <div class="small" style="opacity:.9;margin-bottom:6px">
-            Notifica cliente (spedizione <strong>in transito</strong>) — <em>digita l’email per confermare</em>
-          </div>
-          <div class="row" style="gap:8px; align-items:center">
-            <input id="mail-${rec.id}" type="email" placeholder="${rec.email || 'email@cliente.com'}" style="min-width:260px">
-            <button class="mini-btn send-mail" data-mailid="mail-${rec.id}">Invia mail</button>
-            <span class="small" style="opacity:.7">L’indirizzo deve coincidere con quello del record.</span>
-          </div>
-        </div>
-      ` : ''}
-
       <div class="actions">
         <button class="btn complete" data-id="${rec.id}">Evasione completata</button>
       </div>
@@ -476,35 +469,17 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
     }
 
-    // Invio mail cliente (solo se "In transito")
-    const sendBtn = card.querySelector('.send-mail');
-    if (sendBtn){
-      const input = card.querySelector('#'+sendBtn.dataset.mailid);
-      sendBtn.addEventListener('click', async ()=>{
-        const okState = String(rec.stato||'').toLowerCase()==='in transito';
-        if (!okState) { alert('La spedizione non è in stato "In transito".'); return; }
-
-        const typed = (input?.value || '').trim();
-        const ref   = (rec.email || '').trim();
-        if (!typed || typed.toLowerCase() !== ref.toLowerCase()){
-          alert('L’email digitata non coincide con quella del record.');
-          return;
-        }
-        try{
-          sendBtn.disabled = true; sendBtn.textContent = 'Invio…';
-          const { sendTransitEmail } = await import('../airtable/api.js');
-          await sendTransitEmail(rec._recId || rec.id, typed);
-          alert('Email inviata al cliente.');
-        }catch(e){
-          console.error('[notify/transit] fail', e);
-          alert('Errore invio email.');
-        }finally{
-          sendBtn.disabled = false; sendBtn.textContent = 'Invia mail';
-        }
+    // Invia mail sicura
+    const mailBtn = card.querySelector('.send-mail');
+    if (mailBtn){
+      const input = card.querySelector('#mail-'+rec.id);
+      mailBtn.addEventListener('click', ()=>{
+        const val = (input?.value||'').trim();
+        onSendMail(rec, val);
       });
     }
 
-    // Lazy-load colli se assenti + aggiorna anche la print-grid
+    // Lazy-load colli
     (async ()=>{
       try{
         if (!rec.colli || !rec.colli.length) {
@@ -522,11 +497,9 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
             if (holder) holder.innerHTML = html;
             rec.colli = rows;
 
-            // ➜ aggiorna "Peso reale" nella card
             const pesoEl = card.querySelector(`#peso-${rec.id}`);
             if (pesoEl) pesoEl.textContent = toKg(totalPesoKg(rec));
 
-            // ➜ aggiorna la “Colli (lista)” nel riquadro Dettagli/Print
             const printCell = card.querySelector(`#print-colli-${rec.id}`);
             if (printCell){
               printCell.textContent = rows.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ');
@@ -541,7 +514,5 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
     })();
 
     try { elList.appendChild(card); } catch (e) { console.error('[BO] append card fallito', e); }
-
-    console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, colli: rec.colli?.length||0 });
   });
 }
