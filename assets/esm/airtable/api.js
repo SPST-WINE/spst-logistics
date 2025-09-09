@@ -1,6 +1,6 @@
 // assets/esm/airtable/api.js
 import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
-import { showBanner, toast } from '../utils/dom.js';
+import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
 /* ──────────────────────────────────────────────────────────────
@@ -8,7 +8,7 @@ import { normalizeCarrier } from '../utils/misc.js';
    ────────────────────────────────────────────────────────────── */
 
 export const DOC_FIELD_MAP = {
-  // Operativi SPST
+  // Operativi SPST (nuovi nomi tabella SpedizioniWebApp)
   Lettera_di_Vettura:         'Allegato LDV',
   Fattura_Commerciale:        'Allegato Fattura',
   Fattura_Proforma:           'Fattura Proforma',
@@ -22,6 +22,25 @@ export const DOC_FIELD_MAP = {
 
 export function docFieldFor(docKey){
   return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_',' ');
+}
+
+/* Extra: per i doc principali, prova più nomi (nuovi + legacy) */
+function fieldCandidatesForDoc(uiKey){
+  const k = String(uiKey || '').trim();
+  const legacy = k.replaceAll('_', ' ');
+  const extra = {
+    Lettera_di_Vettura:         ['Allegato LDV', 'Lettera di Vettura'],
+    Fattura_Commerciale:        ['Allegato Fattura', 'Fattura Commerciale Caricata', 'Fattura Commerciale'],
+    Fattura_Proforma:           ['Fattura Proforma'],
+    Dichiarazione_Esportazione: ['Allegato DLE', 'Dichiarazione Esportazione'],
+    Packing_List:               ['Allegato PL', 'Packing List'],
+    FDA_Prior_Notice:           ['Prior Notice'],
+  };
+  const out = new Set();
+  if (DOC_FIELD_MAP[k]) out.add(DOC_FIELD_MAP[k]);
+  if (extra[k]) extra[k].forEach(n => out.add(n));
+  out.add(legacy); // sempre anche il legacy “con spazi”
+  return Array.from(out).filter(Boolean);
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -62,7 +81,9 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
 
 /* ──────────────────────────────────────────────────────────────
    PATCH spedizione (tracking / stato / allegati)
-   Invia SEMPRE { fields } già mappati per la nuova base.
+   - Costruiamo SEMPRE { fields }.
+   - Se per qualche motivo non mappiamo nulla ma abbiamo docs,
+     passiamo anche docs (fallback legacy).
    ────────────────────────────────────────────────────────────── */
 
 export async function patchShipmentTracking(recOrId, patch = {}){
@@ -73,10 +94,10 @@ export async function patchShipmentTracking(recOrId, patch = {}){
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
 
-  // Costruisci i campi da inviare a Airtable
   const fields = {};
+  let hadDocs = false;
 
-  // Tracking
+  // Tracking → campi tabella
   if (patch.carrier){
     const norm = normalizeCarrier(patch.carrier || '');
     if (norm) fields['Corriere'] = norm;
@@ -85,37 +106,48 @@ export async function patchShipmentTracking(recOrId, patch = {}){
     fields['Tracking Number'] = String(patch.tracking).trim();
   }
 
-  // Stato (interpreta statoEvasa come Evasa nella nuova base)
+  // Stato (interpreta statoEvasa come “Evasa” nella nuova base)
   if (typeof patch.statoEvasa === 'boolean'){
     fields['Stato'] = patch.statoEvasa ? 'Evasa' : 'Nuova';
   }
 
-  // Documenti: UI key → campo Airtable (attachment)
+  // Documenti → attachment fields
   if (patch.docs && typeof patch.docs === 'object'){
+    hadDocs = true;
     for (const [uiKey, value] of Object.entries(patch.docs)){
-      const fieldName = docFieldFor(uiKey);
-      if (!fieldName) continue;
-      let attachments = value;
-      if (typeof value === 'string') attachments = [{ url: value }];
-      if (Array.isArray(attachments) && attachments.length){
-        fields[fieldName] = attachments;
-      }
+      const attachments =
+        typeof value === 'string' ? [{ url: value }] :
+        (Array.isArray(value) ? value : []);
+      if (!attachments.length) continue;
+
+      const candidates = fieldCandidatesForDoc(uiKey);
+      candidates.forEach(fn => { fields[fn] = attachments; });
     }
   }
 
-  // Campi extra già “Airtable-ready” (facoltativi)
-  if (patch.fields && typeof patch.fields === 'object'){
-    Object.assign(fields, patch.fields);
+  // Log utile (una volta per sessione)
+  if (!window.__PATCH_DOC_LOG__){
+    window.__PATCH_DOC_LOG__ = true;
+    if (hadDocs){
+      console.debug('[patchShipmentTracking] docs IN:', Object.keys(patch.docs||{}));
+      console.debug('[patchShipmentTracking] fields OUT:', Object.keys(fields));
+    }
   }
 
-  if (!Object.keys(fields).length){
+  // Costruisci body: preferiamo fields; aggiungiamo docs come fallback legacy
+  const body = {};
+  if (Object.keys(fields).length) body.fields = fields;
+  if (hadDocs) body.docs = patch.docs; // fallback per proxy legacy
+
+  // Se davvero non c’è nulla da inviare, fermiamoci (caso anomalo)
+  if (!Object.keys(body).length){
     throw new Error('PATCH failed (client): no fields to update');
   }
 
   const res = await fetch(url, {
     method: 'PATCH',
     headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
-    body: JSON.stringify({ fields })
+    body: JSON.stringify(body)
   });
 
   if (res.ok) return res.json();
