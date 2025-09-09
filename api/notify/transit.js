@@ -53,64 +53,114 @@ export default async function handler(req, res){
 
     const resend = new Resend(RESEND_API_KEY);
 
-    /* ───────── HTML (sfondo bianco, link neri, no link tracking) ───────── */
+    // Branding coerente al template "conferma"
+    const BRAND_PRIMARY = '#1c3e5e';
+    const BRAND_ACCENT  = '#f7911e';
+    const BRAND_BG      = '#f6f8fb';
+
+    /* ───────── HTML (card bianca con header brand, link neri, bottoni come template) ───────── */
     const html = `<!doctype html>
-<html>
+<html lang="it">
   <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width">
     <meta name="x-apple-disable-message-reformatting">
-    <meta name="color-scheme" content="light">
-    <meta name="supported-color-schemes" content="light">
-    <style>
-      body{margin:0;padding:0;background:#ffffff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111;}
-      .wrap{max-width:640px;margin:0 auto;padding:24px;}
-      .card{border:1px solid #e6e6e6;border-radius:14px;padding:24px;background:#fff;}
-      .row{display:block;}
-      .logo{width:36px;height:36px;display:inline-block;margin-bottom:8px;}
-      h1{font-size:20px;line-height:1.2;margin:4px 0 8px 0;color:#111;}
-      .id{font-size:12px;color:#666;margin-bottom:16px;}
-      p{font-size:14px;line-height:1.55;margin:0 0 12px 0;color:#111;}
-      .box{border:1px solid #eee;border-radius:10px;padding:16px;margin:16px 0;background:#fff;}
-      .k{font-weight:600;color:#555;}
-      .btns{display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;}
-      .btn{display:inline-block;font-size:14px;padding:10px 14px;border-radius:10px;text-decoration:none;color:#111;}
-      .btn-primary{background:#f7911e;border:1px solid rgba(0,0,0,.12);}
-      .btn-ghost{background:#e6fff3;border:1px solid #b4f0d2;}
-      .foot{font-size:12px;color:#666;margin-top:12px;}
-      .foot p{margin:0 0 24px 0;} /* spazio extra sotto "Team SPST" */
-      a{color:#111 !important;text-decoration:underline !important;}
-      @media (prefers-color-scheme: dark){
-        body{background:#ffffff;color:#111;} /* forza bianco anche in dark mode */
-      }
-    </style>
+    <title>SPST • Spedizione in transito — ${esc(id)}</title>
   </head>
-  <body>
-    <div class="wrap">
-      <div class="card">
-        <img class="logo" src="${esc(EMAIL_LOGO_URL)}" alt="SPST logo">
-        <h1>Spedizione in transito</h1>
-        <div class="id">ID: <strong>${esc(id)}</strong></div>
-
-        <p>Gentile Cliente, la tua spedizione è stata evasa. Trovi i documenti da stampare all'interno della tua <a href="${esc(AREA_RISERVATA)}" target="_blank" style="color:#111;text-decoration:underline;">Area Riservata SPST</a>.</p>
-        <p>Ritiro previsto: <strong>${esc(fmtDate(ritiroData))}</strong></p>
-        <p>Se ci dovessero essere problemi con il ritiro puoi riferirti al nostro <a href="${esc(WHATSAPP_URL)}" target="_blank" style="color:#111;text-decoration:underline;">Supporto WhatsApp</a>.</p>
-
-        <div class="box">
-          <div class="row"><span class="k">Corriere:</span> ${esc(carrier || '—')}</div>
-          <div class="row"><span class="k">Tracking:</span> ${esc(tracking || '—')}</div>
-        </div>
-
-        <div class="btns">
-          <a class="btn btn-primary" href="${esc(AREA_RISERVATA)}" target="_blank" style="text-decoration:none;color:#111;">Area Riservata</a>
-          <a class="btn btn-ghost"   href="${esc(WHATSAPP_URL)}" target="_blank" style="text-decoration:none;color:#111;">Supporto WhatsApp</a>
-        </div>
-
-        <div class="foot">
-          <p>Grazie,<br>Team SPST</p>
-          <div>Ricevi questa mail perché hai effettuato una spedizione con SPST.</div>
-        </div>
-      </div>
+  <body style="margin:0;background:${BRAND_BG};font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;">
+    <!-- Preheader -->
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">
+      Spedizione in transito — ritiro previsto ${esc(fmtDate(ritiroData))}.
     </div>
+
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:${BRAND_BG};padding:24px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0">
+            <!-- Header brand -->
+            <tr>
+              <td style="background:${BRAND_PRIMARY};padding:20px 24px;">
+                ${EMAIL_LOGO_URL ? `<img src="${esc(EMAIL_LOGO_URL)}" alt="SPST" style="height:28px;display:block;border:0;filter:brightness(110%);">` : ``}
+              </td>
+            </tr>
+
+            <!-- Body -->
+            <tr>
+              <td style="padding:24px;">
+                <h1 style="margin:0 0 8px 0;font-size:20px;color:#0f172a;">Spedizione in transito</h1>
+
+                <!-- ID -->
+                <table role="presentation" style="width:100%;margin:8px 0 16px;">
+                  <tr><td style="font-size:12px;color:#6b7280;padding-bottom:4px;">ID spedizione</td></tr>
+                  <tr>
+                    <td style="font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:14px;padding:10px 12px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;color:#111827;">
+                      ${esc(id)}
+                    </td>
+                  </tr>
+                </table>
+
+                <p style="margin:0 0 12px 0;color:#111;font-size:14px;line-height:1.55;">
+                  Gentile Cliente, la tua spedizione è stata evasa. Trovi i documenti da stampare all'interno della tua
+                  <a href="${esc(AREA_RISERVATA)}" target="_blank" style="color:#111;text-decoration:underline;">Area Riservata SPST</a>.
+                </p>
+
+                <p style="margin:0 0 12px 0;color:#111;font-size:14px;line-height:1.55;">
+                  Ritiro previsto: <strong>${esc(fmtDate(ritiroData))}</strong>
+                </p>
+
+                <p style="margin:0 0 16px 0;color:#111;font-size:14px;line-height:1.55;">
+                  Se ci dovessero essere problemi con il ritiro puoi riferirti al nostro
+                  <a href="${esc(WHATSAPP_URL)}" target="_blank" style="color:#111;text-decoration:underline;">Supporto WhatsApp</a>.
+                </p>
+
+                <!-- Box corriere -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;background:#fff;margin:16px 0;">
+                  <tr>
+                    <td style="padding:14px 16px;font-size:14px;color:#111;">
+                      <div style="margin:0 0 6px 0;"><span style="font-weight:600;color:#555;">Corriere:</span> ${esc(carrier || '—')}</div>
+                      <div><span style="font-weight:600;color:#555;">Tracking:</span> ${esc(tracking || '—')}</div>
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- CTA: primario scuro, secondario arancione -->
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 0;">
+                  <tr>
+                    <td>
+                      <a href="${esc(AREA_RISERVATA)}" target="_blank"
+                         style="display:inline-block;background:${BRAND_PRIMARY};color:#ffffff;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:600;font-size:14px;">
+                        Area Riservata
+                      </a>
+                    </td>
+                    <td style="width:10px"></td>
+                    <td>
+                      <a href="${esc(WHATSAPP_URL)}" target="_blank"
+                         style="display:inline-block;background:${BRAND_ACCENT};color:#111827;text-decoration:none;padding:12px 16px;border-radius:10px;font-weight:600;font-size:14px;">
+                        Supporto WhatsApp
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- Saluti -->
+                <p style="margin:18px 0 24px 0;color:#111;font-size:14px;line-height:1.55;">
+                  Grazie,<br>Team SPST
+                </p>
+              </td>
+            </tr>
+
+            <!-- Footer -->
+            <tr>
+              <td style="padding:16px 24px;background:#f3f4f6;color:#6b7280;font-size:12px;">
+                <p style="margin:0;">Ricevi questa mail perché hai effettuato una spedizione con SPST.</p>
+              </td>
+            </tr>
+          </table>
+
+          <div style="color:#94a3b8;font-size:12px;margin-top:12px"></div>
+        </td>
+      </tr>
+    </table>
   </body>
 </html>`;
 
