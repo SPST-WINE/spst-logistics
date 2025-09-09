@@ -113,42 +113,48 @@ function buildFilterFormula({ search, status, onlyOpen }) {
 
   if (search) {
     const s = esc(search.toLowerCase());
+    const NEW_FIELDS = [
+      'ID Spedizione','Creato da',
+      'Mittente - Ragione sociale','Mittente - Paese','Mittente - Città','Mittente - Indirizzo',
+      'Destinatario - Ragione sociale','Destinatario - Paese','Destinatario - Città','Destinatario - Indirizzo',
+      'Tracking Number','Incoterm',
+    ];
+    const LEGACY_FIELDS = [
+      'Destinatario','Mittente','Mail Cliente',
+      'Paese Destinatario','Città Destinatario','Indirizzo Destinatario',
+      'Paese Mittente','Città Mittente','Indirizzo Mittente',
+    ];
+    const FIELDS = [...NEW_FIELDS, ...LEGACY_FIELDS];
 
     const ors = [];
-    // match esatto (case-insensitive) su ID e Tracking
+    // match esatto su ID/Tracking
     ors.push(`LOWER({ID Spedizione} & "") = "${s}"`);
     ors.push(`LOWER({Tracking Number} & "") = "${s}"`);
-    // match "contains" su tutti i campi noti
-    for (const f of SEARCH_FIELDS) {
-      ors.push(`FIND("${s}", LOWER({${f}} & ""))`);
-    }
+    // match "contiene" su tutto il resto
+    for (const f of FIELDS) ors.push(`FIND("${s}", LOWER({${f}} & ""))`);
     parts.push(`OR(${ors.join(',')})`);
   }
 
-  // stato
   const IS_EVASA       = `{Stato}="Evasa"`;
   const IS_NUOVA       = `{Stato}="Nuova"`;
   const IS_CONSEGNATA  = `{Stato}="Consegnata"`;
   const IS_ANNULLATA   = `{Stato}="Annullata"`;
-  const IS_IN_TRANSITO = `{Stato}="In transito"`;
 
-  if (status === 'evase') {
-    parts.push(IS_EVASA);
-  } else if (status === 'nuova') {
-    parts.push(IS_NUOVA);
-  } else if (status === 'in_elab') {
-    // tutto ciò che non è Evasa/Consegnata/Annullata → include "In transito" e "Nuova"
+  // filtro esplicito per tab/filtri se mai usati
+  if (status === 'evase') parts.push(IS_EVASA);
+  else if (status === 'nuova') parts.push(IS_NUOVA);
+  else if (status === 'in_elab') {
+    // “in elaborazione” = tutto tranne stati finali (non usato nel tuo flusso, ma lasciato)
     parts.push(`AND(NOT(${IS_EVASA}), NOT(${IS_CONSEGNATA}), NOT(${IS_ANNULLATA}))`);
   }
 
-  if (onlyOpen) {
-    // “aperte”: non in transito, non consegnate, non annullate
-    parts.push(`AND(NOT(${IS_IN_TRANSITO}), NOT(${IS_CONSEGNATA}), NOT(${IS_ANNULLATA}))`);
-  }
+  // 🔴 Cambiato: "solo non evase" = SOLO Nuova
+  if (onlyOpen) parts.push(IS_NUOVA);
 
   if (!parts.length) return '';
   return `AND(${parts.join(',')})`;
 }
+
 
 /* ───────── helpers ───────── */
 
