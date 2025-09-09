@@ -322,12 +322,14 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
 
-                <div class="k">Dest. abilitato import</div>
+                        <div class="k">Dest. abilitato import</div>
         <div>
           <span class="import-flag ${rec.dest_import_ok ? 'yes' : 'no'}">
-            ${rec.dest_import_ok ? 'Sì' : 'No'}
+            <span class="dot"></span>
+            ${rec.dest_import_ok ? 'Abilitato' : 'Non abilitato'}
           </span>
         </div>
+
 
 
                 <div class="k">Peso reale</div>
