@@ -1,6 +1,11 @@
 // assets/esm/main.js
 import { DEBUG } from './config.js';
-import { fetchShipments, patchShipmentTracking, uploadAttachment } from './airtable/api.js';
+import {
+  fetchShipments,
+  patchShipmentTracking,
+  uploadAttachment,
+  patchDocAttachment, // ⬅️ nuovo: patch di un allegato con fallback nomi campo
+} from './airtable/api.js';
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
@@ -11,17 +16,16 @@ const elOnlyOpen = document.getElementById('only-open');
 
 let DATA = [];
 
-/* ───────── utils ───────── */
+/* utils */
 function debounce(fn, ms = 250){
   let t; return (...args)=>{ clearTimeout(t); t = setTimeout(()=>fn(...args), ms); };
 }
 
-/* ───────── data flow ───────── */
+/* data flow */
 async function loadData(){
   try{
     const q = (elSearch?.value || '').trim();
     const onlyOpen = !!elOnlyOpen?.checked;
-
     const items = await fetchShipments({ q, onlyOpen });
     DATA = items || [];
     applyFilters();
@@ -36,7 +40,7 @@ function applyFilters(){
   renderList(out, { onUploadForDoc, onSaveTracking, onComplete });
 }
 
-/* ───────── actions ───────── */
+/* actions */
 async function onUploadForDoc(e, rec, docKey){
   try{
     const file = e?.target?.files && e.target.files[0];
@@ -50,12 +54,12 @@ async function onUploadForDoc(e, rec, docKey){
 
     toast('Upload in corso…');
 
-    // 1) upload → URL pubblica
+    // 1) upload al proxy → URL pubblica
     const { url } = await uploadAttachment(recId, docKey, file);
-    const attArray = [{ url }]; // Airtable attachment format
+    const attArray = [{ url }];
 
-    // 2) patch su Airtable usando la chiave UI del doc
-    await patchShipmentTracking(recId, { docs: { [docKey]: attArray } });
+    // 2) patch SOLO quel documento con fallback nomi campo
+    await patchDocAttachment(recId, docKey, attArray);
 
     toast(`${docKey.replaceAll('_',' ')} caricato`);
     await loadData();
@@ -94,17 +98,13 @@ async function onSaveTracking(rec, carrier, tn){
 
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
-
-  // Fallback locale se manca l'id
   if (!recId){
     rec.stato = 'In transito';
     toast(`${rec.id}: segnata in transito (locale)`);
     applyFilters();
     return;
   }
-
   try{
-    // ✅ scrive direttamente il campo "Stato"
     await patchShipmentTracking(recId, { stato: 'In transito' });
     toast(`${rec.id}: segnata in transito`);
     await loadData();
@@ -114,9 +114,9 @@ async function onComplete(rec){
   }
 }
 
-/* ───────── listeners ───────── */
+/* listeners */
 if (elSearch)   elSearch.addEventListener('input', debounce(()=>loadData(), 250));
 if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
 
-/* ───────── bootstrap ───────── */
+/* bootstrap */
 loadData().catch(e=>console.warn('init loadData failed', e));
