@@ -1,128 +1,154 @@
-// api/notify/transit.js
+// POST /api/notify/transit
+// Body JSON: { to, id, carrier, tracking, ritiroData, trackingUrl, stato }
+// Invia una mail brandizzata "Spedizione in transito" con Resend.
+
 import { Resend } from 'resend';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+/* ───────── CORS ───────── */
+function sendCORS(req, res) {
+  const origin = req.headers.origin || '';
+  const allow = process.env.ORIGIN_ALLOWLIST || 'https://www.spst.it,https://spst.it,*';
+  const list = allow.split(',').map(s=>s.trim()).filter(Boolean);
+  const ok = list.includes('*') || !origin || list.some(p => wildcard(origin, p));
+  if (ok && origin) res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '600');
+  if (req.method === 'OPTIONS') { res.status(204).end(); return true; }
+  return false;
+}
+function wildcard(input, pattern){
+  if (pattern === '*') return true;
+  const rx = '^' + pattern.split('*').map(s=>s.replace(/[|\\{}()[\]^$+?.]/g,'\\$&')).join('.*') + '$';
+  return new RegExp(rx).test(input);
+}
 
-export default async function handler(req, res) {
-  if (req.method === 'OPTIONS') return sendCORS(req, res);
-  sendCORS(req, res);
+/* ───────── helpers ───────── */
+const fmtDate = (s) => (s ? String(s).slice(0,10) : '—'); // YYYY-MM-DD
+const esc = (s) => String(s||'').replace(/[&<>"]/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]));
+
+export default async function handler(req, res){
+  if (sendCORS(req, res)) return;
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-  try {
-    const { to, id, carrier, tracking, trackingUrl, ritiroData, stato } = req.body || {};
-    if (!to || !id) return res.status(400).json({ error: 'Missing "to" or "id"' });
+  try{
+    const {
+      to,
+      id,
+      carrier = '',
+      tracking = '',
+      ritiroData = '',
+      // trackingUrl // ⛔️ NON lo usiamo più (richiesta: rimuovere link)
+    } = (req.body || {});
 
-    // guard server-side: inviamo solo se lo stato è "In transito"
-    if (String(stato || '').toLowerCase() !== 'in transito') {
-      return res.status(400).json({ error: 'Shipment must be "In transito" to notify' });
-    }
+    const RESEND_API_KEY   = process.env.RESEND_API_KEY;
+    const EMAIL_FROM       = process.env.EMAIL_FROM       || 'notification@spst.it';
+    const EMAIL_LOGO_URL   = process.env.EMAIL_LOGO_URL   || 'https://www.spst.it/logo-email.png';
+    const AREA_RISERVATA   = process.env.AREA_RISERVATA_URL || 'https://www.spst.it/area-riservata';
+    const WHATSAPP_URL     = process.env.WHATSAPP_URL     || 'https://wa.me/391234567890';
 
-    const FROM = process.env.EMAIL_FROM || process.env.eMAIL_FROM || 'no-reply@spst.it'; // dominio verificato su Resend
-    const AREA = process.env.AREA_RISERVATA_URL || 'https://www.spst.it/area-riservata';
-    const WA   = process.env.WHATSAPP_URL || 'https://wa.me/39XXXXXXXXX';
-    const LOGO = process.env.EMAIL_LOGO_URL || 'https://www.spst.it/favicon.png';
+    if (!RESEND_API_KEY)   return res.status(500).json({ error: 'RESEND_API_KEY missing' });
+    if (!to)               return res.status(400).json({ error: 'Missing "to"' });
+    if (!id)               return res.status(400).json({ error: 'Missing "id"' });
+
+    const resend = new Resend(RESEND_API_KEY);
+
+    /* ───────── HTML (sfondo bianco, senza link tracking) ───────── */
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="x-apple-disable-message-reformatting">
+    <meta name="color-scheme" content="light">
+    <meta name="supported-color-schemes" content="light">
+    <style>
+      body{margin:0;padding:0;background:#ffffff;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111;}
+      .wrap{max-width:640px;margin:0 auto;padding:24px;}
+      .card{border:1px solid #e6e6e6;border-radius:14px;padding:24px;}
+      .row{display:block;}
+      .logo{width:36px;height:36px;display:inline-block;margin-bottom:8px;}
+      h1{font-size:20px;line-height:1.2;margin:4px 0 8px 0;}
+      .id{font-size:12px;color:#666;margin-bottom:16px;}
+      p{font-size:14px;line-height:1.55;margin:0 0 12px 0;}
+      .box{border:1px solid #eee;border-radius:10px;padding:16px;margin:16px 0;}
+      .k{font-weight:600;}
+      .btns{display:flex;gap:12px;margin-top:12px;flex-wrap:wrap;}
+      .btn{display:inline-block;font-size:14px;padding:10px 14px;border-radius:10px;text-decoration:none;}
+      .btn-primary{background:#f7911e;color:#111;border:1px solid rgba(0,0,0,.12);}
+      .btn-ghost{background:#e6fff3;color:#0c5132;border:1px solid #b4f0d2;}
+      .foot{font-size:12px;color:#666;margin-top:12px;}
+      .foot p{margin:0 0 24px 0;} /* spazio extra sotto "Team SPST" */
+      a{color:#0b5fff;text-decoration:none;}
+      @media (prefers-color-scheme: dark){
+        body{background:#ffffff;color:#111;} /* forza bianco anche in dark mode */
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <img class="logo" src="${esc(EMAIL_LOGO_URL)}" alt="SPST logo">
+        <h1>Spedizione in transito</h1>
+        <div class="id">ID: <strong>${esc(id)}</strong></div>
+
+        <p>Gentile Cliente, la tua spedizione è stata evasa. Trovi i documenti da stampare all'interno della tua Area Riservata SPST.</p>
+        <p>Ritiro previsto: <strong>${esc(fmtDate(ritiroData))}</strong></p>
+        <p>Se ci dovessero essere problemi con il ritiro puoi riferirti al nostro <a href="${esc(WHATSAPP_URL)}" target="_blank">Supporto WhatsApp</a>.</p>
+
+        <div class="box">
+          <div class="row"><span class="k">Corriere:</span> ${esc(carrier || '—')}</div>
+          <div class="row"><span class="k">Tracking:</span> ${esc(tracking || '—')}</div>
+        </div>
+
+        <div class="btns">
+          <a class="btn btn-primary" href="${esc(AREA_RISERVATA)}" target="_blank">Area Riservata</a>
+          <a class="btn btn-ghost" href="${esc(WHATSAPP_URL)}" target="_blank">Supporto WhatsApp</a>
+        </div>
+
+        <div class="foot">
+          <p>Grazie,<br>Team SPST</p>
+          <div>Ricevi questa mail perché hai effettuato una spedizione con SPST.</div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>`;
+
+    /* ───────── Testo semplice ───────── */
+    const text =
+`Spedizione in transito — ${id}
+
+Gentile Cliente, la tua spedizione è stata evasa.
+Trovi i documenti da stampare nella tua Area Riservata SPST: ${AREA_RISERVATA}
+Ritiro previsto: ${fmtDate(ritiroData)}
+
+Corriere: ${carrier || '—'}
+Tracking: ${tracking || '—'}
+
+Se ci fossero problemi con il ritiro, contatta il Supporto WhatsApp: ${WHATSAPP_URL}
+
+Grazie,
+Team SPST`;
 
     const subject = `SPST • Spedizione in transito — ${id}`;
-    const html = renderHtml({ logo: LOGO, subject, id, carrier, tracking, trackingUrl, areaUrl: AREA, waUrl: WA, ritiroData });
-    const text = renderText({ id, carrier, tracking, trackingUrl, areaUrl: AREA, waUrl: WA, ritiroData });
+    const from = process.env.EMAIL_FROM || 'notification@spst.it';
 
-    const { data, error } = await resend.emails.send({
-      from: FROM,            // es. "SPST <no-reply@spst.it>" — deve essere autorizzato su Resend
-      to: [to],
+    const sent = await resend.emails.send({
+      from,
+      to,
       subject,
       html,
       text,
     });
 
-    if (error) throw new Error(error.message || String(error));
-    return res.status(200).json({ ok: true, id: data?.id || null });
-  } catch (e) {
+    return res.status(200).json({ ok: true, id: sent?.id || null });
+  }catch(e){
     console.error('[notify/transit] error', e);
-    const msg = String(e?.message || e);
-    const code = /rate limit/i.test(msg) ? 429 : 502;
-    return res.status(code).json({ error: 'Send failed', details: msg });
+    return res.status(502).json({ error: 'Send failed', details: String(e?.message || e) });
   }
 }
 
-/* ─ helpers ─ */
-
-function sendCORS(req, res) {
-  const origin = req.headers.origin || '*';
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Max-Age', '600');
-  if (req.method === 'OPTIONS') return res.status(204).end();
-}
-
-function renderText({ id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiroData }) {
-  return [
-    `Spedizione in transito — ${id}`,
-    '',
-    'Gentile Cliente, la tua spedizione è stata evasa.',
-    `Trovi i documenti da stampare nella tua Area Riservata SPST: ${areaUrl}`,
-    `Ritiro previsto: ${ritiroData || '-'}`,
-    '',
-    `Corriere: ${carrier || '-'}`,
-    `Tracking: ${tracking || '-'}`,
-    trackingUrl ? `Link tracking: ${trackingUrl}` : '',
-    '',
-    `Supporto WhatsApp: ${waUrl}`,
-    '',
-    'Grazie,',
-    'Team SPST',
-  ].filter(Boolean).join('\n');
-}
-
-function renderHtml({ logo, subject, id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiroData }) {
-  const btn = (href, label, bg) => `
-    <a href="${href}" style="display:inline-block;padding:12px 18px;border-radius:10px;
-      text-decoration:none;background:${bg};color:#0b1220;font-weight:600">${label}</a>`;
-
-  return `<!doctype html><html><head><meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1"><title>${subject}</title></head>
-  <body style="margin:0;background:#0b1220;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b1220;padding:24px 0">
-      <tr><td align="center">
-        <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="background:#121a2b;border:1px solid #1d2a47;border-radius:14px;overflow:hidden;color:#e6ebf5">
-          <tr><td style="padding:22px 22px 0" align="left">
-            <img src="${logo}" alt="SPST" style="height:32px;display:block">
-          </td></tr>
-
-          <tr><td style="padding:18px 22px 0">
-            <h1 style="margin:0;font-size:20px;line-height:28px;color:#e6ebf5">Spedizione in transito</h1>
-            <p style="margin:6px 0 0;color:#9fb0d2;font-size:14px">ID: <strong style="color:#e6ebf5">${id}</strong></p>
-          </td></tr>
-
-          <tr><td style="padding:14px 22px 0">
-            <p style="margin:0 0 10px;color:#cfd7e6;font-size:14px">
-              Gentile Cliente, la tua spedizione è stata evasa.
-              Trovi i documenti da stampare all'interno della tua Area Riservata SPST.
-            </p>
-            <p style="margin:0 0 16px;color:#cfd7e6;font-size:14px">
-              Ritiro previsto: <strong style="color:#e6ebf5">${ritiroData || '-'}</strong>
-            </p>
-            <div style="margin:10px 0 14px;padding:12px;border:1px solid #213157;border-radius:12px;background:#0f1728">
-              <div style="font-size:14px;color:#cfd7e6;margin:2px 0">Corriere: <strong style="color:#e6ebf5">${carrier || '-'}</strong></div>
-              <div style="font-size:14px;color:#cfd7e6;margin:2px 0">Tracking: <strong style="color:#e6ebf5">${tracking || '-'}</strong></div>
-              ${trackingUrl ? `<div style="margin-top:8px"><a href="${trackingUrl}" style="color:#f7911e;text-decoration:none">Apri tracking</a></div>` : ''}
-            </div>
-
-            <div style="margin:14px 0 8px">
-              ${btn(areaUrl,'Area Riservata','#f7911e')}
-              <span style="display:inline-block;width:10px"></span>
-              ${btn(waUrl,'Supporto WhatsApp','#8df7c2')}
-            </div>
-
-            <p style="margin:16px 0 0;color:#7f8cac;font-size:12px">Grazie,<br>Team SPST</p>
-          </td></tr>
-        </table>
-
-        <div style="color:#617299;font-size:12px;margin-top:12px">
-          Ricevi questa mail perché hai effettuato una spedizione con SPST.
-        </div>
-      </td></tr>
-    </table>
-  </body></html>`;
-}
+export const config = {
+  api: { bodyParser: { sizeLimit: '1mb' } }
+};
