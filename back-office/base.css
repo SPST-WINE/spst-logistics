@@ -332,3 +332,11 @@ table.colli td:first-child{
   color: #ffc0c5;
   border-color: rgba(255,90,101,.35);
 }
+
+/* Card completa documentazione */
+.card.ok-docs{
+  border-color: rgba(31,191,117,.45) !important;
+  box-shadow:
+    inset 0 0 0 1px rgba(31,191,117,.30),
+    0 6px 24px rgba(31,191,117,.12);
+}
