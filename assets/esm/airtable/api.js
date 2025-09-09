@@ -271,3 +271,26 @@ export async function patchDocAttachment(recordId, docKey, attachments, rawField
   return patchShipmentTracking(recordId, { fields: { [chosen]: next } });
 }
 
+// ...resto del file...
+
+function notifyBaseFromAirtableBase() {
+  const b = (typeof AIRTABLE?.proxyBase === 'string') ? AIRTABLE.proxyBase : '';
+  return b.replace('/api/airtable', '/api/notify');
+}
+
+export async function sendTransitEmail(recordId, to){
+  const base = notifyBaseFromAirtableBase() || '';
+  const url  = `${base}/transit`;
+  const res = await fetch(url, {
+    method:'POST',
+    headers:{ 'Content-Type':'application/json','Accept':'application/json' },
+    body: JSON.stringify({ recordId, to })
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(()=> '');
+    throw new Error(`Notify ${res.status}: ${t.slice(0,180)}`);
+  }
+  return res.json();
+}
+
+
