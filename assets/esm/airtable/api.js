@@ -129,6 +129,12 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   if (docs && typeof docs === 'object') base.docs = docs;
   if (fields && typeof fields === 'object') base.fields = fields;
 
+  // 🔒 Se arriva un tracking e NON stiamo già settando lo Stato, forza "In transito"
+  if (base.tracking && !(base.fields && ('Stato' in base.fields))) {
+    base.fields = { ...(base.fields || {}), 'Stato': 'In transito' };
+  }
+
+  // porta eventuali chiavi top-level sconosciute in fields (es. "Allegato Fattura")
   const KNOWN = new Set(['carrier','tracking','statoEvasa','docs','fields']);
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
   if (unknownKeys.length) {
@@ -143,7 +149,7 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   const attempts = [];
   if (norm) attempts.push({ carrier: norm });
   if (norm) attempts.push({ carrier: { name: norm } });
-  attempts.push({});
+  attempts.push({}); // anche senza carrier
 
   let lastErrTxt = '';
   for (const extra of attempts) {
@@ -168,6 +174,7 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   }
   throw new Error('PATCH failed (tentativi esauriti): ' + lastErrTxt);
 }
+
 
 /* ───────── Upload → Vercel Blob (CORS lato server) ───────── */
 export async function uploadAttachment(recordId, docKey, file) {
