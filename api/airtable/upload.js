@@ -64,3 +64,41 @@ async function readBuffer(req){
   for await (const c of req) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
   return Buffer.concat(chunks);
 }
+
+export const config = {
+  api: {
+    bodyParser: false,           // riceviamo binario
+    sizeLimit: '50mb',           // ↑ alza il limite (scegli tu)
+  }
+};
+
+const ALLOW_ORIGIN = 'https://www.spst.it'; // o '*', ma meglio il tuo dominio
+
+export default async function handler(req, res) {
+  // CORS preflight
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
+    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.status(200).end();
+    return;
+  }
+
+  if (req.method !== 'POST') {
+    res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
+    res.status(405).json({ error: 'Method Not Allowed' });
+    return;
+  }
+
+  try {
+    // ... qui leggi lo stream dal req e fai l’upload allo storage ...
+    // ottenuta la url finale:
+    const publicUrl = /* ... */;
+
+    res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
+    res.status(200).json({ url: publicUrl });
+  } catch (e) {
+    res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
+    res.status(500).json({ error: String(e?.message || e) });
+  }
+}
