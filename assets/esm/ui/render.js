@@ -11,8 +11,13 @@ import { fetchColliFor } from '../airtable/api.js';
    ────────────────────────────────────────────────────────────── */
 
 function normKey(s){
-  return String(s || '').replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim().toLowerCase();
+  return String(s || '')
+    .replace(/[–—]/g, '-')      // en/em dash → hyphen
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
+
 function pickLoose(fields, ...names){
   if (!fields) return undefined;
   const map = new Map(Object.keys(fields).map(k => [normKey(k), k]));
@@ -23,6 +28,7 @@ function pickLoose(fields, ...names){
       if (v !== '' && v != null) return v;
     }
   }
+  // fallback esatto
   for (const n of names){
     if (n in fields && fields[n] !== '' && fields[n] != null) return fields[n];
   }
@@ -58,6 +64,7 @@ function mapDocs(fields) {
   const EDAS     = att3 || att2 || att1;
 
   return {
+    // chiavi usate nella UI/rules
     Lettera_di_Vettura: ldv,
     Fattura_Commerciale: fatturaBO || fatturaCli,
     Fattura_Proforma: PROFORMA,
@@ -66,9 +73,11 @@ function mapDocs(fields) {
     FDA_Prior_Notice: FDA_PN,
     'e-DAS': EDAS,
 
+    // visibilità separata
     Fattura_Client: fatturaCli,
     Packing_Client: packingCli,
 
+    // utili se vuoi elencarli altrove
     Allegato_1: att1,
     Allegato_2: att2,
     Allegato_3: att3,
@@ -125,7 +134,12 @@ export function normalizeShipmentRecord(rec) {
   // P.IVA/CF destinatario
   const dest_piva  = pickLoose(
     f,
-    'Destinatario - P.IVA/CF','P.IVA/CF Destinatario','PIVA Destinatario','P.IVA Destinatario','CF Destinatario','Codice Fiscale Destinatario'
+    'Destinatario - P.IVA/CF',
+    'P.IVA/CF Destinatario',
+    'PIVA Destinatario',
+    'P.IVA Destinatario',
+    'CF Destinatario',
+    'Codice Fiscale Destinatario'
   );
 
   // Stato nuovo / legacy
@@ -159,7 +173,7 @@ export function normalizeShipmentRecord(rec) {
   const docs  = mapDocs(f);
   const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
 
-  // Debug (una sola volta)
+  // Log una volta per aiutare debugging
   if (!window.__BO_DEBUG_ONCE__) {
     window.__BO_DEBUG_ONCE__ = true;
     console.group('[BO] Debug primo record');
@@ -237,10 +251,6 @@ function renderTrackingBlock(rec){
   const carrierId = `${rec.id}-carrier`;
   const tnId = `${rec.id}-tn`;
   const url = trackingUrl(rec.tracking_carrier, rec.tracking_number) || rec.tracking_url || '#';
-
-  // Blocco “notifica email sicura”: mostra solo con stato “in transito” e tracking presente
-  const canNotify = String(rec.stato||'').toLowerCase() === 'in transito' && !!(rec.tracking_number && rec.tracking_carrier);
-
   return `
     <div class="track" id="${rec.id}-track">
       <span class="small" style="opacity:.9">Tracking</span>
@@ -252,29 +262,10 @@ function renderTrackingBlock(rec){
       <button class="mini-btn save-tracking" data-carrier="${carrierId}" data-tn="${tnId}">Salva tracking</button>
       <span class="small link">${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>` : ''}</span>
     </div>
-
-    <div class="mail-row ${canNotify? '' : 'disabled'}">
-      <div class="small" style="opacity:.9">Notifica cliente (stato <em>in transito</em>) — digita l’email per confermare</div>
-      <div class="mail-controls">
-        <input
-          type="email"
-          class="mail-input"
-          id="mail-${rec.id}"
-          placeholder="${rec.email || 'email@cliente.com'}"
-          ${canNotify? '' : 'disabled'}
-        >
-        <button class="mini-btn primary send-mail"
-                data-id="${rec.id}"
-                ${canNotify? '' : 'disabled'}>
-          Invia mail
-        </button>
-        <span class="small" style="opacity:.75">L’indirizzo deve coincidere con quello del record.</span>
-      </div>
-    </div>
   `;
 }
 
-/* print-grid */
+/* print-grid: aggiungo un ID al campo “Colli (lista)” per aggiornamento post fetch */
 function renderPrintGrid(rec){
   const colliListHtml = (rec.colli && rec.colli.length)
     ? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ')
@@ -299,7 +290,9 @@ function renderPrintGrid(rec){
   ];
 
   let html = `<div class="print-grid">`;
-  for (const [k,v] of fields){ html += `<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`; }
+  for (const [k,v] of fields){
+    html += `<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`;
+  }
   html += `<div class='k'>Colli (lista)</div><div id="print-colli-${rec.id}">${colliListHtml}</div>`;
   html += `</div>`;
   return html;
@@ -340,13 +333,20 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
 
     const card = document.createElement('div');
     card.className = 'card';
+    card.id = `card-${rec.id}`;
+
     card.innerHTML = `
-      <div class="card-head">
-        <div class="title-line">
+      <div class="card-head" style="display:flex;gap:12px;align-items:center;">
+        <div class="title-line" style="display:flex;gap:12px;align-items:center;">
           <span class="id-chip" style="background:#f7911e; color:#111; border-color:rgba(0,0,0,.15)">${rec.id}</span>
           <span class="dest">${rec.cliente}</span>
         </div>
-        <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
+
+        <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+          <button class="btn ghost toggle-labels">Verifica etichette</button>
+          <button class="btn ghost toggle-details">Espandi record</button>
+          <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
+        </div>
       </div>
 
       <div class="kv">
@@ -388,14 +388,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
       <div class="hr"></div>
 
       <div class="small" style="margin:4px 0 6px 0"><strong>Documenti necessari per spedire in ${country} (${tipo})</strong>: ${required.join(', ').replaceAll('_',' ')}</div>
-      <div class="small" style="opacity:.9; margin-bottom:8px"><em>ATTENZIONE:</em> il destinatario deve necessariamente avere un permesso/abilitazione all'importazione nel Paese di riferimento.</div>
-
-      <div class="row" style="justify-content:space-between; align-items:center">
-        <div class="row" style="gap:8px">
-          <button class="btn ghost toggle-labels">Verifica etichette</button>
-          <button class="btn ghost toggle-details">Comprimi record</button>
-        </div>
-      </div>
+      <!-- RIMOSSA la riga ATTENZIONE su abilitazione import -->
 
       <div class="docs">
         ${required.map(name=>{
@@ -416,11 +409,24 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
 
       ${renderLabelPanel(rec)}
       ${renderTrackingBlock(rec)}
+
+      <!-- Notifica cliente -->
+      <div class="notify" id="notify-${rec.id}" style="margin-top:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;">
+        <div class="small" style="opacity:.9;margin-bottom:6px">Notifica cliente (stato in transito) — digita l’email per confermare</div>
+        <div class="row" style="display:flex;gap:8px;align-items:center;">
+          <input class="notify-email" type="email" placeholder="${rec.email||''}" value="" style="flex:1;min-width:220px">
+          <button class="mini-btn send-mail">Invia mail</button>
+          <span class="small" style="opacity:.7">L’indirizzo deve coincidere con quello del record.</span>
+        </div>
+        <div class="small notify-sent hidden" style="margin-top:6px;color:#6ddf97;">Email inviata ✓</div>
+      </div>
+
       <div class="actions">
         <button class="btn complete" data-id="${rec.id}">Evasione completata</button>
       </div>
 
-      <div class="details show">${renderPrintGrid(rec)}</div>
+      <!-- Dettagli COMPRESSI di default -->
+      <div class="details">${renderPrintGrid(rec)}</div>
     `;
 
     // evidenzia card se checklist completa
@@ -441,10 +447,12 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
     const completeBtn = card.querySelector('.complete');
     if (completeBtn) completeBtn.addEventListener('click', ()=>onComplete(rec));
 
-    // Toggle dettagli
+    // Toggle dettagli (di default COLLASSATI)
     const btnToggle = card.querySelector('.toggle-details');
     const details = card.querySelector('.details');
     if (btnToggle && details){
+      btnToggle.textContent = 'Espandi record';
+      details.classList.remove('show');
       btnToggle.addEventListener('click', ()=>{
         details.classList.toggle('show');
         btnToggle.textContent = details.classList.contains('show') ? 'Comprimi record' : 'Espandi record';
@@ -469,17 +477,28 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
       saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
     }
 
-    // Invia mail sicura
-    const mailBtn = card.querySelector('.send-mail');
-    if (mailBtn){
-      const input = card.querySelector('#mail-'+rec.id);
-      mailBtn.addEventListener('click', ()=>{
-        const val = (input?.value||'').trim();
-        onSendMail(rec, val);
+    // Invia mail (abilitata solo se stato = In transito)
+    const sendBtn = card.querySelector('.send-mail');
+    const emailInput = card.querySelector('.notify-email');
+    const sentFlag = card.querySelector('.notify-sent');
+    const isTransit = String(rec.stato||'').toLowerCase() === 'in transito';
+    if (!isTransit) {
+      sendBtn.disabled = true;
+      emailInput.disabled = true;
+      emailInput.title = 'Disponibile dopo il salvataggio del tracking';
+      sendBtn.title = 'Disponibile dopo il salvataggio del tracking';
+    } else {
+      sendBtn.addEventListener('click', async ()=>{
+        const to = (emailInput.value || '').trim();
+        await onSendMail(rec, to, { onSuccess: ()=>{
+          sendBtn.disabled = true;
+          emailInput.disabled = true;
+          if (sentFlag) sentFlag.classList.remove('hidden');
+        }});
       });
     }
 
-    // Lazy-load colli
+    // Lazy-load colli se assenti + aggiorna anche la print-grid
     (async ()=>{
       try{
         if (!rec.colli || !rec.colli.length) {
@@ -497,9 +516,11 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
             if (holder) holder.innerHTML = html;
             rec.colli = rows;
 
+            // ➜ aggiorna "Peso reale" nella card
             const pesoEl = card.querySelector(`#peso-${rec.id}`);
             if (pesoEl) pesoEl.textContent = toKg(totalPesoKg(rec));
 
+            // ➜ aggiorna la “Colli (lista)” nel riquadro Dettagli/Print
             const printCell = card.querySelector(`#print-colli-${rec.id}`);
             if (printCell){
               printCell.textContent = rows.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ');
@@ -514,5 +535,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
     })();
 
     try { elList.appendChild(card); } catch (e) { console.error('[BO] append card fallito', e); }
+
+    console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, colli: rec.colli?.length||0 });
   });
 }
