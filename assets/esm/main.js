@@ -20,15 +20,6 @@ const API_BASE =
     .replace(/\/airtable\/?$/i, '')  // es. https://spst-logistics.vercel.app/api
   || 'https://spst-logistics.vercel.app/api';
 
-/* ───────── Persistenza locale: “mail inviata” ───────── */
-const MAIL_KEY = 'boMailSent_v1';
-function loadMailMap(){ try { return JSON.parse(localStorage.getItem(MAIL_KEY) || '{}'); } catch { return {}; } }
-function hasMailSent(id){ const m = loadMailMap(); return !!m[id]; }
-function markMailSent(id){ const m = loadMailMap(); m[id] = Date.now(); localStorage.setItem(MAIL_KEY, JSON.stringify(m)); }
-
-/* Default: “Solo non evase” attivo all’apertura */
-if (elOnlyOpen) elOnlyOpen.checked = true;
-
 let DATA = [];
 
 /* ───────── utils ───────── */
@@ -40,10 +31,8 @@ function debounce(fn, ms = 250){
 async function loadData(){
   try{
     const q = (elSearch?.value || '').trim();
-
-    // Con checkbox attivo mostriamo SOLO stato=Nuova
-    const status   = elOnlyOpen?.checked ? 'nuova' : 'all';
-    const onlyOpen = false; // non lo usiamo più per filtrare “in transito”
+    const onlyOpen = !!elOnlyOpen?.checked;
+    const status = 'all';
 
     const items = await fetchShipments({ q, status, onlyOpen });
     DATA = items || [];
@@ -55,14 +44,43 @@ async function loadData(){
 }
 
 function applyFilters(){
-  const out = [...DATA].sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
-  renderList(out, {
-    onUploadForDoc,
-    onSaveTracking,
-    onComplete,
-    onSendMail,
-    isMailSent: hasMailSent,         // ➜ per mostrare “Email inviata ✓” in card
-  });
+  // Applica SEMPRE il filtro lato client per “Solo non evase”
+  const onlyOpen = !!elOnlyOpen?.checked;
+  let items = [...DATA];
+
+  if (onlyOpen){
+    items = items.filter((rec)=>{
+      const stato = String(rec?.stato || rec?.fields?.['Stato'] || '')
+        .trim()
+        .toLowerCase();
+      // mostra solo “Nuova” (o vuoto trattato come nuova)
+      return stato === 'nuova' || stato === '';
+    });
+  }
+
+  const out = items.sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
+  renderList(out, { onUploadForDoc, onSaveTracking, onComplete, onSendMail });
+}
+
+/* ───────── helpers DOM ───────── */
+function setBadge(recId, text, cls){
+  const card = document.getElementById(`card-${recId}`);
+  const badge = card?.querySelector('.badge');
+  if (badge){
+    badge.textContent = text;
+    badge.className = `badge ${cls||'green'}`;
+  }
+}
+function enableNotify(recId){
+  const card = document.getElementById(`card-${recId}`);
+  const btn = card?.querySelector('.send-mail');
+  const inp = card?.querySelector('.notify-email');
+  if (btn && inp){
+    btn.disabled = false;
+    inp.disabled = false;
+    btn.title = '';
+    inp.title = '';
+  }
 }
 
 /* ───────── actions ───────── */
@@ -101,13 +119,10 @@ async function onSaveTracking(rec, carrier, tn){
   if (!recId){ toast('Errore: id record mancante'); return; }
 
   try{
-    // Solo salvataggio carrier + tracking (lo stato passerà a “In transito” con Evasione completata)
-    await patchShipmentTracking(recId, { carrier, tracking: tn });
-
-    // aggiorna UI locale senza ricaricare
+    await patchShipmentTracking(recId, { carrier, tracking: tn }); // ← non cambiamo lo “Stato”
+    // aggiorna UI locale (card resta visibile nella vista "Solo non evase")
     rec.tracking_carrier = carrier;
     rec.tracking_number  = tn;
-
     toast(`${rec.id}: tracking salvato`);
   }catch(err){
     console.error('Errore salvataggio tracking', err);
@@ -115,11 +130,7 @@ async function onSaveTracking(rec, carrier, tn){
   }
 }
 
-/**
- * Invio mail sicuro con Resend.
- * Accetta un terzo parametro opzionale { onSuccess } per aggiornare la UI della card (flag “inviata”).
- */
-async function onSendMail(rec, typedEmail, opts = {}){
+async function onSendMail(rec, typedEmail){
   try{
     const to = String(typedEmail || '').trim();
     const hint = String(rec?.email || '').trim();
@@ -128,12 +139,10 @@ async function onSendMail(rec, typedEmail, opts = {}){
       toast('Digita l’email del cliente');
       return;
     }
-    // sicurezza: deve coincidere con quella del record
     if (hint && to.toLowerCase() !== hint.toLowerCase()){
       toast('L’email digitata non coincide con quella del record');
       return;
     }
-    // disponibile solo quando Stato = “In transito”
     if (String(rec?.stato || '').toLowerCase() !== 'in transito'){
       toast('Disponibile solo quando la spedizione è “In transito”');
       return;
@@ -160,9 +169,6 @@ async function onSendMail(rec, typedEmail, opts = {}){
       throw new Error(`HTTP ${r.status}: ${t}`);
     }
 
-    markMailSent(rec.id);           // ✓ ricordiamo che è stata inviata
-    if (typeof opts.onSuccess === 'function') opts.onSuccess();
-
     toast('Mail inviata al cliente');
   }catch(err){
     console.error('[sendMail] error', err);
@@ -179,6 +185,7 @@ async function onComplete(rec){
     return;
   }
   try{
+    // qui cambiamo lo Stato → "In transito"
     await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
     toast(`${rec.id}: evasione completata`);
     await loadData(); // con "Solo non evase" attivo scompare perché non è più "Nuova"
@@ -189,8 +196,22 @@ async function onComplete(rec){
 }
 
 /* ───────── listeners ───────── */
-if (elSearch)   elSearch.addEventListener('input', debounce(()=>loadData(), 250));
-if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
+// di default: checkbox “Solo non evase” attivo (persisti scelta utente)
+const ONLY_OPEN_KEY = 'bo_only_open';
+if (elOnlyOpen){
+  const saved = localStorage.getItem(ONLY_OPEN_KEY);
+  if (saved == null) {
+    elOnlyOpen.checked = true;          // attivo di default al primo accesso
+  } else {
+    elOnlyOpen.checked = saved === '1'; // ripristina scelta
+  }
+  elOnlyOpen.addEventListener('change', ()=>{
+    localStorage.setItem(ONLY_OPEN_KEY, elOnlyOpen.checked ? '1' : '0');
+    loadData();
+  });
+}
+
+if (elSearch) elSearch.addEventListener('input', debounce(()=>loadData(), 250));
 
 /* ───────── bootstrap ───────── */
 loadData().catch(e=>console.warn('init loadData failed', e));
