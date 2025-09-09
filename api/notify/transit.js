@@ -44,7 +44,7 @@ export default async function handler(req, res){
     const RESEND_API_KEY   = process.env.RESEND_API_KEY;
     const EMAIL_FROM       = process.env.EMAIL_FROM         || 'notification@spst.it';
     const EMAIL_LOGO_URL   = process.env.EMAIL_LOGO_URL     || 'https://www.spst.it/logo-email.png';
-    const AREA_RISERVATA   = process.env.AREA_RISERVATA_URL || 'https://www.spst.it/area-riservata';
+    const AREA_RISERVATA   = process.env.AREA_RISERVATA_URL || 'https://app.spst.it/';
     const WHATSAPP_URL     = process.env.WHATSAPP_URL       || 'https://wa.me/391234567890';
 
     if (!RESEND_API_KEY)   return res.status(500).json({ error: 'RESEND_API_KEY missing' });
