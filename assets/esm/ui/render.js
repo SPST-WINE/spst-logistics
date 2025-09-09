@@ -35,71 +35,78 @@ function pickLoose(fields, ...names){
   return undefined;
 }
 
-function mapDocs(fields) {
-  const getAttUrl = (k) => {
-    const v = pickLoose(fields, k);
-    if (Array.isArray(v) && v.length && v[0]?.url) return v[0].url;
-    if (typeof v === 'string' && v) return v;
-    return '';
-  };
-
-  // allegati cliente (fallback “ok”)
-  const fatturaCli = getAttUrl('Fattura - Allegato Cliente');
-  const packingCli = getAttUrl('Packing List - Allegato Cliente');
-
-  // allegati back-office
-  const ldv       = getAttUrl('Allegato LDV') || getAttUrl('Lettera di Vettura');
-  const fatturaBO = getAttUrl('Allegato Fattura');
-  const dle       = getAttUrl('Allegato DLE') || getAttUrl('Dichiarazione Esportazione');
-  const plBO      = getAttUrl('Allegato PL') || getAttUrl('Packing List');
-
-  // extra slots
-  const att1      = getAttUrl('Allegato 1');
-  const att2      = getAttUrl('Allegato 2');
-  const att3      = getAttUrl('Allegato 3');
-
-  // priorità elastiche
-  const PROFORMA = att1 || att2 || att3;
-  const FDA_PN   = att2 || att1 || att3;
-  const EDAS     = att3 || att2 || att1;
-
-  return {
-    // chiavi usate nella UI/rules
-    Lettera_di_Vettura: ldv,
-    Fattura_Commerciale: fatturaBO || fatturaCli,
-    Fattura_Proforma: PROFORMA,
-    Dichiarazione_Esportazione: dle,
-    Packing_List: plBO || packingCli,
-    FDA_Prior_Notice: FDA_PN,
-    'e-DAS': EDAS,
-
-    // visibilità separata
-    Fattura_Client: fatturaCli,
-    Packing_Client: packingCli,
-
-    // utili se vuoi elencarli altrove
-    Allegato_1: att1,
-    Allegato_2: att2,
-    Allegato_3: att3,
-  };
+function toNum(v){
+  if (v == null || v === '') return NaN;
+  const n = Number(String(v).replace(',', '.').replace(/[^0-9.]+/g,''));
+  return isFinite(n) ? n : NaN;
 }
 
-function mapColliFallback(fields) {
-  const lista = pickLoose(fields, 'Lista Colli Ordinata', 'Lista Colli', 'Contenuto Colli') || '';
-  if (!lista) return [];
-  return String(lista).split(/[;|\n]+/).map((s) => {
-    const m = String(s).match(/(\d+)\D+(\d+)\D+(\d+).+?(\d+(?:[\.,]\d+)?)/);
-    if (!m) return { L: '-', W: '-', H: '-', kg: 0 };
-    return { L: m[1], W: m[2], H: m[3], kg: Number(String(m[4]).replace(',', '.')) || 0 };
-  });
+/* Legge colli da lista testuale tipo "20x30x40 5kg; 10x10x10 1.5kg" */
+function colliFromListString(str){
+  if (!str) return [];
+  const parts = String(str).split(/[;|\n]+/);
+  const out = [];
+  for (const p of parts){
+    const m = String(p).match(/(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?).*?(\d+(?:[.,]\d+)?)/);
+    if (m){
+      out.push({
+        L: String(m[1]).replace(',', '.'),
+        W: String(m[2]).replace(',', '.'),
+        H: String(m[3]).replace(',', '.'),
+        kg: toNum(m[4]) || 0,
+      });
+    }
+  }
+  return out;
 }
 
-function badgeFor(stato) {
-  if (!stato) return 'gray';
-  const s = String(stato).toLowerCase();
-  if (['pronta alla spedizione','evasa','in transito','consegnata'].includes(s)) return 'green';
-  if (s === 'nuova') return 'gray';
-  return 'yellow';
+/* Fallback SMART per spedizioni "Altro":
+   - prova lista colli
+   - prova campo unico “Dimensioni (cm)” (es. 20x30x40)
+   - prova campi separati L/W/H con (cm)
+   - peso da vari campi */
+function buildColliSmart(fields){
+  // 1) Liste note
+  const list =
+    pickLoose(fields, 'Lista Colli Ordinata', 'Lista Colli', 'Contenuto Colli') || '';
+  const fromList = colliFromListString(list);
+  if (fromList.length) return fromList;
+
+  // 2) Campo unico Dimensioni (cm) / LxWxH / L×W×H
+  const dimStr = pickLoose(
+    fields,
+    'Dimensioni', 'Dimensioni (cm)', 'Dim. (cm)', 'LxWxH', 'L×W×H', 'Dim LxWxH', 'Dimensioni LxWxH'
+  );
+  let L, W, H;
+  if (dimStr){
+    const m = String(dimStr).match(/(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)/i);
+    if (m){
+      L = String(m[1]).replace(',', '.');
+      W = String(m[2]).replace(',', '.');
+      H = String(m[3]).replace(',', '.');
+    }
+  }
+
+  // 3) Campi separati
+  if (!L) L = pickLoose(fields, 'L', 'L (cm)', 'Lunghezza', 'Lunghezza (cm)', 'Dim L');
+  if (!W) W = pickLoose(fields, 'W', 'W (cm)', 'Larghezza', 'Larghezza (cm)', 'Dim W');
+  if (!H) H = pickLoose(fields, 'H', 'H (cm)', 'Altezza', 'Altezza (cm)', 'Dim H');
+
+  // Peso singolo collo / totale se non c'è il tot
+  let kg =
+    toNum(pickLoose(fields, 'Peso reale', 'Peso', 'Peso (kg)', 'Peso pezzo')) ||
+    0;
+
+  if (L && W && H){
+    return [{
+      L: String(L).replace(',', '.'),
+      W: String(W).replace(',', '.'),
+      H: String(H).replace(',', '.'),
+      kg,
+    }];
+  }
+
+  return []; // nessun fallback possibile
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -150,9 +157,18 @@ export function normalizeShipmentRecord(rec) {
   const ritiroData     = pickLoose(f, 'Ritiro - Data', 'Ritiro – Data', 'Data Ritiro');
   const incoterm       = pickLoose(f, 'Incoterm');
   const tipoSped       = pickLoose(f, 'Sottotipo', 'Tipo Spedizione');
+
   const trackingNum    = pickLoose(f, 'Tracking Number');
   const trackingUrlFld = pickLoose(f, 'Tracking URL');
-  const pesoTot        = Number(pickLoose(f, 'Peso reale tot', 'Peso Reale tot', 'Peso reale (tot)', 'Peso tariffato tot') || 0);
+
+  // ➜ Peso: aggiunto fallback a "Peso reale" se il tot non esiste
+  const pesoTot = Number(
+    pickLoose(
+      f,
+      'Peso reale tot','Peso Reale tot','Peso reale (tot)','Peso tariffato tot',
+      'Peso reale','Peso','Peso (kg)'
+    ) || 0
+  );
 
   // Import abilitato
   const destImportRaw  = pickLoose(f, 'Destinatario abilitato import', 'Abilitato import destinatario', 'Import OK Destinatario');
@@ -170,8 +186,11 @@ export function normalizeShipmentRecord(rec) {
     return null;
   })();
 
-  const docs  = mapDocs(f);
-  const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
+  // Colli: se non arrivano i linked records, prova fallback smart
+  const docs  = { ...mapDocs(f) };
+  const colli = Array.isArray(rec.colli) && rec.colli.length
+    ? rec.colli
+    : buildColliSmart(f);
 
   // Log una volta per aiutare debugging
   if (!window.__BO_DEBUG_ONCE__) {
@@ -269,6 +288,7 @@ function renderTrackingBlock(rec){
   `;
 }
 
+
 /* print-grid: aggiungo un ID al campo “Colli (lista)” per aggiornamento post fetch */
 function renderPrintGrid(rec){
   const colliListHtml = (rec.colli && rec.colli.length)
@@ -317,11 +337,7 @@ function ensureListContainer() {
   return el;
 }
 
-/**
- * isMailSent: funzione opzionale passata dal main per mostrare “Email inviata ✓” dopo reload
- *  signature: (idSped) => boolean
- */
-export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, onSendMail, isMailSent}){
+export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, onSendMail}){
   const normalized = (data || []).map((rec) => rec && rec.fields ? normalizeShipmentRecord(rec) : rec);
 
   const elList = ensureListContainer();
@@ -495,35 +511,24 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
       saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
     }
 
-    // Invia mail (abilitata solo se stato = In transito) + badge “inviata”
-    const sendBtn    = card.querySelector('.send-mail');
+    // Invia mail (abilitata solo se stato = In transito)
+    const sendBtn = card.querySelector('.send-mail');
     const emailInput = card.querySelector('.notify-email');
-    const sentFlag   = card.querySelector('.notify-sent');
-    const isTransit  = String(rec.stato||'').toLowerCase() === 'in transito';
-    const sentAlready= isMailSent ? !!isMailSent(rec.id) : false;
-
-    if (sentAlready && sentFlag){
-      sentFlag.classList.remove('hidden');
-      sendBtn.disabled = true;
-      emailInput.disabled = true;
-      emailInput.value = '';
-    }
-
+    const sentFlag = card.querySelector('.notify-sent');
+    const isTransit = String(rec.stato||'').toLowerCase() === 'in transito';
     if (!isTransit) {
       sendBtn.disabled = true;
       emailInput.disabled = true;
       emailInput.title = 'Disponibile dopo il salvataggio del tracking';
       sendBtn.title = 'Disponibile dopo il salvataggio del tracking';
-    } else if (!sentAlready) {
+    } else {
       sendBtn.addEventListener('click', async ()=>{
         const to = (emailInput.value || '').trim();
-        await onSendMail(rec, to, {
-          onSuccess: ()=>{
-            if (sentFlag) sentFlag.classList.remove('hidden');
-            sendBtn.disabled = true;
-            emailInput.disabled = true;
-          }
-        });
+        await onSendMail(rec, to, { onSuccess: ()=>{
+          sendBtn.disabled = true;
+          emailInput.disabled = true;
+          if (sentFlag) sentFlag.classList.remove('hidden');
+        }});
       });
     }
 
@@ -555,7 +560,27 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
               printCell.textContent = rows.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ');
             }
           } else if (holder) {
-            holder.innerHTML = '<span class="small">—</span>';
+            // se nemmeno i linked records, prova ancora il fallback smart (potrebbe essere arrivato tardi)
+            const fb = buildColliSmart(rec._rawFields || {});
+            if (fb.length){
+              const html = `
+                <table class="colli">
+                  <thead><tr><th>Dim. (L×W×H cm)</th><th>Peso reale</th></tr></thead>
+                  <tbody>
+                    ${fb.map(c=>`<tr><td>${c.L}×${c.W}×${c.H}</td><td>${toKg(c.kg)}</td></tr>`).join('')}
+                  </tbody>
+                </table>`;
+              holder.innerHTML = html;
+              rec.colli = fb;
+              const pesoEl = card.querySelector(`#peso-${rec.id}`);
+              if (pesoEl) pesoEl.textContent = toKg(totalPesoKg(rec));
+              const printCell = card.querySelector(`#print-colli-${rec.id}`);
+              if (printCell){
+                printCell.textContent = fb.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ');
+              }
+            } else {
+              holder.innerHTML = '<span class="small">—</span>';
+            }
           }
         }
       }catch(err){
