@@ -1,40 +1,43 @@
 // assets/esm/airtable/api.js
 import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
-// ⛔️ rimuoviamo l'adapter legacy: il render normalizza già i record grezzi
-// import { airtableRecordToRec } from './adapter.js';
 import { showBanner, toast } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
-// --- Mappa doc UI -> nome campo Airtable (allegati) ---
+/* ──────────────────────────────────────────────────────────────
+   Mappa Documenti: UI key → Campo Airtable (nuova base)
+   ────────────────────────────────────────────────────────────── */
+
 export const DOC_FIELD_MAP = {
-  Lettera_di_Vettura: 'Allegato LDV',
-  Fattura_Commerciale: 'Allegato Fattura',
-  Fattura_Proforma: 'Fattura Proforma',
+  // Operativi SPST
+  Lettera_di_Vettura:         'Allegato LDV',
+  Fattura_Commerciale:        'Allegato Fattura',
+  Fattura_Proforma:           'Fattura Proforma',
   Dichiarazione_Esportazione: 'Allegato DLE',
-  Packing_List: 'Allegato PL',
-  FDA_Prior_Notice: 'Prior Notice',
-  // allegati caricati dal cliente (se usi anche questi)
-  Fattura_Client: 'Fattura - Allegato Cliente',
-  Packing_Client: 'Packing List - Allegato Cliente',
+  Packing_List:               'Allegato PL',
+  FDA_Prior_Notice:           'Prior Notice',
+  // Allegati caricati dal cliente
+  Fattura_Client:             'Fattura - Allegato Cliente',
+  Packing_Client:             'Packing List - Allegato Cliente',
 };
 
 export function docFieldFor(docKey){
-  // es. 'Lettera_di_Vettura' -> 'Allegato LDV'
-  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
+  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_',' ');
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Query spedizioni (lista)
+   ────────────────────────────────────────────────────────────── */
 
- export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
-   const u = new URLSearchParams();
-   if (q) u.set('search', q);
-   u.set('onlyOpen', onlyOpen ? '1' : '0');
-   u.set('pageSize', '50');
-   return u.toString();
+export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
+  const u = new URLSearchParams();
+  if (q) u.set('search', q);
+  u.set('onlyOpen', onlyOpen ? '1' : '0');
+  u.set('pageSize', '50');
+  return u.toString();
 }
-
 
 export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
-  if(!USE_PROXY){ console.warn('USE_PROXY=false – uso MOCK'); return []; }
+  if (!USE_PROXY){ console.warn('USE_PROXY=false – uso MOCK'); return []; }
   const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({ q: q.trim(), onlyOpen })}`;
   try{
     const res = await fetch(url, FETCH_OPTS);
@@ -45,8 +48,7 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    // ✅ RITORNIAMO i record grezzi di Airtable ({id, fields, createdTime...})
-    // Il normalizzatore moderno vive in assets/esm/ui/render.js
+    // Ritorniamo i record grezzi Airtable (normalizzazione in render.js)
     return records;
   }catch(err){
     console.error('[fetchShipments] failed', { url, err });
@@ -58,53 +60,76 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
   }
 }
 
-export async function patchShipmentTracking(recOrId, { carrier, tracking, statoEvasa, docs, fields }){
-  const id = (typeof recOrId === 'string') ? recOrId : (recOrId? (recOrId._airId||recOrId._recId||recOrId.recordId||recOrId.id) : '');
+/* ──────────────────────────────────────────────────────────────
+   PATCH spedizione (tracking / stato / allegati)
+   Invia SEMPRE { fields } già mappati per la nuova base.
+   ────────────────────────────────────────────────────────────── */
+
+export async function patchShipmentTracking(recOrId, patch = {}){
+  const id =
+    (typeof recOrId === 'string') ? recOrId
+    : (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
   if(!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
-  const norm = normalizeCarrier(carrier||'');
-  const base = {};
-  if (tracking) base.tracking = String(tracking).trim();
-  if (typeof statoEvasa === 'boolean') base.statoEvasa = statoEvasa;
-  if (docs && typeof docs === 'object') base.docs = docs;
-  if (fields && typeof fields === 'object') base.fields = fields; // 👈 NEW
 
-  const attempts = [];
-  if (norm) attempts.push({ carrier: norm });
-  if (norm) attempts.push({ carrier: { name: norm } });
-  attempts.push({}); // senza carrier (es. solo docs/fields)
+  // Costruisci i campi da inviare a Airtable
+  const fields = {};
 
-  let lastErrTxt = '';
-  for (const extra of attempts){
-    const body = { ...base, ...extra };
-    try{
-      const res = await fetch(url, {
-        method:'PATCH',
-        headers:{ 'Content-Type':'application/json','Accept':'application/json' },
-        body: JSON.stringify(body)
-      });
-      if (res.ok) return await res.json();
-      const txt = await res.text();
-      lastErrTxt = txt;
-      if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(txt)){
-        throw new Error('PATCH failed '+res.status+': '+txt);
+  // Tracking
+  if (patch.carrier){
+    const norm = normalizeCarrier(patch.carrier || '');
+    if (norm) fields['Corriere'] = norm;
+  }
+  if (patch.tracking){
+    fields['Tracking Number'] = String(patch.tracking).trim();
+  }
+
+  // Stato (interpreta statoEvasa come Evasa nella nuova base)
+  if (typeof patch.statoEvasa === 'boolean'){
+    fields['Stato'] = patch.statoEvasa ? 'Evasa' : 'Nuova';
+  }
+
+  // Documenti: UI key → campo Airtable (attachment)
+  if (patch.docs && typeof patch.docs === 'object'){
+    for (const [uiKey, value] of Object.entries(patch.docs)){
+      const fieldName = docFieldFor(uiKey);
+      if (!fieldName) continue;
+      let attachments = value;
+      if (typeof value === 'string') attachments = [{ url: value }];
+      if (Array.isArray(attachments) && attachments.length){
+        fields[fieldName] = attachments;
       }
-    }catch(e){
-      lastErrTxt = String(e && e.message || e || '');
-      if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(lastErrTxt)) throw e;
     }
   }
-  throw new Error('PATCH failed (tentativi esauriti): '+lastErrTxt);
+
+  // Campi extra già “Airtable-ready” (facoltativi)
+  if (patch.fields && typeof patch.fields === 'object'){
+    Object.assign(fields, patch.fields);
+  }
+
+  if (!Object.keys(fields).length){
+    throw new Error('PATCH failed (client): no fields to update');
+  }
+
+  const res = await fetch(url, {
+    method: 'PATCH',
+    headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
+    body: JSON.stringify({ fields })
+  });
+
+  if (res.ok) return res.json();
+
+  const txt = await res.text().catch(()=> '');
+  throw new Error(`PATCH failed ${res.status}: ${txt || res.statusText}`);
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Upload allegato → Vercel Blob → URL pubblica
+   ────────────────────────────────────────────────────────────── */
 
-/**
- * Carica un file sullo storage del proxy (Vercel Blob) e ritorna una URL pubblica.
- * Poi questa URL verrà passata a Airtable come attachment.
- */
 export async function uploadAttachment(recordId, docName, file){
-  if(!USE_PROXY){ // fallback mock
+  if(!USE_PROXY){ // mock offline
     return { url: `https://files.dev/mock/${recordId}-${docName}-${Date.now()}-${file?.name||'file'}` };
   }
   const safe = (s)=> String(s||'').replace(/[^\w.\-]+/g,'_');
