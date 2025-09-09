@@ -285,4 +285,9 @@ a.link-orange:hover{ opacity:.9 }
 .track .link{margin-left:auto}
 
 
+/* Centra la colonna "Dim. (L×W×H cm)" */
+table.colli th:first-child,
+table.colli td:first-child{
+  text-align: center;
+}
 
