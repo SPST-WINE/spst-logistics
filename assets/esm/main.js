@@ -13,6 +13,10 @@ import './back-office-tabs.js';
 
 const elSearch   = document.getElementById('search');
 const elOnlyOpen = document.getElementById('only-open');
+const API_BASE =
+  (AIRTABLE?.proxyBase || '')
+    .replace(/\/airtable\/?$/i, '')  // es. https://spst-logistics.vercel.app/api
+  || 'https://spst-logistics.vercel.app/api';
 
 let DATA = [];
 
@@ -127,44 +131,54 @@ async function onSaveTracking(rec, carrier, tn){
   }
 }
 
-async function onSendMail(rec, to, { onSuccess } = {}){
+async function onSendMail(rec, typedEmail){
   try{
-    const expected = String(rec.email||'').trim().toLowerCase();
-    const typed = String(to||'').trim().toLowerCase();
-    if (!typed){
+    const to = String(typedEmail || '').trim();
+    const hint = String(rec?.email || '').trim();
+
+    if (!to){
       toast('Digita l’email del cliente');
       return;
     }
-    if (expected && typed !== expected){
-      toast('L’email non coincide con quella del record');
+    // sicurezza: deve coincidere con quella del record
+    if (hint && to.toLowerCase() !== hint.toLowerCase()){
+      toast('L’email digitata non coincide con quella del record');
+      return;
+    }
+    // sicurezza: solo se in transito
+    if (String(rec?.stato || '').toLowerCase() !== 'in transito'){
+      toast('Disponibile solo quando la spedizione è “In transito”');
       return;
     }
 
-    const payload = {
-      to: to,
+    const body = {
+      to,
       id: rec.id,
       carrier: rec.tracking_carrier || '',
       tracking: rec.tracking_number || '',
       ritiroData: rec.ritiro_data || '',
     };
 
-    const res = await fetch('/api/notify/transit', {
+    const url = `${API_BASE}/notify/transit`;   // ⬅️ torna a chiamare il proxy Vercel
+    if (DEBUG) console.log('[notify] POST', url, body);
+
+    const r = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
-      body: JSON.stringify(payload),
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(body),
     });
-    if (!res.ok){
-      const t = await res.text().catch(()=> '');
-      throw new Error(`HTTP ${res.status}: ${t}`);
+    if (!r.ok){
+      const t = await r.text().catch(()=> '');
+      throw new Error(`HTTP ${r.status}: ${t}`);
     }
 
-    toast('Email inviata al cliente');
-    if (typeof onSuccess === 'function') onSuccess();
+    toast('Mail inviata al cliente');
   }catch(err){
     console.error('[sendMail] error', err);
     toast('Errore invio mail');
   }
 }
+
 
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
