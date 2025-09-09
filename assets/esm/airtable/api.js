@@ -16,25 +16,27 @@ import { normalizeCarrier } from '../utils/misc.js';
    - Allegato 3
 */
 export const DOC_FIELD_MAP = {
-  // principali
+  // principali (sempre campo dedicato):
   Lettera_di_Vettura: 'Allegato LDV',
   Fattura_Commerciale: 'Allegato Fattura',
-  Fattura_Proforma: 'Allegato 1',
   Packing_List: 'Allegato PL',
   Dichiarazione_Esportazione: 'Allegato DLE',
-  FDA_Prior_Notice: 'Allegato 2',
-  'e-DAS': 'Allegato 1',
 
   // allegati cliente (valgono come “ok” in checklist)
   Fattura_Client: 'Fattura - Allegato Cliente',
   Packing_Client: 'Packing List - Allegato Cliente',
 };
 
+// tutto ciò che NON è una “main doc” finisce in Allegato 1 → 2 → 3
+const MAIN_DOC_KEYS = new Set(Object.keys(DOC_FIELD_MAP));
+const SPARE_FIELDS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
+
 export function docFieldFor(docKey) {
   return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
 }
 
 /* ───────── Query & Fetch ───────── */
+
 export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   const u = new URLSearchParams();
   if (q) u.set('search', q);
@@ -64,6 +66,15 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     );
     return [];
   }
+}
+
+// prendi un singolo record (ci serve per capire quali “Allegato N” sono liberi)
+export async function fetchShipmentById(id) {
+  if (!USE_PROXY || !id) return null;
+  const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
+  const res = await fetch(url, FETCH_OPTS);
+  if (!res.ok) return null;
+  return res.json().catch(() => null);
 }
 
 /* ───────── PATCH “tollerante” ───────── */
@@ -125,14 +136,42 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   throw new Error('PATCH failed (tentativi esauriti): ' + lastErrTxt);
 }
 
-/* ✔️ wrapper comodo per allegati: mappa docKey → campo Airtable e patcha */
+/* ✔️ wrapper allegati
+   - Se docKey è “main” (LDV, Fattura, PL, DLE) → scrivi sul campo dedicato
+   - Altrimenti → scegli il primo libero tra Allegato 1/2/3; se tutti pieni, accoda su Allegato 3
+*/
 export async function patchDocAttachment(recordId, docKey, attachmentsArray) {
-  const fieldName = docFieldFor(docKey);
-  const att = Array.isArray(attachmentsArray) && attachmentsArray.length
-    ? attachmentsArray
-    : [];
+  if (!recordId) throw new Error('patchDocAttachment: missing recordId');
+  const att = Array.isArray(attachmentsArray) && attachmentsArray.length ? attachmentsArray : [];
   if (!att.length) throw new Error('patchDocAttachment: attachmentsArray vuoto');
-  return patchShipmentTracking(recordId, { [fieldName]: att });
+
+  // main doc: patch diretto
+  if (MAIN_DOC_KEYS.has(docKey)) {
+    const fieldName = DOC_FIELD_MAP[docKey];
+    return patchShipmentTracking(recordId, { fields: { [fieldName]: att } });
+  }
+
+  // doc “dinamico” → Allegato 1/2/3
+  const rec = await fetchShipmentById(recordId);
+  const fields = rec?.fields || {};
+
+  // individua il primo slot libero
+  let target = SPARE_FIELDS.find(f => emptyAttachment(fields[f]));
+  if (!target) {
+    // se 1/2/3 sono pieni, accodiamo su Allegato 3
+    target = 'Allegato 3';
+    const current = Array.isArray(fields[target]) ? fields[target] : [];
+    return patchShipmentTracking(recordId, { fields: { [target]: [...current, ...att] } });
+  }
+
+  // slot libero trovato: scrivi lì
+  return patchShipmentTracking(recordId, { fields: { [target]: att } });
+}
+
+function emptyAttachment(v) {
+  if (!v) return true;
+  if (Array.isArray(v)) return v.length === 0;
+  return false;
 }
 
 /* ───────── Upload verso Vercel Blob ───────── */
