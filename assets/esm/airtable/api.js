@@ -18,6 +18,11 @@ export const DOC_FIELD_MAP = {
   Packing_Client:             'Packing List - Allegato Cliente',
 };
 
+// utile anche altrove se dovesse servire
+export function docFieldFor(docKey){
+  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
+}
+
 function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   const u = new URLSearchParams();
   if (q) u.set('search', q);
@@ -55,7 +60,6 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
 /* ──────────────────────────────────────────────────────────────
    PATCH SPEDIZIONE (tracking / stato / allegati)
    - Costruiamo SEMPRE { fields } con i nomi NUOVI
-   - NIENTE fallback legacy → evitiamo 422 "Unknown field name"
    ────────────────────────────────────────────────────────────── */
 export async function patchShipmentTracking(recOrId, patch = {}){
   const id =
@@ -77,7 +81,6 @@ export async function patchShipmentTracking(recOrId, patch = {}){
 
   // Stato (se serve)
   if (typeof patch.statoEvasa === 'boolean'){
-    // nella nuova base usiamo single select "Stato"
     fields['Stato'] = patch.statoEvasa ? 'Evasa' : 'Nuova';
   }
 
@@ -97,6 +100,11 @@ export async function patchShipmentTracking(recOrId, patch = {}){
     }
   }
 
+  // Pass-through opzionale: { fields: {...} } già risolto a monte
+  if (patch.fields && typeof patch.fields === 'object'){
+    Object.assign(fields, patch.fields);
+  }
+
   if (!Object.keys(fields).length){
     console.debug('[patchShipmentTracking] nessun campo mappato. Input:', patch);
     throw new Error('PATCH failed (client): no fields to update');
@@ -105,7 +113,7 @@ export async function patchShipmentTracking(recOrId, patch = {}){
   const res = await fetch(url, {
     method: 'PATCH',
     headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
-    body: JSON.stringify({ fields }) // <-- SOLO fields
+    body: JSON.stringify({ fields })
   });
 
   if (res.ok) return res.json();
@@ -117,12 +125,12 @@ export async function patchShipmentTracking(recOrId, patch = {}){
 /* ──────────────────────────────────────────────────────────────
    UPLOAD allegato (→ URL pubblica)
    ────────────────────────────────────────────────────────────── */
-export async function uploadAttachment(recordId, docName, file){
+export async function uploadAttachment(recordId, docKey, file){
   if(!USE_PROXY){
-    return { url: `https://files.dev/mock/${recordId}-${docName}-${Date.now()}-${file?.name||'file'}` };
+    return { url: `https://files.dev/mock/${recordId}-${docKey}-${Date.now()}-${file?.name||'file'}` };
   }
   const safe = (s)=> String(s||'').replace(/[^\w.\-]+/g,'_');
-  const filename = `${safe(recordId)}__${safe(docName)}__${Date.now()}__${safe(file?.name||'file')}`;
+  const filename = `${safe(recordId)}__${safe(docKey)}__${Date.now()}__${safe(file?.name||'file')}`;
   const url = `${AIRTABLE.proxyBase}/upload?filename=${encodeURIComponent(filename)}&contentType=${encodeURIComponent(file?.type || 'application/octet-stream')}`;
 
   const res = await fetch(url, { method: 'POST', headers: { 'Accept':'application/json' }, body: file });
