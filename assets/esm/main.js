@@ -4,7 +4,8 @@ import {
   fetchShipments,
   patchShipmentTracking,
   uploadAttachment,
-  patchDocAttachment, // ⬅️ nuovo: patch di un allegato con fallback nomi campo
+  patchDocAttachment,  // ✅ ora esiste davvero
+  docFieldFor,
 } from './airtable/api.js';
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
@@ -16,16 +17,17 @@ const elOnlyOpen = document.getElementById('only-open');
 
 let DATA = [];
 
-/* utils */
+/* ───────── utils ───────── */
 function debounce(fn, ms = 250){
   let t; return (...args)=>{ clearTimeout(t); t = setTimeout(()=>fn(...args), ms); };
 }
 
-/* data flow */
+/* ───────── data flow ───────── */
 async function loadData(){
   try{
     const q = (elSearch?.value || '').trim();
     const onlyOpen = !!elOnlyOpen?.checked;
+
     const items = await fetchShipments({ q, onlyOpen });
     DATA = items || [];
     applyFilters();
@@ -40,7 +42,7 @@ function applyFilters(){
   renderList(out, { onUploadForDoc, onSaveTracking, onComplete });
 }
 
-/* actions */
+/* ───────── actions ───────── */
 async function onUploadForDoc(e, rec, docKey){
   try{
     const file = e?.target?.files && e.target.files[0];
@@ -54,11 +56,11 @@ async function onUploadForDoc(e, rec, docKey){
 
     toast('Upload in corso…');
 
-    // 1) upload al proxy → URL pubblica
-    const { url } = await uploadAttachment(recId, docKey, file);
-    const attArray = [{ url }];
+    // 1) upload → { url, attachments: [{url}] }
+    const { url, attachments } = await uploadAttachment(recId, docKey, file);
+    const attArray = Array.isArray(attachments) && attachments.length ? attachments : [{ url }];
 
-    // 2) patch SOLO quel documento con fallback nomi campo
+    // 2) patch nel campo corretto (wrapper che usa docFieldFor + patchShipmentTracking)
     await patchDocAttachment(recId, docKey, attArray);
 
     toast(`${docKey.replaceAll('_',' ')} caricato`);
@@ -98,25 +100,29 @@ async function onSaveTracking(rec, carrier, tn){
 
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
-  if (!recId){
-    rec.stato = 'In transito';
-    toast(`${rec.id}: segnata in transito (locale)`);
+  if(!recId){
+    rec.stato = 'In transito'; // fallback locale
+    toast(`${rec.id}: evasione completata (locale)`);
     applyFilters();
     return;
   }
   try{
-    await patchShipmentTracking(recId, { stato: 'In transito' });
-    toast(`${rec.id}: segnata in transito`);
+    // marca evasa + porta lo stato visibile a “In transito”
+    await patchShipmentTracking(recId, {
+      statoEvasa: true,
+      fields: { Stato: 'In transito' }, // ← Single Select “Stato” in Airtable
+    });
+    toast(`${rec.id}: evasione completata → In transito`);
     await loadData();
   }catch(err){
-    console.error('Errore cambio stato', err);
-    toast('Errore cambio stato');
+    console.error('Errore evasione', err);
+    toast('Errore evasione');
   }
 }
 
-/* listeners */
+/* ───────── listeners ───────── */
 if (elSearch)   elSearch.addEventListener('input', debounce(()=>loadData(), 250));
 if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
 
-/* bootstrap */
+/* ───────── bootstrap ───────── */
 loadData().catch(e=>console.warn('init loadData failed', e));
