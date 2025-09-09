@@ -1,78 +1,67 @@
 // api/airtable/upload.js
-// POST /api/airtable/upload?filename=...&contentType=...
-// Body: raw file bytes -> ritorna { url } pubblico (Vercel Blob)
 
+// ✅ Forza runtime Node (NON Edge) e alza il limite a 50 MB
 export const config = {
-  runtime: 'nodejs18.x',      // forza Serverless Node (no Edge)
-  api: {
-    bodyParser: false,        // riceviamo binario
-    sizeLimit: '50mb',        // alza limite per PDF grossi
-  },
+  runtime: 'nodejs',
+  api: { bodyParser: false, sizeLimit: '50mb' },
 };
 
-const ALLOW_ORIGIN = process.env.CORS_ALLOW_ORIGIN || 'https://www.spst.it';
+const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || 'https://www.spst.it';
 
 export default async function handler(req, res) {
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    setCors(res);
-    res.status(204).end();
-    return;
-  }
+  setCORS(res);
+
+  // Preflight CORS
+  if (req.method === 'OPTIONS') return res.status(204).end();
 
   if (req.method !== 'POST') {
-    setCors(res);
     res.status(405).json({ error: 'Method Not Allowed' });
     return;
   }
 
   try {
-    const filename = (req.query.filename || 'upload.bin').toString();
-    const contentType = (req.query.contentType || 'application/octet-stream').toString();
+    const filename = String(req.query.filename || 'upload.bin');
+    const contentType = String(req.query.contentType || 'application/octet-stream');
 
-    // import dinamico per evitare errori in build se manca la dep
-    let put;
-    try {
-      ({ put } = await import('@vercel/blob'));
-    } catch (e) {
-      setCors(res);
-      return res.status(500).json({
-        error: 'Missing @vercel/blob',
-        details: 'Installa @vercel/blob e configura BLOB_READ_WRITE_TOKEN',
-      });
-    }
+    // Import dinamico per evitare errori in build
+    const { put } = await import('@vercel/blob');
 
     const buffer = await readBuffer(req);
     if (!buffer?.length) {
-      setCors(res);
-      return res.status(400).json({ error: 'Empty body' });
+      res.setHeader('x-debug', 'empty-body');
+      res.status(400).json({ error: 'Empty body' });
+      return;
     }
 
-    // opzionale: pass token esplicito (se usi token RW)
-    const options = { access: 'public', contentType };
-    if (process.env.BLOB_READ_WRITE_TOKEN) {
-      options.token = process.env.BLOB_READ_WRITE_TOKEN;
-    }
+    // ✅ Se hai collegato lo Store via integrazione, il token è automatico.
+    // ✅ In alternativa puoi passare il token manualmente (vedi passo 2).
+    const blob = await put(filename, buffer, {
+      access: 'public',
+      contentType,
+      token: process.env.BLOB_READ_WRITE_TOKEN, // opzionale: se presente lo usa
+    });
 
-    const blob = await put(filename, buffer, options);
-
-    setCors(res);
-    res.status(200).json({ url: blob?.url, attachments: [{ url: blob?.url }] });
+    res.setHeader('Access-Control-Expose-Headers', 'x-debug');
+    res.setHeader('x-debug', 'upload-ok');
+    res.status(200).json({
+      url: blob?.url,
+      attachments: [{ url: blob?.url }], // comodo per Airtable attachments
+    });
   } catch (e) {
     console.error('[upload] error', e);
-    setCors(res);
+    res.setHeader('x-debug', 'upload-exception');
     res.status(502).json({ error: 'Upload failed', details: String(e?.message || e) });
   }
 }
 
-/* helpers */
-function setCors(res) {
+/* ---------- helpers ---------- */
+
+function setCORS(res) {
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-requested-with');
   res.setHeader('Access-Control-Max-Age', '86400');
-  res.setHeader('Access-Control-Expose-Headers', 'x-debug');
 }
 
 async function readBuffer(req) {
