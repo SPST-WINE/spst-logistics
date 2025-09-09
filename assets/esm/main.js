@@ -96,6 +96,7 @@ async function onUploadForDoc(e, rec, docKey){
   }
 }
 
+/* Salva tracking: NON cambia lo stato */
 async function onSaveTracking(rec, carrier, tn){
   carrier = (carrier||'').trim();
   tn = (tn||'').trim();
@@ -105,10 +106,11 @@ async function onSaveTracking(rec, carrier, tn){
   if (!recId){ toast('Errore: id record mancante'); return; }
 
   try{
-    await patchShipmentTracking(recId, { carrier, tracking: tn }); // ← niente 'Stato'
+    await patchShipmentTracking(recId, { carrier, tracking: tn }); // ← nessun cambio 'Stato'
     // aggiorna UI locale (card resta visibile nella vista "Solo non evase")
     rec.tracking_carrier = carrier;
     rec.tracking_number  = tn;
+    enableNotify(rec.id);
     toast(`${rec.id}: tracking salvato`);
   }catch(err){
     console.error('Errore salvataggio tracking', err);
@@ -116,20 +118,7 @@ async function onSaveTracking(rec, carrier, tn){
   }
 }
 
-    // Aggiorna subito la UI locale (NON ricarichiamo l’elenco)
-    rec.tracking_carrier = carrier;
-    rec.tracking_number  = tn;
-    rec.stato = 'In transito';
-    setBadge(rec.id, 'In transito', 'green');
-    enableNotify(rec.id);
-
-    toast(`${rec.id}: tracking salvato (stato → In transito)`);
-  }catch(err){
-    console.error('Errore salvataggio tracking', err);
-    toast('Errore salvataggio tracking');
-  }
-}
-
+/* Invio mail sicuro: solo se in transito e email coincide */
 async function onSendMail(rec, typedEmail){
   try{
     const to = String(typedEmail || '').trim();
@@ -176,16 +165,19 @@ async function onSendMail(rec, typedEmail){
   }
 }
 
+/* Evasione completata: qui SI passa a "In transito" e si ricarica la lista */
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
   if (!recId){
     rec.stato = 'In transito';
+    setBadge(rec.id, 'In transito', 'green');
     toast(`${rec.id}: evasione completata (locale)`);
     applyFilters();
     return;
   }
   try{
     await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
+    setBadge(rec.id, 'In transito', 'green');
     toast(`${rec.id}: evasione completata`);
     await loadData(); // con "Solo non evase" attivo scompare perché non è più "Nuova"
   }catch(err){
