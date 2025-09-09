@@ -1,6 +1,6 @@
 // assets/esm/airtable/api.js
 import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
-import { showBanner, toast } from '../utils/dom.js';
+import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
 /* ───────── Doc mapping UI → Airtable fields ─────────
@@ -19,24 +19,22 @@ export const DOC_FIELD_MAP = {
   // principali
   Lettera_di_Vettura: 'Allegato LDV',
   Fattura_Commerciale: 'Allegato Fattura',
-  Fattura_Proforma: 'Allegato 1',            // se vuoi usare 1/2/3 per extra
+  Fattura_Proforma: 'Allegato 1',
   Packing_List: 'Allegato PL',
   Dichiarazione_Esportazione: 'Allegato DLE',
   FDA_Prior_Notice: 'Allegato 2',
   'e-DAS': 'Allegato 1',
 
-  // allegati caricati dal cliente (usati come validi per la checklist)
+  // allegati cliente (valgono come “ok” in checklist)
   Fattura_Client: 'Fattura - Allegato Cliente',
   Packing_Client: 'Packing List - Allegato Cliente',
 };
 
 export function docFieldFor(docKey) {
-  // es. 'Lettera_di_Vettura' -> 'Allegato LDV'
   return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
 }
 
 /* ───────── Query & Fetch ───────── */
-
 export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   const u = new URLSearchParams();
   if (q) u.set('search', q);
@@ -57,29 +55,26 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    return records; // lasciamo {id, fields,...} grezzi (normalizza il render)
+    return records;
   } catch (err) {
     console.error('[fetchShipments] failed', { url, err });
-    showBanner(`Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). <span class="small">Dettagli: ${String(err.message||err)}</span>`);
+    showBanner(
+      `Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). ` +
+      `<span class="small">Dettagli: ${String(err.message||err)}</span>`
+    );
     return [];
   }
 }
 
-/* ───────── PATCH “tollerante” ─────────
-   Accetta:
-   - { carrier, tracking }
-   - { statoEvasa: true }
-   - { fields: { "Allegato Fattura": [{url}] } }
-   - { "Allegato Fattura": [{url}] }  ← chiavi “sconosciute” vanno in fields
-*/
+/* ───────── PATCH “tollerante” ───────── */
 export async function patchShipmentTracking(recOrId, payload = {}) {
-  const id = (typeof recOrId === 'string') ? recOrId :
-             (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
+  const id = (typeof recOrId === 'string')
+    ? recOrId
+    : (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
   if (!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
 
-  // destrutturo e tengo le “rest” per portarle in fields se servono
   const { carrier, tracking, statoEvasa, docs, fields, ...rest } = payload || {};
   const norm = normalizeCarrier(carrier || '');
 
@@ -89,7 +84,7 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   if (docs && typeof docs === 'object') base.docs = docs;
   if (fields && typeof fields === 'object') base.fields = fields;
 
-  // Se arrivano chiavi top-level sconosciute (es. "Allegato Fattura"), spostale in fields
+  // sposta chiavi “sconosciute” (es. "Allegato Fattura") dentro fields
   const KNOWN = new Set(['carrier','tracking','statoEvasa','docs','fields']);
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
   if (unknownKeys.length) {
@@ -97,7 +92,6 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
     for (const k of unknownKeys) base.fields[k] = rest[k];
   }
 
-  // se non abbiamo nulla da patchare, evita round-trip
   if (!('tracking' in base) && !('statoEvasa' in base) && !('docs' in base) && !('fields' in base)) {
     throw new Error('PATCH failed (client): no fields to update');
   }
@@ -120,24 +114,32 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
 
       const txt = await res.text();
       lastErrTxt = txt;
-      // se l'errore NON è il classico "Corriere Single Select", esci subito
       if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(txt)) {
         throw new Error('PATCH failed ' + res.status + ': ' + txt);
       }
     } catch (e) {
       lastErrTxt = String(e?.message || e || '');
       if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(lastErrTxt)) throw e;
-      // altrimenti riproviamo con variante carrier
     }
   }
   throw new Error('PATCH failed (tentativi esauriti): ' + lastErrTxt);
 }
 
+/* ✔️ wrapper comodo per allegati: mappa docKey → campo Airtable e patcha */
+export async function patchDocAttachment(recordId, docKey, attachmentsArray) {
+  const fieldName = docFieldFor(docKey);
+  const att = Array.isArray(attachmentsArray) && attachmentsArray.length
+    ? attachmentsArray
+    : [];
+  if (!att.length) throw new Error('patchDocAttachment: attachmentsArray vuoto');
+  return patchShipmentTracking(recordId, { [fieldName]: att });
+}
+
 /* ───────── Upload verso Vercel Blob ───────── */
 export async function uploadAttachment(recordId, docKey, file) {
   if (!USE_PROXY) {
-    // fallback mock
-    return { url: `https://files.dev/mock/${recordId}-${docKey}-${Date.now()}-${file?.name||'file'}`, attachments: [{ url: `https://files.dev/mock/${recordId}-${docKey}-${Date.now()}-${file?.name||'file'}` }] };
+    const url = `https://files.dev/mock/${recordId}-${docKey}-${Date.now()}-${file?.name||'file'}`;
+    return { url, attachments: [{ url }] };
   }
 
   const safe = (s) => String(s || '').replace(/[^\w.\-]+/g, '_');
@@ -164,7 +166,7 @@ export async function fetchColliFor(recordId) {
     const url = `${base}/spedizioni/${encodeURIComponent(recordId)}/colli`;
 
     const res = await fetch(url, FETCH_OPTS);
-    if (!res.ok) { return []; }
+    if (!res.ok) return [];
 
     const json = await res.json().catch(() => ({}));
     const rows = Array.isArray(json?.rows) ? json.rows : (Array.isArray(json) ? json : []);
