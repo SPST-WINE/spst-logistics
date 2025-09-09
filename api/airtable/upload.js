@@ -1,104 +1,76 @@
+// /api/airtable/upload.js
 // POST /api/airtable/upload?filename=...&contentType=...
-// Body: raw file bytes. Ritorna { url } pubblico per Airtable attachments.
+// Body: raw file bytes → risponde { url, attachments:[{url}] } per Airtable
 
-export default async function handler(req, res){
-  if (handleCORS(req, res)) return;          // CORS + OPTIONS 204
+import { put } from '@vercel/blob';
 
-  if (req.method !== 'POST') {
-    res.setHeader('x-debug', 'method-not-allowed');
-    return res.status(405).json({ error: 'Method Not Allowed' });
-  }
+export const config = { runtime: 'edge' }; // Edge = streaming, no body limit del serverless Node
 
-  try {
-    const filename = (req.query.filename || 'upload.bin').toString();
-    const contentType = (req.query.contentType || 'application/octet-stream').toString();
+// Domini abilitati (aggiungi staging se serve)
+const ALLOW_ORIGINS = [
+  'https://www.spst.it',
+  'https://spst-logistics.vercel.app',
+  'http://localhost:3000',
+];
 
-    // Dynamic import: evita crash a import-time se manca la dependency/token
-    let put;
-    try {
-      ({ put } = await import('@vercel/blob'));
-    } catch {
-      res.setHeader('x-debug', 'missing-vercel-blob');
-      return res.status(500).json({
-        error: 'Missing @vercel/blob',
-        details: 'Installa @vercel/blob e collega lo store o imposta BLOB_READ_WRITE_TOKEN'
-      });
-    }
-
-    const buffer = await readBuffer(req);
-    if (!buffer?.length) {
-      res.setHeader('x-debug', 'empty-body');
-      return res.status(400).json({ error: 'Empty body' });
-    }
-
-    const blob = await put(filename, buffer, { access: 'public', contentType });
-    res.setHeader('x-debug', 'upload-ok');
-    return res.status(200).json({ url: blob?.url });
-  } catch (e) {
-    console.error('[upload] error', e);
-    res.setHeader('x-debug', 'upload-exception');
-    return res.status(502).json({ error: 'Upload failed', details: String(e?.message || e) });
-  }
+function corsHeaders(origin) {
+  const allow = ALLOW_ORIGINS.includes(origin) ? origin : ALLOW_ORIGINS[0];
+  return {
+    'Access-Control-Allow-Origin': allow,
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Max-Age': '86400',
+  };
 }
 
-/* ───────── helpers ───────── */
+export default async function handler(req) {
+  const origin = req.headers.get('origin') || '';
+  const baseHeaders = corsHeaders(origin);
 
-function handleCORS(req, res){
-  res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-requested-with');
-  res.setHeader('Access-Control-Max-Age', '86400');
-  res.setHeader('Access-Control-Expose-Headers', 'x-debug');
-
+  // Preflight CORS
   if (req.method === 'OPTIONS') {
-    res.setHeader('x-debug', 'preflight-ok');
-    res.status(204).end();
-    return true;
-  }
-  return false;
-}
-
-async function readBuffer(req){
-  const chunks = [];
-  for await (const c of req) chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c));
-  return Buffer.concat(chunks);
-}
-
-export const config = {
-  api: {
-    bodyParser: false,           // riceviamo binario
-    sizeLimit: '50mb',           // ↑ alza il limite (scegli tu)
-  }
-};
-
-const ALLOW_ORIGIN = 'https://www.spst.it'; // o '*', ma meglio il tuo dominio
-
-export default async function handler(req, res) {
-  // CORS preflight
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    res.status(200).end();
-    return;
+    return new Response(null, { status: 204, headers: baseHeaders });
   }
 
   if (req.method !== 'POST') {
-    res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
-    res.status(405).json({ error: 'Method Not Allowed' });
-    return;
+    return new Response(JSON.stringify({ error: 'Method Not Allowed' }), {
+      status: 405,
+      headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const filename = searchParams.get('filename') || `upload-${Date.now()}.bin`;
+  const contentType = searchParams.get('contentType') || 'application/octet-stream';
+
+  // In Edge, req.body è uno stream → niente buffer in RAM ⇒ niente 413
+  const bodyStream = req.body;
+  if (!bodyStream) {
+    return new Response(JSON.stringify({ error: 'Empty body' }), {
+      status: 400,
+      headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+    });
   }
 
   try {
-    // ... qui leggi lo stream dal req e fai l’upload allo storage ...
-    // ottenuta la url finale:
-    const publicUrl = /* ... */;
+    const res = await put(filename, bodyStream, {
+      access: 'public',
+      contentType,
+      addRandomSuffix: false, // così il nome rimane leggibile
+    });
 
-    res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
-    res.status(200).json({ url: publicUrl });
-  } catch (e) {
-    res.setHeader('Access-Control-Allow-Origin', ALLOW_ORIGIN);
-    res.status(500).json({ error: String(e?.message || e) });
+    return new Response(
+      JSON.stringify({
+        url: res.url,
+        // comodo per patch Airtable: i campi attachment accettano array di {url}
+        attachments: [{ url: res.url }],
+      }),
+      { status: 200, headers: { ...baseHeaders, 'Content-Type': 'application/json' } }
+    );
+  } catch (err) {
+    return new Response(JSON.stringify({ error: String(err?.message || err) }), {
+      status: 500,
+      headers: { ...baseHeaders, 'Content-Type': 'application/json' },
+    });
   }
 }
