@@ -1,6 +1,11 @@
 // assets/esm/main.js
 import { DEBUG } from './config.js';
-import { fetchShipments, patchShipmentTracking, uploadAttachment } from './airtable/api.js';
+import {
+  fetchShipments,
+  patchShipmentTracking,
+  uploadAttachment,
+  docFieldFor,            // ⬅️ mappa 'Lettera_di_Vettura' -> 'Allegato LDV'
+} from './airtable/api.js';
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
@@ -12,8 +17,8 @@ const elOnlyOpen = document.getElementById('only-open');
 let DATA = [];
 
 /* ───────── utils ───────── */
-function debounce(fn, ms=250){
-  let t; return (...args)=>{ clearTimeout(t); t=setTimeout(()=>fn(...args), ms); };
+function debounce(fn, ms = 250){
+  let t; return (...args)=>{ clearTimeout(t); t = setTimeout(()=>fn(...args), ms); };
 }
 
 /* ───────── data flow ───────── */
@@ -38,26 +43,30 @@ function applyFilters(){
 }
 
 /* ───────── actions ───────── */
-async function onUploadForDoc(e, rec, docName){
+async function onUploadForDoc(e, rec, docKey){
   try{
     const file = e?.target?.files && e.target.files[0];
-    if(!file) return;
+    if (!file) return;
 
     const recId = rec._recId || rec.id;
-    if(!recId){
+    if (!recId){
       toast('Errore: id record mancante');
       return;
     }
 
     toast('Upload in corso…');
 
-    // 1) carica file (proxy → Vercel Blob) → URL pubblica
-    const { url } = await uploadAttachment(recId, docName, file);
+    // 1) Carica file (proxy → Vercel Blob) e ottieni URL pubblica
+    const { url, attachments } = await uploadAttachment(recId, docKey, file);
+    // Airtable accetta un array di allegati nel campo attachment
+    // Se l'API di upload restituisce già un array "attachments", usiamolo; altrimenti costruiamolo da url
+    const attArray = Array.isArray(attachments) && attachments.length ? attachments : [{ url }];
 
-    // 2) patch su Airtable: mappa il docName al campo attachment
-    await patchShipmentTracking(recId, { docs: { [docName]: url } });
+    // 2) PATCH su Airtable — mappa la chiave UI al vero nome campo
+    const fieldName = docFieldFor(docKey); // es. 'Lettera_di_Vettura' -> 'Allegato LDV'
+    await patchShipmentTracking(recId, { [fieldName]: attArray });
 
-    toast(`${docName.replaceAll('_',' ')} caricato`);
+    toast(`${docKey.replaceAll('_',' ')} caricato`);
     await loadData();
   }catch(err){
     console.error('[onUploadForDoc] errore upload', err);
@@ -70,12 +79,12 @@ async function onUploadForDoc(e, rec, docName){
 async function onSaveTracking(rec, carrier, tn){
   carrier = (carrier||'').trim();
   tn = (tn||'').trim();
-  if(!carrier || !tn){
+  if (!carrier || !tn){
     toast('Inserisci corriere e numero tracking');
     return;
   }
   const recId = rec._recId || rec.id;
-  if(!recId){
+  if (!recId){
     console.warn('onSaveTracking: record id mancante', rec);
     toast('Errore: id record mancante');
     return;
@@ -94,9 +103,10 @@ async function onSaveTracking(rec, carrier, tn){
 
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
-  if(!recId){
+  if (!recId){
+    // fallback locale
     rec.stato = 'Pronta alla spedizione';
-    toast(`${rec.id}: evasione completata (mock)`);
+    toast(`${rec.id}: evasione completata (locale)`);
     applyFilters();
     return;
   }
