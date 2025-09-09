@@ -1,10 +1,6 @@
 // assets/esm/main.js
 import { DEBUG } from './config.js';
-import {
-  fetchShipments,
-  patchShipmentTracking,
-  uploadAttachment,
-} from './airtable/api.js';
+import { fetchShipments, patchShipmentTracking, uploadAttachment } from './airtable/api.js';
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
@@ -54,11 +50,12 @@ async function onUploadForDoc(e, rec, docKey){
 
     toast('Upload in corso…');
 
-    // 1) Carica file (proxy → Vercel Blob) e ottieni URL pubblica
+    // 1) upload → URL pubblica
     const { url } = await uploadAttachment(recId, docKey, file);
+    const attArray = [{ url }]; // Airtable attachment format
 
-    // 2) PATCH su Airtable — passiamo la chiave UI, ci pensa api.js a mappare
-    await patchShipmentTracking(recId, { docs: { [docKey]: url } });
+    // 2) patch su Airtable usando la chiave UI del doc
+    await patchShipmentTracking(recId, { docs: { [docKey]: attArray } });
 
     toast(`${docKey.replaceAll('_',' ')} caricato`);
     await loadData();
@@ -97,20 +94,23 @@ async function onSaveTracking(rec, carrier, tn){
 
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
+
+  // Fallback locale se manca l'id
   if (!recId){
-    // fallback locale
-    rec.stato = 'Pronta alla spedizione';
-    toast(`${rec.id}: evasione completata (locale)`);
+    rec.stato = 'In transito';
+    toast(`${rec.id}: segnata in transito (locale)`);
     applyFilters();
     return;
   }
+
   try{
-    await patchShipmentTracking(recId, { statoEvasa: true });
-    toast(`${rec.id}: evasione completata`);
+    // ✅ scrive direttamente il campo "Stato"
+    await patchShipmentTracking(recId, { stato: 'In transito' });
+    toast(`${rec.id}: segnata in transito`);
     await loadData();
   }catch(err){
-    console.error('Errore evasione', err);
-    toast('Errore evasione');
+    console.error('Errore cambio stato', err);
+    toast('Errore cambio stato');
   }
 }
 
