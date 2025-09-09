@@ -258,22 +258,17 @@ function renderTrackingBlock(rec){
         <option value="">Scegli corriere</option>
         ${CARRIERS.map(c=>`<option value="${c}" ${rec.tracking_carrier===c? 'selected':''}>${c}</option>`).join('')}
       </select>
-      <input
-  type="email"
-  class="mail-input notify-email"
-  id="mail-${rec.id}"
-  placeholder="${rec.email || 'email@cliente.com'}"
-  inputmode="email"
-  autocomplete="off"
-  autocapitalize="off"
-  spellcheck="false"
-  ${canNotify ? '' : 'disabled'}
->
+      <input id="${tnId}" type="text" placeholder="Numero tracking" value="${rec.tracking_number||''}">
       <button class="mini-btn save-tracking" data-carrier="${carrierId}" data-tn="${tnId}">Salva tracking</button>
-      <span class="small link">${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>` : ''}</span>
+      <span class="small link">
+        ${(rec.tracking_carrier && rec.tracking_number && url && url!=='#')
+          ? `<a class="link-orange" href="${url}" target="_blank">Apri tracking</a>`
+          : ''}
+      </span>
     </div>
   `;
 }
+
 
 /* print-grid: aggiungo un ID al campo “Colli (lista)” per aggiornamento post fetch */
 function renderPrintGrid(rec){
@@ -424,7 +419,17 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
       <div class="notify" id="notify-${rec.id}" style="margin-top:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;">
         <div class="small" style="opacity:.9;margin-bottom:6px">Notifica cliente (stato in transito) — digita l’email per confermare</div>
         <div class="row" style="display:flex;gap:8px;align-items:center;">
-          <input class="notify-email" type="email" placeholder="${rec.email||''}" value="" style="flex:1;min-width:220px">
+          <input
+  class="mail-input notify-email"
+  type="email"
+  placeholder="${rec.email || 'email@cliente.com'}"
+  value=""
+  inputmode="email"
+  autocomplete="off"
+  autocapitalize="off"
+  spellcheck="false"
+  style="flex:1;min-width:220px"
+/>
           <button class="mini-btn send-mail">Invia mail</button>
           <span class="small" style="opacity:.7">L’indirizzo deve coincidere con quello del record.</span>
         </div>
