@@ -1,59 +1,62 @@
 // api/notify/transit.js
-import nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
-export default async function handler(req, res){
-  if (req.method === 'OPTIONS') return sendCORS(req,res);
-  sendCORS(req,res);
-  if (req.method !== 'POST') return res.status(405).json({ error:'Method Not Allowed' });
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-  try{
-    const { to, id, carrier, tracking, trackingUrl, ritiroData } = req.body || {};
-    if (!to || !id) return res.status(400).json({ error:'Missing "to" or "id"' });
+export default async function handler(req, res) {
+  if (req.method === 'OPTIONS') return sendCORS(req, res);
+  sendCORS(req, res);
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
 
-    const {
-      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, SMTP_SECURE,
-      EMAIL_FROM, eMAIL_FROM, MAIL_FROM,               // leggiamo più varianti
-      WHATSAPP_URL, EMAIL_LOGO_URL, AREA_RISERVATA_URL
-    } = process.env;
+  try {
+    const { to, id, carrier, tracking, trackingUrl, ritiroData, stato } = req.body || {};
+    if (!to || !id) return res.status(400).json({ error: 'Missing "to" or "id"' });
 
-    const transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: Number(SMTP_PORT || 587),
-      secure: String(SMTP_SECURE||'false') === 'true',
-      auth: (SMTP_USER && SMTP_PASS) ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
+    // guard server-side: inviamo solo se lo stato è "In transito"
+    if (String(stato || '').toLowerCase() !== 'in transito') {
+      return res.status(400).json({ error: 'Shipment must be "In transito" to notify' });
+    }
+
+    const FROM = process.env.EMAIL_FROM || process.env.eMAIL_FROM || 'no-reply@spst.it'; // dominio verificato su Resend
+    const AREA = process.env.AREA_RISERVATA_URL || 'https://www.spst.it/area-riservata';
+    const WA   = process.env.WHATSAPP_URL || 'https://wa.me/39XXXXXXXXX';
+    const LOGO = process.env.EMAIL_LOGO_URL || 'https://www.spst.it/favicon.png';
+
+    const subject = `SPST • Spedizione in transito — ${id}`;
+    const html = renderHtml({ logo: LOGO, subject, id, carrier, tracking, trackingUrl, areaUrl: AREA, waUrl: WA, ritiroData });
+    const text = renderText({ id, carrier, tracking, trackingUrl, areaUrl: AREA, waUrl: WA, ritiroData });
+
+    const { data, error } = await resend.emails.send({
+      from: FROM,            // es. "SPST <no-reply@spst.it>" — deve essere autorizzato su Resend
+      to: [to],
+      subject,
+      html,
+      text,
     });
 
-    const from = EMAIL_FROM || eMAIL_FROM || MAIL_FROM || 'no-reply@spst.it';
-    const subject = `SPST • Spedizione in transito — ${id}`;
-    const areaUrl = AREA_RISERVATA_URL || 'https://www.spst.it/area-riservata';
-    const waUrl   = WHATSAPP_URL || 'https://wa.me/393XXXXXXXXX';
-    const logo    = EMAIL_LOGO_URL || 'https://www.spst.it/favicon.png';
-
-    const html = renderHtml({ logo, subject, id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiroData });
-    const text = renderText({ id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiroData });
-
-    await transporter.sendMail({ from, to, subject, text, html });
-
-    return res.status(200).json({ ok:true });
-  }catch(e){
+    if (error) throw new Error(error.message || String(error));
+    return res.status(200).json({ ok: true, id: data?.id || null });
+  } catch (e) {
     console.error('[notify/transit] error', e);
-    return res.status(502).json({ error:'Send failed', details: String(e?.message||e) });
+    const msg = String(e?.message || e);
+    const code = /rate limit/i.test(msg) ? 429 : 502;
+    return res.status(code).json({ error: 'Send failed', details: msg });
   }
 }
 
-/* ───────── helpers ───────── */
+/* ─ helpers ─ */
 
-function sendCORS(req,res){
+function sendCORS(req, res) {
   const origin = req.headers.origin || '*';
   res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Vary','Origin');
-  res.setHeader('Access-Control-Allow-Methods','POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers','Content-Type, Authorization');
-  res.setHeader('Access-Control-Max-Age','600');
+  res.setHeader('Vary', 'Origin');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.setHeader('Access-Control-Max-Age', '600');
   if (req.method === 'OPTIONS') return res.status(204).end();
 }
 
-function renderText({ id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiroData }){
+function renderText({ id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiroData }) {
   return [
     `Spedizione in transito — ${id}`,
     '',
@@ -68,12 +71,12 @@ function renderText({ id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiro
     `Supporto WhatsApp: ${waUrl}`,
     '',
     'Grazie,',
-    'Team SPST'
+    'Team SPST',
   ].filter(Boolean).join('\n');
 }
 
-function renderHtml({ logo, subject, id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiroData }){
-  const btn = (href,label,bg) => `
+function renderHtml({ logo, subject, id, carrier, tracking, trackingUrl, areaUrl, waUrl, ritiroData }) {
+  const btn = (href, label, bg) => `
     <a href="${href}" style="display:inline-block;padding:12px 18px;border-radius:10px;
       text-decoration:none;background:${bg};color:#0b1220;font-weight:600">${label}</a>`;
 
