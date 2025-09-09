@@ -269,7 +269,6 @@ function renderTrackingBlock(rec){
   `;
 }
 
-
 /* print-grid: aggiungo un ID al campo “Colli (lista)” per aggiornamento post fetch */
 function renderPrintGrid(rec){
   const colliListHtml = (rec.colli && rec.colli.length)
@@ -318,7 +317,11 @@ function ensureListContainer() {
   return el;
 }
 
-export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, onSendMail}){
+/**
+ * isMailSent: funzione opzionale passata dal main per mostrare “Email inviata ✓” dopo reload
+ *  signature: (idSped) => boolean
+ */
+export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, onSendMail, isMailSent}){
   const normalized = (data || []).map((rec) => rec && rec.fields ? normalizeShipmentRecord(rec) : rec);
 
   const elList = ensureListContainer();
@@ -420,16 +423,16 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
         <div class="small" style="opacity:.9;margin-bottom:6px">Notifica cliente (stato in transito) — digita l’email per confermare</div>
         <div class="row" style="display:flex;gap:8px;align-items:center;">
           <input
-  class="mail-input notify-email"
-  type="email"
-  placeholder="${rec.email || 'email@cliente.com'}"
-  value=""
-  inputmode="email"
-  autocomplete="off"
-  autocapitalize="off"
-  spellcheck="false"
-  style="flex:1;min-width:220px"
-/>
+            class="mail-input notify-email"
+            type="email"
+            placeholder="${rec.email || 'email@cliente.com'}"
+            value=""
+            inputmode="email"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+            style="flex:1;min-width:220px"
+          />
           <button class="mini-btn send-mail">Invia mail</button>
           <span class="small" style="opacity:.7">L’indirizzo deve coincidere con quello del record.</span>
         </div>
@@ -492,24 +495,35 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
       saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
     }
 
-    // Invia mail (abilitata solo se stato = In transito)
-    const sendBtn = card.querySelector('.send-mail');
+    // Invia mail (abilitata solo se stato = In transito) + badge “inviata”
+    const sendBtn    = card.querySelector('.send-mail');
     const emailInput = card.querySelector('.notify-email');
-    const sentFlag = card.querySelector('.notify-sent');
-    const isTransit = String(rec.stato||'').toLowerCase() === 'in transito';
+    const sentFlag   = card.querySelector('.notify-sent');
+    const isTransit  = String(rec.stato||'').toLowerCase() === 'in transito';
+    const sentAlready= isMailSent ? !!isMailSent(rec.id) : false;
+
+    if (sentAlready && sentFlag){
+      sentFlag.classList.remove('hidden');
+      sendBtn.disabled = true;
+      emailInput.disabled = true;
+      emailInput.value = '';
+    }
+
     if (!isTransit) {
       sendBtn.disabled = true;
       emailInput.disabled = true;
       emailInput.title = 'Disponibile dopo il salvataggio del tracking';
       sendBtn.title = 'Disponibile dopo il salvataggio del tracking';
-    } else {
+    } else if (!sentAlready) {
       sendBtn.addEventListener('click', async ()=>{
         const to = (emailInput.value || '').trim();
-        await onSendMail(rec, to, { onSuccess: ()=>{
-          sendBtn.disabled = true;
-          emailInput.disabled = true;
-          if (sentFlag) sentFlag.classList.remove('hidden');
-        }});
+        await onSendMail(rec, to, {
+          onSuccess: ()=>{
+            if (sentFlag) sentFlag.classList.remove('hidden');
+            sendBtn.disabled = true;
+            emailInput.disabled = true;
+          }
+        });
       });
     }
 
