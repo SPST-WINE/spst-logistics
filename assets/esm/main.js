@@ -1,5 +1,5 @@
 // assets/esm/main.js
-import { DEBUG } from './config.js';
+import { DEBUG, AIRTABLE } from './config.js';
 import {
   fetchShipments,
   patchShipmentTracking,
@@ -13,6 +13,8 @@ import './back-office-tabs.js';
 
 const elSearch   = document.getElementById('search');
 const elOnlyOpen = document.getElementById('only-open');
+
+// Base API per tutte le route del proxy Vercel (notify, airtable, ecc.)
 const API_BASE =
   (AIRTABLE?.proxyBase || '')
     .replace(/\/airtable\/?$/i, '')  // es. https://spst-logistics.vercel.app/api
@@ -140,12 +142,10 @@ async function onSendMail(rec, typedEmail){
       toast('Digita l’email del cliente');
       return;
     }
-    // sicurezza: deve coincidere con quella del record
     if (hint && to.toLowerCase() !== hint.toLowerCase()){
       toast('L’email digitata non coincide con quella del record');
       return;
     }
-    // sicurezza: solo se in transito
     if (String(rec?.stato || '').toLowerCase() !== 'in transito'){
       toast('Disponibile solo quando la spedizione è “In transito”');
       return;
@@ -159,7 +159,7 @@ async function onSendMail(rec, typedEmail){
       ritiroData: rec.ritiro_data || '',
     };
 
-    const url = `${API_BASE}/notify/transit`;   // ⬅️ torna a chiamare il proxy Vercel
+    const url = `${API_BASE}/notify/transit`;
     if (DEBUG) console.log('[notify] POST', url, body);
 
     const r = await fetch(url, {
@@ -179,7 +179,6 @@ async function onSendMail(rec, typedEmail){
   }
 }
 
-
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
   if (!recId){
@@ -191,7 +190,7 @@ async function onComplete(rec){
   try{
     await patchShipmentTracking(recId, { statoEvasa: true });
     toast(`${rec.id}: evasione completata`);
-    await loadData(); // qui sì: dopo completamento ricarichiamo (sparirà con "Solo non evase")
+    await loadData(); // dopo completamento ricarichiamo (sparirà con "Solo non evase")
   }catch(err){
     console.error('Errore evasione', err);
     toast('Errore evasione');
@@ -205,4 +204,4 @@ if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
 /* ───────── bootstrap ───────── */
 loadData().catch(e=>console.warn('init loadData failed', e));
 
-export { onSendMail }; // (non obbligatorio, ma utile se mai servisse altrove)
+export { onSendMail };
