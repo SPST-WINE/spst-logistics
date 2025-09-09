@@ -99,25 +99,22 @@ async function onUploadForDoc(e, rec, docKey){
 async function onSaveTracking(rec, carrier, tn){
   carrier = (carrier||'').trim();
   tn = (tn||'').trim();
-  if (!carrier || !tn){
-    toast('Inserisci corriere e numero tracking');
-    return;
-  }
+  if (!carrier || !tn){ toast('Inserisci corriere e numero tracking'); return; }
+
   const recId = rec._recId || rec.id;
-  if (!recId){
-    console.warn('onSaveTracking: record id mancante', rec);
-    toast('Errore: id record mancante');
-    return;
-  }
+  if (!recId){ toast('Errore: id record mancante'); return; }
 
   try{
-    // salva TN + imposta Stato = "In transito"
-    const res = await patchShipmentTracking(recId, {
-      carrier,
-      tracking: tn,
-      fields: { 'Stato': 'In transito' },
-    });
-    if (DEBUG) console.log('[TRACK PATCH OK]', res);
+    await patchShipmentTracking(recId, { carrier, tracking: tn }); // ← niente 'Stato'
+    // aggiorna UI locale (card resta visibile nella vista "Solo non evase")
+    rec.tracking_carrier = carrier;
+    rec.tracking_number  = tn;
+    toast(`${rec.id}: tracking salvato`);
+  }catch(err){
+    console.error('Errore salvataggio tracking', err);
+    toast('Errore salvataggio tracking');
+  }
+}
 
     // Aggiorna subito la UI locale (NON ricarichiamo l’elenco)
     rec.tracking_carrier = carrier;
@@ -182,15 +179,15 @@ async function onSendMail(rec, typedEmail){
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
   if (!recId){
-    rec.stato = 'Pronta alla spedizione';
+    rec.stato = 'In transito';
     toast(`${rec.id}: evasione completata (locale)`);
     applyFilters();
     return;
   }
   try{
-    await patchShipmentTracking(recId, { statoEvasa: true });
+    await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
     toast(`${rec.id}: evasione completata`);
-    await loadData(); // dopo completamento ricarichiamo (sparirà con "Solo non evase")
+    await loadData(); // con "Solo non evase" attivo scompare perché non è più "Nuova"
   }catch(err){
     console.error('Errore evasione', err);
     toast('Errore evasione');
