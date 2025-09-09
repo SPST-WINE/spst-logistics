@@ -5,6 +5,7 @@
   "version": "1.0.0",
   "engines": { "node": ">=18" },
   "dependencies": {
-    "@vercel/blob": "lastest"
+    "@vercel/blob": "lastest",
+    "resend": "^3.2.0"
   }
 }
