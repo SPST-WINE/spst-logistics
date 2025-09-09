@@ -4,7 +4,6 @@ import {
   fetchShipments,
   patchShipmentTracking,
   uploadAttachment,
-  patchDocAttachment,  // ✅ ora esiste davvero
   docFieldFor,
 } from './airtable/api.js';
 import { renderList } from './ui/render.js';
@@ -27,8 +26,9 @@ async function loadData(){
   try{
     const q = (elSearch?.value || '').trim();
     const onlyOpen = !!elOnlyOpen?.checked;
+    const status = 'all';
 
-    const items = await fetchShipments({ q, onlyOpen });
+    const items = await fetchShipments({ q, status, onlyOpen });
     DATA = items || [];
     applyFilters();
   }catch(err){
@@ -49,20 +49,15 @@ async function onUploadForDoc(e, rec, docKey){
     if (!file) return;
 
     const recId = rec._recId || rec.id;
-    if (!recId){
-      toast('Errore: id record mancante');
-      return;
-    }
+    if (!recId){ toast('Errore: id record mancante'); return; }
 
     toast('Upload in corso…');
 
-    // 1) upload → { url, attachments: [{url}] }
     const { url, attachments } = await uploadAttachment(recId, docKey, file);
     const attArray = Array.isArray(attachments) && attachments.length ? attachments : [{ url }];
 
-    // 2) PATCH su Airtable — scegli campo corretto e append sicuro
-await patchDocAttachment(recId, docKey, attArray, rec._rawFields);
-
+    const fieldName = docFieldFor(docKey);
+    await patchShipmentTracking(recId, { [fieldName]: attArray });
 
     toast(`${docKey.replaceAll('_',' ')} caricato`);
     await loadData();
@@ -89,9 +84,18 @@ async function onSaveTracking(rec, carrier, tn){
   }
 
   try{
-    const res = await patchShipmentTracking(recId, { carrier, tracking: tn });
+    // 👉 oltre a carrier+tracking, forziamo lo Stato = "In transito"
+    const res = await patchShipmentTracking(recId, {
+      carrier,
+      tracking: tn,
+      fields: { 'Stato': 'In transito' },
+    });
     if (DEBUG) console.log('[TRACK PATCH OK]', res);
-    toast(`${rec.id}: tracking salvato`);
+
+    // Aggiorna subito la UI locale (anche se ricarichiamo dopo)
+    rec.stato = 'In transito';
+
+    toast(`${rec.id}: tracking salvato (stato → In transito)`);
     await loadData();
   }catch(err){
     console.error('Errore salvataggio tracking', err);
@@ -101,19 +105,15 @@ async function onSaveTracking(rec, carrier, tn){
 
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
-  if(!recId){
-    rec.stato = 'In transito'; // fallback locale
+  if (!recId){
+    rec.stato = 'Pronta alla spedizione';
     toast(`${rec.id}: evasione completata (locale)`);
     applyFilters();
     return;
   }
   try{
-    // marca evasa + porta lo stato visibile a “In transito”
-    await patchShipmentTracking(recId, {
-      statoEvasa: true,
-      fields: { Stato: 'In transito' }, // ← Single Select “Stato” in Airtable
-    });
-    toast(`${rec.id}: evasione completata → In transito`);
+    await patchShipmentTracking(recId, { statoEvasa: true });
+    toast(`${rec.id}: evasione completata`);
     await loadData();
   }catch(err){
     console.error('Errore evasione', err);
