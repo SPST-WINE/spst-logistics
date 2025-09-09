@@ -7,7 +7,7 @@ import { computeRequiredDocs } from '../rules/docs.js';
 import { fetchColliFor } from '../airtable/api.js';
 
 /* ──────────────────────────────────────────────────────────────
-   Helpers: pick “loose” + mapping
+   Helpers
    ────────────────────────────────────────────────────────────── */
 
 function normKey(s){
@@ -28,6 +28,7 @@ function pickLoose(fields, ...names){
       if (v !== '' && v != null) return v;
     }
   }
+  // fallback esatto
   for (const n of names){
     if (n in fields && fields[n] !== '' && fields[n] != null) return fields[n];
   }
@@ -66,7 +67,7 @@ function mapColliFallback(fields) {
 function badgeFor(stato) {
   if (!stato) return 'gray';
   const s = String(stato).toLowerCase();
-  if (s === 'pronta alla spedizione' || s === 'evasa' || s === 'in transito' || s === 'consegnata') return 'green';
+  if (['pronta alla spedizione','evasa','in transito','consegnata'].includes(s)) return 'green';
   if (s === 'nuova') return 'gray';
   return 'yellow';
 }
@@ -89,6 +90,7 @@ export function normalizeShipmentRecord(rec) {
   const mitt_tel   = pickLoose(f, 'Mittente - Telefono', 'Mittente – Telefono', 'Telefono Mittente');
   const mitt_piva  = pickLoose(f, 'Mittente - P.IVA/CF', 'Mittente – P.IVA/CF', 'PIVA Mittente');
   const mitt_rs    = pickLoose(f, 'Mittente - Ragione sociale', 'Mittente – Ragione sociale', 'Mittente – ragione sociale', 'Mittente');
+  const mitt_ref   = pickLoose(f, 'Mittente - Referente', 'Referente Mittente', 'Persona di riferimento Mittente');
 
   // Destinatario
   const dest_paese = pickLoose(f, 'Destinatario - Paese', 'Destinatario – Paese', 'Paese Destinatario');
@@ -97,6 +99,18 @@ export function normalizeShipmentRecord(rec) {
   const dest_indir = pickLoose(f, 'Destinatario - Indirizzo', 'Destinatario – Indirizzo', 'Indirizzo Destinatario');
   const dest_tel   = pickLoose(f, 'Destinatario - Telefono', 'Destinatario – Telefono', 'Telefono Destinatario');
   const dest_rs    = pickLoose(f, 'Destinatario - Ragione sociale', 'Destinatario – Ragione sociale', 'Destinatario – ragione sociale', 'Destinatario');
+  const dest_ref   = pickLoose(f, 'Destinatario - Referente', 'Referente Destinatario', 'Persona di riferimento Destinatario');
+
+  // NUOVO: P.IVA/CF destinatario (al posto dell’EORI)
+  const dest_piva  = pickLoose(
+    f,
+    'Destinatario - P.IVA/CF',
+    'P.IVA/CF Destinatario',
+    'PIVA Destinatario',
+    'P.IVA Destinatario',
+    'CF Destinatario',
+    'Codice Fiscale Destinatario'
+  );
 
   // Stato nuovo / legacy
   const statoNew      = pickLoose(f, 'Stato');
@@ -110,7 +124,15 @@ export function normalizeShipmentRecord(rec) {
   const trackingUrlFld = pickLoose(f, 'Tracking URL');
   const pesoTot        = Number(pickLoose(f, 'Peso reale tot', 'Peso Reale tot', 'Peso reale (tot)', 'Peso tariffato tot') || 0);
 
-  const carrier        = (function(){
+  // “Destinatario abilitato all’import” (se abbiamo un campo compatibile)
+  const destImportRaw  = pickLoose(f, 'Destinatario abilitato import', 'Abilitato import destinatario', 'Import OK Destinatario');
+  const dest_import_ok = (()=>{
+    if (typeof destImportRaw === 'boolean') return destImportRaw;
+    const s = String(destImportRaw || '').trim().toLowerCase();
+    return ['si','sì','yes','true','ok','1'].includes(s);
+  })();
+
+  const carrier = (function(){
     const c = pickLoose(f, 'Corriere');
     if (!c) return null;
     if (typeof c === 'string') return c;
@@ -121,6 +143,7 @@ export function normalizeShipmentRecord(rec) {
   const docs  = mapDocs(f);
   const colli = Array.isArray(rec.colli) ? rec.colli : mapColliFallback(f);
 
+  // Log una volta per aiutare debugging
   if (!window.__BO_DEBUG_ONCE__) {
     window.__BO_DEBUG_ONCE__ = true;
     console.group('[BO] Debug primo record');
@@ -148,7 +171,8 @@ export function normalizeShipmentRecord(rec) {
     mittente_indirizzo: mitt_indir,
     mittente_telefono: mitt_tel,
     piva_mittente: mitt_piva,
-    mittente_eori: pickLoose(f, 'Mittente EORI'),
+    mittente_ragione: mitt_rs,
+    mittente_referente: mitt_ref,
 
     // destinatario
     dest_paese: dest_paese,
@@ -156,7 +180,10 @@ export function normalizeShipmentRecord(rec) {
     dest_cap: dest_cap,
     dest_indirizzo: dest_indir,
     dest_telefono: dest_tel,
-    dest_eori: pickLoose(f, 'Codice EORI Destinatario Fattura', 'Destinatario EORI'),
+    dest_ragione: dest_rs,
+    dest_referente: dest_ref,
+    dest_piva: dest_piva,           // <— NUOVO
+    dest_import_ok,                 // <— Toggle UI
 
     // tracking
     tracking_carrier: carrier,
@@ -167,7 +194,7 @@ export function normalizeShipmentRecord(rec) {
     stato,
     _badgeClass: badgeFor(stato),
 
-    // liste/pesi
+    // liste
     _peso_tot_kg: pesoTot,
     colli,
     docs,
@@ -207,8 +234,12 @@ function renderTrackingBlock(rec){
   `;
 }
 
-
+/* print-grid: aggiungo un ID al campo “Colli (lista)” per aggiornamento post fetch */
 function renderPrintGrid(rec){
+  const colliListHtml = (rec.colli && rec.colli.length)
+    ? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ')
+    : '—';
+
   const fields = [
     ['ID spedizione', rec.id],
     ['Cliente', rec.cliente],
@@ -221,14 +252,21 @@ function renderPrintGrid(rec){
     ['Mittente – Indirizzo', rec.mittente_indirizzo],
     ['Mittente – Telefono', rec.mittente_telefono],
     ['Mittente – P.IVA', rec.piva_mittente],
-    ['Mittente – EORI', rec.mittente_eori],
+    // ❌ niente “Mittente – EORI”
     ['Destinatario – Paese/Città (CAP)', `${rec.dest_paese||'-'} • ${rec.dest_citta||'-'} ${rec.dest_cap?('('+rec.dest_cap+')'):''}`],
     ['Destinatario – Indirizzo', rec.dest_indirizzo],
     ['Destinatario – Telefono', rec.dest_telefono],
-    ['Destinatario – EORI', rec.dest_eori],
-    ['Colli (lista)', (rec.colli&&rec.colli.length)? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ') : '—']
+    ['Destinatario – P.IVA/CF', rec.dest_piva || '—'], // ✅ nuovo
   ];
-  return `<div class="print-grid">${fields.map(([k,v])=>`<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`).join('')}</div>`;
+
+  // Costruiamo la griglia manualmente per inserire l’ID nel valore “Colli (lista)”
+  let html = `<div class="print-grid">`;
+  for (const [k,v] of fields){
+    html += `<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`;
+  }
+  html += `<div class='k'>Colli (lista)</div><div id="print-colli-${rec.id}">${colliListHtml}</div>`;
+  html += `</div>`;
+  return html;
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -260,17 +298,18 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
   }
 
   normalized.forEach(rec=>{
-    const {required, missing, notes, country, tipo} = computeRequiredDocs(rec);
+    const {required, notes, country, tipo} = computeRequiredDocs(rec);
+    const missing = required.filter(name => !(rec.docs && rec.docs[name]));
     const badgeClass = rec._badgeClass || (rec.stato === 'Nuova' ? 'gray' : 'yellow');
 
     const card = document.createElement('div');
     card.className = 'card';
     card.innerHTML = `
-      <div class="row spaced card-header">
-        <h3 class="title-line">
-          <span class="id-chip id-chip--spst">${rec.id}</span>
+      <div class="card-head">
+        <div class="title-line">
+          <span class="id-chip" style="background:#f7911e; color:#111; border-color:rgba(0,0,0,.15)">${rec.id}</span>
           <span class="dest">${rec.cliente}</span>
-        </h3>
+        </div>
         <span class="badge ${badgeClass}">${rec.stato||'-'}</span>
       </div>
 
@@ -282,7 +321,17 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Indirizzo destinazione</div><div>${rec.dest_indirizzo||'-'}</div>
         <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
-        <div class="k">Peso reale</div><div>${toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))}</div>
+
+        <div class="k">Dest. abilitato import</div>
+        <div>
+          <label class="chip small">
+            <input id="imp-${rec.id}" type="checkbox" ${rec.dest_import_ok ? 'checked' : ''}>
+            <span id="imp-txt-${rec.id}">${rec.dest_import_ok ? 'Sì' : 'No'}</span>
+          </label>
+        </div>
+
+        <div class="k">Peso reale</div><div>${toKg(totalPesoKg(rec))}</div>
+
         <div class="k">Lista colli</div>
         <div class="bo-colli-holder">
           ${(rec.colli&&rec.colli.length)?`
@@ -300,10 +349,12 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       <div class="small" style="margin:4px 0 6px 0"><strong>Documenti necessari per spedire in ${country} (${tipo})</strong>: ${required.join(', ').replaceAll('_',' ')}</div>
       <div class="small" style="opacity:.9; margin-bottom:8px"><em>ATTENZIONE:</em> il destinatario deve necessariamente avere un permesso/abilitazione all'importazione nel Paese di riferimento.</div>
 
-      <!-- Bottoni spostati a sinistra -->
-      <div class="row" style="gap:8px; align-items:center; margin-bottom:8px">
-        <button class="btn ghost toggle-labels">Verifica etichette</button>
-        <button class="btn ghost toggle-details">Espandi record</button>
+      <div class="row" style="justify-content:space-between; align-items:center">
+        <div class="row" style="gap:8px">
+          <button class="btn ghost toggle-labels">Verifica etichette</button>
+          <button class="btn ghost toggle-details">Comprimi record</button>
+        </div>
+        <!-- rimuoviamo pill “mancano X” -->
       </div>
 
       <div class="docs">
@@ -325,34 +376,21 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
 
       ${renderLabelPanel(rec)}
       ${renderTrackingBlock(rec)}
-      <div class="details">${renderPrintGrid(rec)}</div>
+      <div class="actions">
+        <button class="btn complete" data-id="${rec.id}">Evasione completata</button>
+      </div>
+
+      <div class="details show">${renderPrintGrid(rec)}</div>
     `;
 
-    // Lazy-load colli se non presenti
-    (async ()=>{
-      try{
-        if (!rec.colli || !rec.colli.length) {
-          const holder = card.querySelector('.bo-colli-holder');
-          if (holder) holder.innerHTML = '<span class="small">Carico colli…</span>';
-          const rows = await fetchColliFor(rec._recId || rec.id);
-          if (Array.isArray(rows) && rows.length){
-            const html = `
-              <table class="colli">
-                <thead><tr><th>Dim. (L×W×H cm)</th><th>Peso reale</th></tr></thead>
-                <tbody>
-                  ${rows.map(c=>`<tr><td>${c.L}×${c.W}×${c.H}</td><td>${toKg(c.kg)}</td></tr>`).join('')}
-                </tbody>
-              </table>`;
-            if (holder) holder.innerHTML = html;
-            rec.colli = rows;
-          } else if (holder) {
-            holder.innerHTML = '<span class="small">—</span>';
-          }
-        }
-      }catch(err){
-        console.warn('[BO] fetchColliFor error per', rec.id, err);
-      }
-    })();
+    // Toggle “import abilitato”: aggiorna label Sì/No (solo UI)
+    const importChk = card.querySelector(`#imp-${rec.id}`);
+    const importTxt = card.querySelector(`#imp-txt-${rec.id}`);
+    if (importChk && importTxt){
+      importChk.addEventListener('change', ()=>{
+        importTxt.textContent = importChk.checked ? 'Sì' : 'No';
+      });
+    }
 
     // Upload per-doc
     card.querySelectorAll('.upload-doc').forEach(btn=>{
@@ -365,7 +403,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       inp.addEventListener('change', (e)=>onUploadForDoc(e, rec, e.target.dataset.doc));
     });
 
-    // Complete (pulsante nella riga tracking)
+    // Complete
     const completeBtn = card.querySelector('.complete');
     if (completeBtn) completeBtn.addEventListener('click', ()=>onComplete(rec));
 
@@ -397,8 +435,39 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
     }
 
-    try { elList.appendChild(card); }
-    catch (e) { console.error('[BO] append card fallito', e); }
+    // Lazy-load colli se assenti + aggiorna anche la print-grid
+    (async ()=>{
+      try{
+        if (!rec.colli || !rec.colli.length) {
+          const holder = card.querySelector('.bo-colli-holder');
+          if (holder) holder.innerHTML = '<span class="small">Carico colli…</span>';
+          const rows = await fetchColliFor(rec._recId || rec.id);
+          if (Array.isArray(rows) && rows.length){
+            const html = `
+              <table class="colli">
+                <thead><tr><th>Dim. (L×W×H cm)</th><th>Peso reale</th></tr></thead>
+                <tbody>
+                  ${rows.map(c=>`<tr><td>${c.L}×${c.W}×${c.H}</td><td>${toKg(c.kg)}</td></tr>`).join('')}
+                </tbody>
+              </table>`;
+            if (holder) holder.innerHTML = html;
+            rec.colli = rows;
+
+            // ➜ aggiorna la “Colli (lista)” nel riquadro Dettagli/Print
+            const printCell = card.querySelector(`#print-colli-${rec.id}`);
+            if (printCell){
+              printCell.textContent = rows.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ');
+            }
+          } else if (holder) {
+            holder.innerHTML = '<span class="small">—</span>';
+          }
+        }
+      }catch(err){
+        console.warn('[BO] fetchColliFor error per', rec.id, err);
+      }
+    })();
+
+    try { elList.appendChild(card); } catch (e) { console.error('[BO] append card fallito', e); }
 
     console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, colli: rec.colli?.length||0 });
   });
