@@ -43,41 +43,46 @@ function mapDocs(fields) {
     return '';
   };
 
-  // leggi i campi cliente (li usiamo come fallback “ok”)
+  // allegati cliente (fallback “ok”)
   const fatturaCli = getAttUrl('Fattura - Allegato Cliente');
   const packingCli = getAttUrl('Packing List - Allegato Cliente');
 
-  // leggi i campi back-office
+  // allegati back-office
   const ldv       = getAttUrl('Allegato LDV') || getAttUrl('Lettera di Vettura');
   const fatturaBO = getAttUrl('Allegato Fattura');
   const dle       = getAttUrl('Allegato DLE') || getAttUrl('Dichiarazione Esportazione');
   const plBO      = getAttUrl('Allegato PL') || getAttUrl('Packing List');
 
-  // allegati “extra” generici
-  const att1      = getAttUrl('Allegato 1'); // usato per Proforma (default)
-  const att2      = getAttUrl('Allegato 2'); // usato per FDA PN (default)
-  const att3      = getAttUrl('Allegato 3'); // usato per e-DAS (default)
+  // extra slots
+  const att1      = getAttUrl('Allegato 1');
+  const att2      = getAttUrl('Allegato 2');
+  const att3      = getAttUrl('Allegato 3');
+
+  // priorità elastiche per coprire gli slot anche se non rispettano l’ordine “ideale”
+  const PROFORMA = att1 || att2 || att3;
+  const FDA_PN   = att2 || att1 || att3;
+  const EDAS     = att3 || att2 || att1;
 
   return {
     // chiavi usate nella UI/rules
     Lettera_di_Vettura: ldv,
-    Fattura_Commerciale: fatturaBO || fatturaCli, // ✅ fallback a quella cliente
-    Fattura_Proforma: att1 || '',                  // se vuoi altro, cambia in api.js
+    Fattura_Commerciale: fatturaBO || fatturaCli,
+    Fattura_Proforma: PROFORMA,
     Dichiarazione_Esportazione: dle,
-    Packing_List: plBO || packingCli,              // ✅ fallback a quella cliente
-    FDA_Prior_Notice: att2 || '',
+    Packing_List: plBO || packingCli,
+    FDA_Prior_Notice: FDA_PN,
+    'e-DAS': EDAS,                       // ⬅️ NEW: segna ok se presente in 1/2/3
 
-    // tengono visibilità separata (se vuoi mostrarle esplicitamente)
+    // visibilità separata (se vorrai mostrarli)
     Fattura_Client: fatturaCli,
     Packing_Client: packingCli,
 
-    // utili se un giorno vuoi elencarli
+    // utili se vuoi elencarli altrove
     Allegato_1: att1,
     Allegato_2: att2,
     Allegato_3: att3,
   };
 }
-
 
 function mapColliFallback(fields) {
   const lista = pickLoose(fields, 'Lista Colli Ordinata', 'Lista Colli', 'Contenuto Colli') || '';
@@ -126,7 +131,7 @@ export function normalizeShipmentRecord(rec) {
   const dest_rs    = pickLoose(f, 'Destinatario - Ragione sociale', 'Destinatario – Ragione sociale', 'Destinatario – ragione sociale', 'Destinatario');
   const dest_ref   = pickLoose(f, 'Destinatario - Referente', 'Referente Destinatario', 'Persona di riferimento Destinatario');
 
-  // NUOVO: P.IVA/CF destinatario (al posto dell’EORI)
+  // P.IVA/CF destinatario
   const dest_piva  = pickLoose(
     f,
     'Destinatario - P.IVA/CF',
@@ -144,12 +149,12 @@ export function normalizeShipmentRecord(rec) {
 
   const ritiroData     = pickLoose(f, 'Ritiro - Data', 'Ritiro – Data', 'Data Ritiro');
   const incoterm       = pickLoose(f, 'Incoterm');
-  const tipoSped       = pickLoose(f, 'Sottotipo', 'Tipo Spedizione'); // B2B | B2C | Sample
+  const tipoSped       = pickLoose(f, 'Sottotipo', 'Tipo Spedizione');
   const trackingNum    = pickLoose(f, 'Tracking Number');
   const trackingUrlFld = pickLoose(f, 'Tracking URL');
   const pesoTot        = Number(pickLoose(f, 'Peso reale tot', 'Peso Reale tot', 'Peso reale (tot)', 'Peso tariffato tot') || 0);
 
-  // “Destinatario abilitato all’import” (se abbiamo un campo compatibile)
+  // Import abilitato
   const destImportRaw  = pickLoose(f, 'Destinatario abilitato import', 'Abilitato import destinatario', 'Import OK Destinatario');
   const dest_import_ok = (()=>{
     if (typeof destImportRaw === 'boolean') return destImportRaw;
@@ -181,7 +186,7 @@ export function normalizeShipmentRecord(rec) {
 
   return {
     _recId: rec.id,
-     _rawFields: f, 
+    _rawFields: f,
     id: idSped,
     cliente: dest_rs || mitt_rs || '(sconosciuto)',
     email,
@@ -208,8 +213,8 @@ export function normalizeShipmentRecord(rec) {
     dest_telefono: dest_tel,
     dest_ragione: dest_rs,
     dest_referente: dest_ref,
-    dest_piva: dest_piva,           // <— NUOVO
-    dest_import_ok,                 // <— Toggle UI
+    dest_piva: dest_piva,
+    dest_import_ok,
 
     // tracking
     tracking_carrier: carrier,
@@ -278,14 +283,12 @@ function renderPrintGrid(rec){
     ['Mittente – Indirizzo', rec.mittente_indirizzo],
     ['Mittente – Telefono', rec.mittente_telefono],
     ['Mittente – P.IVA', rec.piva_mittente],
-    // ❌ niente “Mittente – EORI”
     ['Destinatario – Paese/Città (CAP)', `${rec.dest_paese||'-'} • ${rec.dest_citta||'-'} ${rec.dest_cap?('('+rec.dest_cap+')'):''}`],
     ['Destinatario – Indirizzo', rec.dest_indirizzo],
     ['Destinatario – Telefono', rec.dest_telefono],
-    ['Destinatario – P.IVA/CF', rec.dest_piva || '—'], // ✅ nuovo
+    ['Destinatario – P.IVA/CF', rec.dest_piva || '—'],
   ];
 
-  // Costruiamo la griglia manualmente per inserire l’ID nel valore “Colli (lista)”
   let html = `<div class="print-grid">`;
   for (const [k,v] of fields){
     html += `<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`;
@@ -348,7 +351,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
         <div class="k">Tipo spedizione</div><div>${rec.tipo_spedizione||'-'}</div>
         <div class="k">Incoterm</div><div>${rec.incoterm||'-'}</div>
 
-                        <div class="k">Dest. abilitato import</div>
+        <div class="k">Dest. abilitato import</div>
         <div>
           <span class="import-flag ${rec.dest_import_ok ? 'yes' : 'no'}">
             <span class="dot"></span>
@@ -356,15 +359,12 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
           </span>
         </div>
 
-
-
-                <div class="k">Peso reale</div>
+        <div class="k">Peso reale</div>
         <div>
           <span class="bo-peso-reale" id="peso-${rec.id}">
             ${toKg(rec._peso_tot_kg > 0 ? rec._peso_tot_kg : totalPesoKg(rec))}
           </span>
         </div>
-
 
         <div class="k">Lista colli</div>
         <div class="bo-colli-holder">
@@ -388,7 +388,6 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
           <button class="btn ghost toggle-labels">Verifica etichette</button>
           <button class="btn ghost toggle-details">Comprimi record</button>
         </div>
-        <!-- rimuoviamo pill “mancano X” -->
       </div>
 
       <div class="docs">
@@ -417,14 +416,8 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
       <div class="details show">${renderPrintGrid(rec)}</div>
     `;
 
-    // Toggle “import abilitato”: aggiorna label Sì/No (solo UI)
-    const importChk = card.querySelector(`#imp-${rec.id}`);
-    const importTxt = card.querySelector(`#imp-txt-${rec.id}`);
-    if (importChk && importTxt){
-      importChk.addEventListener('change', ()=>{
-        importTxt.textContent = importChk.checked ? 'Sì' : 'No';
-      });
-    }
+    // evidenzia card se checklist completa
+    card.classList.toggle('ok-docs', missing.length === 0);
 
     // Upload per-doc
     card.querySelectorAll('.upload-doc').forEach(btn=>{
@@ -487,10 +480,9 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete}){
             if (holder) holder.innerHTML = html;
             rec.colli = rows;
 
-                         // ➜ aggiorna "Peso reale" nella card
+            // ➜ aggiorna "Peso reale" nella card
             const pesoEl = card.querySelector(`#peso-${rec.id}`);
             if (pesoEl) pesoEl.textContent = toKg(totalPesoKg(rec));
-
 
             // ➜ aggiorna la “Colli (lista)” nel riquadro Dettagli/Print
             const printCell = card.querySelector(`#print-colli-${rec.id}`);
