@@ -41,6 +41,56 @@ function toNum(v){
   return isFinite(n) ? n : NaN;
 }
 
+/* Documenti allegati (estrai URL dal campo o da attachment array) */
+function mapDocs(fields) {
+  const getAttUrl = (k) => {
+    const v = pickLoose(fields, k);
+    if (Array.isArray(v) && v.length && v[0]?.url) return v[0].url;
+    if (typeof v === 'string' && v) return v;
+    return '';
+  };
+
+  // allegati cliente (fallback “ok”)
+  const fatturaCli = getAttUrl('Fattura - Allegato Cliente');
+  const packingCli = getAttUrl('Packing List - Allegato Cliente');
+
+  // allegati back-office
+  const ldv       = getAttUrl('Allegato LDV') || getAttUrl('Lettera di Vettura');
+  const fatturaBO = getAttUrl('Allegato Fattura');
+  const dle       = getAttUrl('Allegato DLE') || getAttUrl('Dichiarazione Esportazione');
+  const plBO      = getAttUrl('Allegato PL') || getAttUrl('Packing List');
+
+  // extra slots
+  const att1      = getAttUrl('Allegato 1');
+  const att2      = getAttUrl('Allegato 2');
+  const att3      = getAttUrl('Allegato 3');
+
+  // priorità elastiche
+  const PROFORMA = att1 || att2 || att3;
+  const FDA_PN   = att2 || att1 || att3;
+  const EDAS     = att3 || att2 || att1;
+
+  return {
+    // chiavi usate nella UI/rules
+    Lettera_di_Vettura: ldv,
+    Fattura_Commerciale: fatturaBO || fatturaCli,
+    Fattura_Proforma: PROFORMA,
+    Dichiarazione_Esportazione: dle,
+    Packing_List: plBO || packingCli,
+    FDA_Prior_Notice: FDA_PN,
+    'e-DAS': EDAS,
+
+    // visibilità separata
+    Fattura_Client: fatturaCli,
+    Packing_Client: packingCli,
+
+    // utili se vuoi elencarli altrove
+    Allegato_1: att1,
+    Allegato_2: att2,
+    Allegato_3: att3,
+  };
+}
+
 /* Legge colli da lista testuale tipo "20x30x40 5kg; 10x10x10 1.5kg" */
 function colliFromListString(str){
   if (!str) return [];
@@ -107,6 +157,14 @@ function buildColliSmart(fields){
   }
 
   return []; // nessun fallback possibile
+}
+
+function badgeFor(stato) {
+  if (!stato) return 'gray';
+  const s = String(stato).toLowerCase();
+  if (['pronta alla spedizione','evasa','in transito','consegnata'].includes(s)) return 'green';
+  if (s === 'nuova') return 'gray';
+  return 'yellow';
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -560,7 +618,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
               printCell.textContent = rows.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ');
             }
           } else if (holder) {
-            // se nemmeno i linked records, prova ancora il fallback smart (potrebbe essere arrivato tardi)
+            // se nemmeno i linked records, prova ancora il fallback smart
             const fb = buildColliSmart(rec._rawFields || {});
             if (fb.length){
               const html = `
