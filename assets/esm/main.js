@@ -4,7 +4,6 @@ import {
   fetchShipments,
   patchShipmentTracking,
   uploadAttachment,
-  docFieldFor,            // ⬅️ mappa 'Lettera_di_Vettura' -> 'Allegato LDV'
 } from './airtable/api.js';
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
@@ -26,9 +25,8 @@ async function loadData(){
   try{
     const q = (elSearch?.value || '').trim();
     const onlyOpen = !!elOnlyOpen?.checked;
-    const status = 'all'; // fisso: abbiamo rimosso il filtro stato
 
-    const items = await fetchShipments({ q, status, onlyOpen });
+    const items = await fetchShipments({ q, onlyOpen });
     DATA = items || [];
     applyFilters();
   }catch(err){
@@ -57,14 +55,10 @@ async function onUploadForDoc(e, rec, docKey){
     toast('Upload in corso…');
 
     // 1) Carica file (proxy → Vercel Blob) e ottieni URL pubblica
-    const { url, attachments } = await uploadAttachment(recId, docKey, file);
-    // Airtable accetta un array di allegati nel campo attachment
-    // Se l'API di upload restituisce già un array "attachments", usiamolo; altrimenti costruiamolo da url
-    const attArray = Array.isArray(attachments) && attachments.length ? attachments : [{ url }];
+    const { url } = await uploadAttachment(recId, docKey, file);
 
-    // 2) PATCH su Airtable — mappa la chiave UI al vero nome campo
-    const fieldName = docFieldFor(docKey); // es. 'Lettera_di_Vettura' -> 'Allegato LDV'
-    await patchShipmentTracking(recId, { [fieldName]: attArray });
+    // 2) PATCH su Airtable — passiamo la chiave UI, ci pensa api.js a mappare
+    await patchShipmentTracking(recId, { docs: { [docKey]: url } });
 
     toast(`${docKey.replaceAll('_',' ')} caricato`);
     await loadData();
