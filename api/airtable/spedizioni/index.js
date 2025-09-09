@@ -21,18 +21,52 @@ export default async function handler(req, res) {
     assertEnv({ pat, baseId, table });
 
     const baseUrl = `https://api.airtable.com/v0/${baseId}/${encodeURIComponent(table)}`;
-    const headers = { Authorization: `Bearer ${pat}` };
+    const headers = { Authorization: `Bearer ${pat}`, Accept: 'application/json' };
 
+    // costruiamo i parametri con formula
     const params = new URLSearchParams();
     params.set('pageSize', String(pageSize));
-    if (view) params.set('view', view);
+    if (view)  params.set('view', view);
     if (offset) params.set('offset', offset);
 
     const formula = buildFilterFormula({ search, status, onlyOpen });
     if (formula) params.set('filterByFormula', formula);
 
-    const url = `${baseUrl}?${params.toString()}`;
-    const out = await airtableFetch(url, { headers });
+    // 1) tentativo con filterByFormula (risposta “grezza” per capire lo status)
+    const urlWithFormula = `${baseUrl}?${params.toString()}`;
+    const r1 = await fetch(urlWithFormula, { headers });
+
+    if (r1.status === 422) {
+      // 2) FALLBACK: niente formula → filtro lato server per ricerca “sensibile”
+      const p2 = new URLSearchParams();
+      p2.set('pageSize', String(pageSize));
+      if (view)  p2.set('view', view);
+      if (offset) p2.set('offset', offset);
+
+      const urlNoFormula = `${baseUrl}?${p2.toString()}`;
+      const r2 = await fetch(urlNoFormula, { headers });
+      if (!r2.ok) {
+        const t = await r2.text().catch(()=> '');
+        return res.status(502).json({ error: 'Upstream error', details: `Airtable ${r2.status}: ${t.slice(0,280)}` });
+      }
+      const data = await r2.json();
+      const all  = Array.isArray(data?.records) ? data.records : [];
+
+      // filtro lato server
+      let records = all;
+      if (search)  records = records.filter(rec => recordMatches(rec, search));
+      if (status !== 'all') records = records.filter(rec => matchStatus(rec, status));
+      if (onlyOpen) records = records.filter(rec => isOpen(rec));
+
+      return res.status(200).json({ records, offset: data?.offset });
+    }
+
+    // 3) happy path con formula
+    if (!r1.ok) {
+      const t = await r1.text().catch(()=> '');
+      return res.status(502).json({ error: 'Upstream error', details: `Airtable ${r1.status}: ${t.slice(0,280)}` });
+    }
+    const out = await r1.json();
     return res.status(200).json(out);
 
   } catch (e) {
@@ -43,63 +77,73 @@ export default async function handler(req, res) {
 
 /* ───────── SEARCH formula ───────── */
 
+const NEW_FIELDS = [
+  'ID Spedizione',
+  'Creato da',
+  'Mittente - Ragione sociale',
+  'Mittente - Paese',
+  'Mittente - Città',
+  'Mittente - CAP',
+  'Mittente - Indirizzo',
+  'Destinatario - Ragione sociale',
+  'Destinatario - Paese',
+  'Destinatario - Città',
+  'Destinatario - CAP',
+  'Destinatario - Indirizzo',
+  'Tracking Number',
+  'Incoterm',
+];
+
+const LEGACY_FIELDS = [
+  'Destinatario',
+  'Mittente',
+  'Mail Cliente',
+  'Paese Destinatario',
+  'Città Destinatario',
+  'Indirizzo Destinatario',
+  'Paese Mittente',
+  'Città Mittente',
+  'Indirizzo Mittente',
+];
+
+const SEARCH_FIELDS = [...NEW_FIELDS, ...LEGACY_FIELDS];
+
 function buildFilterFormula({ search, status, onlyOpen }) {
   const parts = [];
 
   if (search) {
     const s = esc(search.toLowerCase());
 
-    const NEW_FIELDS = [
-      'ID Spedizione',
-      'Creato da',
-      'Mittente - Ragione sociale',
-      'Mittente - Paese',
-      'Mittente - Città',
-      'Mittente - Indirizzo',
-      'Destinatario - Ragione sociale',
-      'Destinatario - Paese',
-      'Destinatario - Città',
-      'Destinatario - Indirizzo',
-      'Tracking Number',
-      'Incoterm',
-    ];
-    const LEGACY_FIELDS = [
-      'Destinatario',
-      'Mittente',
-      'Mail Cliente',
-      'Paese Destinatario',
-      'Città Destinatario',
-      'Indirizzo Destinatario',
-      'Paese Mittente',
-      'Città Mittente',
-      'Indirizzo Mittente',
-    ];
-    const FIELDS = [...NEW_FIELDS, ...LEGACY_FIELDS];
-
     const ors = [];
+    // match esatto (case-insensitive) su ID e Tracking
     ors.push(`LOWER({ID Spedizione} & "") = "${s}"`);
     ors.push(`LOWER({Tracking Number} & "") = "${s}"`);
-    for (const f of FIELDS) {
+    // match "contains" su tutti i campi noti
+    for (const f of SEARCH_FIELDS) {
       ors.push(`FIND("${s}", LOWER({${f}} & ""))`);
     }
     parts.push(`OR(${ors.join(',')})`);
   }
 
-  const IS_EVASA = `{Stato}="Evasa"`;
-  const IS_NUOVA = `{Stato}="Nuova"`;
-  const IS_CONSEGNATA = `{Stato}="Consegnata"`;
-  const IS_ANNULLATA = `{Stato}="Annullata"`;
+  // stato
+  const IS_EVASA       = `{Stato}="Evasa"`;
+  const IS_NUOVA       = `{Stato}="Nuova"`;
+  const IS_CONSEGNATA  = `{Stato}="Consegnata"`;
+  const IS_ANNULLATA   = `{Stato}="Annullata"`;
+  const IS_IN_TRANSITO = `{Stato}="In transito"`;
 
   if (status === 'evase') {
     parts.push(IS_EVASA);
   } else if (status === 'nuova') {
     parts.push(IS_NUOVA);
   } else if (status === 'in_elab') {
+    // tutto ciò che non è Evasa/Consegnata/Annullata → include "In transito" e "Nuova"
     parts.push(`AND(NOT(${IS_EVASA}), NOT(${IS_CONSEGNATA}), NOT(${IS_ANNULLATA}))`);
   }
 
   if (onlyOpen) {
-    parts.push(`AND(NOT(${IS_EVASA}), NOT(${IS_CONSEGNATA}), NOT(${IS_ANNULLATA}))`);
+    // “aperte”: non in transito, non consegnate, non annullate
+    parts.push(`AND(NOT(${IS_IN_TRANSITO}), NOT(${IS_CONSEGNATA}), NOT(${IS_ANNULLATA}))`);
   }
 
   if (!parts.length) return '';
@@ -131,15 +175,34 @@ function safeWildcardMatch(input, pattern){
 }
 function escapeRegex(str){ return str.replace(/[|\\{}()[\]^$+?.]/g, '\\$&'); }
 
-async function airtableFetch(url, init = {}, tries = 3, backoff = 500){
-  for(let i=0;i<tries;i++){
-    const r = await fetch(url, init);
-    if (r.ok) return r.json();
-    const body = await r.text().catch(()=> '');
-    if ([429,500,502,503,504].includes(r.status) && i<tries-1){
-      await new Promise(rs=>setTimeout(rs, backoff*Math.pow(2,i)));
-      continue;
-    }
-    throw new Error(`Airtable ${r.status}: ${body}`);
+// Fallback: match lato server (case-insensitive) su tanti campi
+function recordMatches(rec, q) {
+  if (!q) return true;
+  const needle = String(q).toLowerCase();
+  const f = rec?.fields || {};
+
+  // prima controlli “exact” su ID & Tracking
+  if (String(f['ID Spedizione'] || '').toLowerCase() === needle) return true;
+  if (String(f['Tracking Number'] || '').toLowerCase() === needle) return true;
+
+  for (const k of SEARCH_FIELDS) {
+    const v = f[k];
+    if (v == null) continue;
+    const s = Array.isArray(v) ? JSON.stringify(v) : String(v);
+    if (s.toLowerCase().includes(needle)) return true;
   }
+  return false;
+}
+
+function matchStatus(rec, status){
+  const stato = String(rec?.fields?.['Stato'] || '').toLowerCase();
+  if (status === 'nuova')  return stato === 'nuova';
+  if (status === 'evase')  return stato === 'evasa';
+  if (status === 'in_elab') return !['evasa','consegnata','annullata'].includes(stato);
+  return true;
+}
+
+function isOpen(rec){
+  const stato = String(rec?.fields?.['Stato'] || '').toLowerCase();
+  return !['in transito','consegnata','annullata'].includes(stato);
 }
