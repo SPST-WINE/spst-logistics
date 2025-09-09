@@ -291,3 +291,13 @@ table.colli td:first-child{
   text-align: center;
 }
 
+.card{
+  background: var(--card);
+  border-radius: 16px;
+  /* bordo un filo più chiaro + lieve ring interno per stacco */
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow:
+    0 10px 28px rgba(0,0,0,.28),       /* ombra esterna morbida */
+    inset 0 0 0 1px rgba(255,255,255,.06); /* “luce” interna sul bordo */
+  padding: 16px;
+}
