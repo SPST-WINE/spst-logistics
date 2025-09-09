@@ -4,25 +4,27 @@ import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
 /* ──────────────────────────────────────────────────────────────
-   Mappa Documenti: UI key → Campo Airtable (NUOVA BASE)
+   Mappa doc UI -> nome campo Airtable (allegati)
    ────────────────────────────────────────────────────────────── */
-export const DOC_FIELD_MAP = {
-  Lettera_di_Vettura:         'Allegato LDV',
-  Fattura_Commerciale:        'Allegato Fattura',
-  Fattura_Proforma:           'Fattura Proforma',
+const DOC_FIELD_MAP = {
+  Lettera_di_Vettura: 'Allegato LDV',
+  Fattura_Commerciale: 'Allegato Fattura',
+  Fattura_Proforma: 'Fattura Proforma',
   Dichiarazione_Esportazione: 'Allegato DLE',
-  Packing_List:               'Allegato PL',
-  FDA_Prior_Notice:           'Prior Notice',
-  // opzionali (cliente)
-  Fattura_Client:             'Fattura - Allegato Cliente',
-  Packing_Client:             'Packing List - Allegato Cliente',
+  Packing_List: 'Allegato PL',
+  FDA_Prior_Notice: 'Prior Notice',
+  // allegati caricati dal cliente (se presenti in base)
+  Fattura_Client: 'Fattura - Allegato Cliente',
+  Packing_Client: 'Packing List - Allegato Cliente',
 };
 
-// utile anche altrove se dovesse servire
-export function docFieldFor(docKey){
-  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
+function resolveDocField(docKey){
+  return DOC_FIELD_MAP[docKey] || String(docKey || '').replaceAll('_',' ');
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Query / lista spedizioni
+   ────────────────────────────────────────────────────────────── */
 function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   const u = new URLSearchParams();
   if (q) u.set('search', q);
@@ -31,22 +33,17 @@ function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   return u.toString();
 }
 
-/* ──────────────────────────────────────────────────────────────
-   LISTA SPEDIZIONI
-   ────────────────────────────────────────────────────────────── */
 export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
-  if (!USE_PROXY){ console.warn('USE_PROXY=false – uso MOCK'); return []; }
+  if (!USE_PROXY) { console.warn('USE_PROXY=false – uso MOCK'); return []; }
   const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({ q: q.trim(), onlyOpen })}`;
   try{
     const res = await fetch(url, FETCH_OPTS);
-    if(!res.ok){
-      const text = await res.text().catch(()=> '');
-      throw new Error(`Proxy ${res.status}: ${text.slice(0,180)}`);
-    }
+    if (!res.ok) throw new Error(`Proxy ${res.status}: ${await res.text()}`);
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    return records; // normalizzazione la fa render.js
+    // Ritorniamo i record grezzi Airtable ({id, fields,...})
+    return records;
   }catch(err){
     console.error('[fetchShipments] failed', { url, err });
     showBanner(
@@ -58,82 +55,85 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   PATCH SPEDIZIONE (tracking / stato / allegati)
-   - Costruiamo SEMPRE { fields } con i nomi NUOVI
+   PATCH spedizione
+   - accetta: carrier, tracking, stato, statoEvasa (legacy), docs:{}, fields:{}
    ────────────────────────────────────────────────────────────── */
 export async function patchShipmentTracking(recOrId, patch = {}){
   const id =
-    (typeof recOrId === 'string') ? recOrId
-    : (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
-  if(!id) throw new Error('Missing record id');
+    (typeof recOrId === 'string')
+      ? recOrId
+      : (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
+
+  if (!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
+
+  // Costruiamo SEMPRE "fields" per Airtable
   const fields = {};
 
-  // Tracking
+  // Tracking / Corriere
+  if (patch.tracking){
+    fields['Tracking Number'] = String(patch.tracking).trim();
+  }
   if (patch.carrier){
     const norm = normalizeCarrier(patch.carrier || '');
     if (norm) fields['Corriere'] = norm;
   }
-  if (patch.tracking){
-    fields['Tracking Number'] = String(patch.tracking).trim();
-  }
 
-  // Stato (se serve)
-  if (typeof patch.statoEvasa === 'boolean'){
+  // Stato: valore esplicito ha precedenza
+  if (patch.stato){
+    fields['Stato'] = String(patch.stato);
+  } else if (typeof patch.statoEvasa === 'boolean'){
+    // retro-compatibilità (non usata più nel BO, ma lasciamo)
     fields['Stato'] = patch.statoEvasa ? 'Evasa' : 'Nuova';
   }
 
-  // Documenti → mappa diretta NUOVA BASE
+  // Allegati: docs = { UI_KEY: [ {url}, ... ] }
   if (patch.docs && typeof patch.docs === 'object'){
-    for (const [uiKey, value] of Object.entries(patch.docs)){
-      const fieldName = DOC_FIELD_MAP[uiKey];
-      if (!fieldName){
-        console.warn('[patchShipmentTracking] doc senza mapping:', uiKey);
-        continue;
-      }
-      const att =
-        typeof value === 'string' ? [{ url: value }] :
-        (Array.isArray(value) ? value : []);
-      if (!att.length) continue;
-      fields[fieldName] = att;
+    for (const [docKey, attVal] of Object.entries(patch.docs)){
+      const fieldName = resolveDocField(docKey);
+      const attArray = Array.isArray(attVal) ? attVal : (attVal ? [attVal] : []);
+      // Airtable attachment vuole [{ url, filename?, type? }, ...]
+      fields[fieldName] = attArray;
     }
   }
 
-  // Pass-through opzionale: { fields: {...} } già risolto a monte
+  // Campi arbitrari (usa con cautela)
   if (patch.fields && typeof patch.fields === 'object'){
     Object.assign(fields, patch.fields);
   }
 
   if (!Object.keys(fields).length){
-    console.debug('[patchShipmentTracking] nessun campo mappato. Input:', patch);
     throw new Error('PATCH failed (client): no fields to update');
   }
 
+  const body = { fields };
+
   const res = await fetch(url, {
     method: 'PATCH',
-    headers:{ 'Content-Type':'application/json', 'Accept':'application/json' },
-    body: JSON.stringify({ fields })
+    headers: { 'Content-Type':'application/json', 'Accept':'application/json' },
+    body: JSON.stringify(body)
   });
 
-  if (res.ok) return res.json();
-
-  const txt = await res.text().catch(()=> '');
-  throw new Error(`PATCH failed ${res.status}: ${txt || res.statusText}`);
+  if (!res.ok){
+    const t = await res.text().catch(()=> '');
+    throw new Error(`PATCH failed ${res.status}: ${t}`);
+  }
+  return await res.json();
 }
 
 /* ──────────────────────────────────────────────────────────────
-   UPLOAD allegato (→ URL pubblica)
+   Upload allegato → URL pubblica (Vercel Blob lato proxy)
    ────────────────────────────────────────────────────────────── */
-export async function uploadAttachment(recordId, docKey, file){
-  if(!USE_PROXY){
-    return { url: `https://files.dev/mock/${recordId}-${docKey}-${Date.now()}-${file?.name||'file'}` };
+export async function uploadAttachment(recordId, docName, file){
+  if (!USE_PROXY){
+    return { url: `https://files.dev/mock/${recordId}-${docName}-${Date.now()}-${file?.name||'file'}` };
   }
   const safe = (s)=> String(s||'').replace(/[^\w.\-]+/g,'_');
-  const filename = `${safe(recordId)}__${safe(docKey)}__${Date.now()}__${safe(file?.name||'file')}`;
+  const filename = `${safe(recordId)}__${safe(docName)}__${Date.now()}__${safe(file?.name||'file')}`;
   const url = `${AIRTABLE.proxyBase}/upload?filename=${encodeURIComponent(filename)}&contentType=${encodeURIComponent(file?.type || 'application/octet-stream')}`;
 
-  const res = await fetch(url, { method: 'POST', headers: { 'Accept':'application/json' }, body: file });
+  const res = await fetch(url, { method:'POST', headers:{ 'Accept':'application/json' }, body:file });
   if (!res.ok){
     const t = await res.text().catch(()=> '');
     throw new Error(`Upload proxy ${res.status}: ${t.slice(0,180)}`);
@@ -144,16 +144,13 @@ export async function uploadAttachment(recordId, docKey, file){
 }
 
 /* ──────────────────────────────────────────────────────────────
-   COLLI per spedizione
+   Colli per spedizione (proxy /spedizioni/:id/colli)
    ────────────────────────────────────────────────────────────── */
 export async function fetchColliFor(recordId){
   try{
     if(!recordId) return [];
     const base = AIRTABLE?.proxyBase || '';
-    if(!base){
-      console.warn('[fetchColliFor] proxyBase mancante, ritorno []');
-      return [];
-    }
+    if(!base){ console.warn('[fetchColliFor] proxyBase mancante'); return []; }
     const url = `${base}/spedizioni/${encodeURIComponent(recordId)}/colli`;
 
     const res = await fetch(url, FETCH_OPTS);
