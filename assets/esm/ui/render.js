@@ -42,17 +42,42 @@ function mapDocs(fields) {
     if (typeof v === 'string' && v) return v;
     return '';
   };
+
+  // leggi i campi cliente (li usiamo come fallback “ok”)
+  const fatturaCli = getAttUrl('Fattura - Allegato Cliente');
+  const packingCli = getAttUrl('Packing List - Allegato Cliente');
+
+  // leggi i campi back-office
+  const ldv       = getAttUrl('Allegato LDV') || getAttUrl('Lettera di Vettura');
+  const fatturaBO = getAttUrl('Allegato Fattura');
+  const dle       = getAttUrl('Allegato DLE') || getAttUrl('Dichiarazione Esportazione');
+  const plBO      = getAttUrl('Allegato PL') || getAttUrl('Packing List');
+
+  // allegati “extra” generici
+  const att1      = getAttUrl('Allegato 1'); // usato per Proforma (default)
+  const att2      = getAttUrl('Allegato 2'); // usato per FDA PN (default)
+  const att3      = getAttUrl('Allegato 3'); // usato per e-DAS (default)
+
   return {
-    Lettera_di_Vettura: getAttUrl('Allegato LDV') || getAttUrl('Lettera di Vettura'),
-    Fattura_Commerciale: getAttUrl('Allegato Fattura') || getAttUrl('Fattura Commerciale Caricata'),
-    Fattura_Proforma: getAttUrl('Fattura Proforma') || '',
-    Dichiarazione_Esportazione: getAttUrl('Allegato DLE') || getAttUrl('Dichiarazione Esportazione'),
-    Packing_List: getAttUrl('Allegato PL') || getAttUrl('Packing List'),
-    FDA_Prior_Notice: getAttUrl('Prior Notice') || '',
-    Fattura_Client: getAttUrl('Fattura - Allegato Cliente'),
-    Packing_Client: getAttUrl('Packing List - Allegato Cliente'),
+    // chiavi usate nella UI/rules
+    Lettera_di_Vettura: ldv,
+    Fattura_Commerciale: fatturaBO || fatturaCli, // ✅ fallback a quella cliente
+    Fattura_Proforma: att1 || '',                  // se vuoi altro, cambia in api.js
+    Dichiarazione_Esportazione: dle,
+    Packing_List: plBO || packingCli,              // ✅ fallback a quella cliente
+    FDA_Prior_Notice: att2 || '',
+
+    // tengono visibilità separata (se vuoi mostrarle esplicitamente)
+    Fattura_Client: fatturaCli,
+    Packing_Client: packingCli,
+
+    // utili se un giorno vuoi elencarli
+    Allegato_1: att1,
+    Allegato_2: att2,
+    Allegato_3: att3,
   };
 }
+
 
 function mapColliFallback(fields) {
   const lista = pickLoose(fields, 'Lista Colli Ordinata', 'Lista Colli', 'Contenuto Colli') || '';
