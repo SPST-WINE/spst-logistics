@@ -340,3 +340,44 @@ table.colli td:first-child{
     inset 0 0 0 1px rgba(31,191,117,.30),
     0 6px 24px rgba(31,191,117,.12);
 }
+
+/* Mail row */
+.mail-row{
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255,255,255,.08);
+  background: rgba(255,255,255,.025);
+  border-radius: 10px;
+}
+.mail-row.disabled{ opacity:.55; pointer-events:none; }
+
+.mail-controls{
+  display:flex; align-items:center; gap:8px; margin-top:8px;
+}
+
+.mail-input{
+  flex: 1 1 auto;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: #0f1724;
+  color: #e6ebf5;
+  border-radius: 8px;
+  outline: none;
+}
+.mail-input::placeholder{
+  color: #7d8aa8;          /* placeholder più chiaro e freddo */
+  opacity: .9;
+}
+.mail-input:focus{
+  border-color: #4d6fff80;
+  box-shadow: 0 0 0 3px #4d6fff22 inset;
+}
+
+.mini-btn.primary{
+  background: #4d6fff;
+  color: white;
+  border: 1px solid transparent;
+}
+.mini-btn.primary:hover{ filter: brightness(1.05); }
+
