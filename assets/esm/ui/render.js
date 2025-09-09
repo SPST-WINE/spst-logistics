@@ -6,252 +6,73 @@ import { labelInfoFor } from '../rules/labels.js';
 import { computeRequiredDocs } from '../rules/docs.js';
 import { fetchColliFor } from '../airtable/api.js';
 
-/* ──────────────────────────────────────────────────────────────
-   Helpers
-   ────────────────────────────────────────────────────────────── */
+/* Helpers (normKey, pickLoose, toNum, mapDocs, colli fallback, badgeFor) */
+// … (tutti gli helper identici alla versione che stai usando ora: non li ripeto qui per brevità)
+function normKey(s){return String(s||'').replace(/[–—]/g,'-').replace(/\s+/g,' ').trim().toLowerCase();}
+function pickLoose(fields,...names){if(!fields)return;const m=new Map(Object.keys(fields).map(k=>[normKey(k),k]));for(const n of names){const real=m.get(normKey(n));if(real!=null){const v=fields[real];if(v!==''&&v!=null)return v;}}for(const n of names){if(n in fields&&fields[n]!==''&&fields[n]!=null)return fields[n];}return;}
+function toNum(v){if(v==null||v==='')return NaN;const n=Number(String(v).replace(',', '.').replace(/[^0-9.]+/g,''));return isFinite(n)?n:NaN;}
+function mapDocs(fields){const getAttUrl=k=>{const v=pickLoose(fields,k);if(Array.isArray(v)&&v.length&&v[0]?.url)return v[0].url;if(typeof v==='string'&&v)return v;return'';};const fatturaCli=getAttUrl('Fattura - Allegato Cliente');const packingCli=getAttUrl('Packing List - Allegato Cliente');const ldv=getAttUrl('Allegato LDV')||getAttUrl('Lettera di Vettura');const fatturaBO=getAttUrl('Allegato Fattura');const dle=getAttUrl('Allegato DLE')||getAttUrl('Dichiarazione Esportazione');const plBO=getAttUrl('Allegato PL')||getAttUrl('Packing List');const att1=getAttUrl('Allegato 1');const att2=getAttUrl('Allegato 2');const att3=getAttUrl('Allegato 3');const PROFORMA=att1||att2||att3;const FDA_PN=att2||att1||att3;const EDAS=att3||att2||att1;return{Lettera_di_Vettura:ldv,Fattura_Commerciale:fatturaBO||fatturaCli,Fattura_Proforma:PROFORMA,Dichiarazione_Esportazione:dle,Packing_List:plBO||packingCli,FDA_Prior_Notice:FDA_PN,'e-DAS':EDAS,Fattura_Client:fatturaCli,Packing_Client:packingCli,Allegato_1:att1,Allegato_2:att2,Allegato_3:att3};}
+function colliFromListString(str){if(!str)return[];return String(str).split(/[;|\n]+/).map(p=>{const m=String(p).match(/(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?).*?(\d+(?:[.,]\d+)?)/);return m?{L:String(m[1]).replace(',', '.'),W:String(m[2]).replace(',', '.'),H:String(m[3]).replace(',', '.'),kg:toNum(m[4])||0}:{L:'-',W:'-',H:'-',kg:0};}).filter(x=>x.L!=='-');}
+function buildColliSmart(fields){const list=pickLoose(fields,'Lista Colli Ordinata','Lista Colli','Contenuto Colli')||'';const a=colliFromListString(list);if(a.length)return a;const dimStr=pickLoose(fields,'Dimensioni','Dimensioni (cm)','Dim. (cm)','LxWxH','L×W×H','Dim LxWxH','Dimensioni LxWxH');let L,W,H;if(dimStr){const m=String(dimStr).match(/(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)/i);if(m){L=String(m[1]).replace(',', '.');W=String(m[2]).replace(',', '.');H=String(m[3]).replace(',', '.');}}if(!L)L=pickLoose(fields,'L','L (cm)','Lunghezza','Lunghezza (cm)','Dim L');if(!W)W=pickLoose(fields,'W','W (cm)','Larghezza','Larghezza (cm)','Dim W');if(!H)H=pickLoose(fields,'H','H (cm)','Altezza','Altezza (cm)','Dim H');let kg=toNum(pickLoose(fields,'Peso reale','Peso','Peso (kg)','Peso pezzo'))||0;if(L&&W&&H){return[{L:String(L).replace(',', '.'),W:String(W).replace(',', '.'),H:String(H).replace(',', '.'),kg}];}return[];}
+function badgeFor(stato){if(!stato)return'gray';const s=String(stato).toLowerCase();if(['pronta alla spedizione','evasa','in transito','consegnata'].includes(s))return'green';if(s==='nuova')return'gray';return'yellow';}
 
-function normKey(s){
-  return String(s || '')
-    .replace(/[–—]/g, '-')      // en/em dash → hyphen
-    .replace(/\s+/g, ' ')
-    .trim()
-    .toLowerCase();
-}
-
-function pickLoose(fields, ...names){
-  if (!fields) return undefined;
-  const map = new Map(Object.keys(fields).map(k => [normKey(k), k]));
-  for (const wanted of names){
-    const real = map.get(normKey(wanted));
-    if (real != null) {
-      const v = fields[real];
-      if (v !== '' && v != null) return v;
-    }
-  }
-  // fallback esatto
-  for (const n of names){
-    if (n in fields && fields[n] !== '' && fields[n] != null) return fields[n];
-  }
-  return undefined;
-}
-
-function toNum(v){
-  if (v == null || v === '') return NaN;
-  const n = Number(String(v).replace(',', '.').replace(/[^0-9.]+/g,''));
-  return isFinite(n) ? n : NaN;
-}
-
-/* Documenti allegati (estrai URL dal campo o da attachment array) */
-function mapDocs(fields) {
-  const getAttUrl = (k) => {
-    const v = pickLoose(fields, k);
-    if (Array.isArray(v) && v.length && v[0]?.url) return v[0].url;
-    if (typeof v === 'string' && v) return v;
-    return '';
-  };
-
-  // allegati cliente (fallback “ok”)
-  const fatturaCli = getAttUrl('Fattura - Allegato Cliente');
-  const packingCli = getAttUrl('Packing List - Allegato Cliente');
-
-  // allegati back-office
-  const ldv       = getAttUrl('Allegato LDV') || getAttUrl('Lettera di Vettura');
-  const fatturaBO = getAttUrl('Allegato Fattura');
-  const dle       = getAttUrl('Allegato DLE') || getAttUrl('Dichiarazione Esportazione');
-  const plBO      = getAttUrl('Allegato PL') || getAttUrl('Packing List');
-
-  // extra slots
-  const att1      = getAttUrl('Allegato 1');
-  const att2      = getAttUrl('Allegato 2');
-  const att3      = getAttUrl('Allegato 3');
-
-  // priorità elastiche
-  const PROFORMA = att1 || att2 || att3;
-  const FDA_PN   = att2 || att1 || att3;
-  const EDAS     = att3 || att2 || att1;
-
-  return {
-    // chiavi usate nella UI/rules
-    Lettera_di_Vettura: ldv,
-    Fattura_Commerciale: fatturaBO || fatturaCli,
-    Fattura_Proforma: PROFORMA,
-    Dichiarazione_Esportazione: dle,
-    Packing_List: plBO || packingCli,
-    FDA_Prior_Notice: FDA_PN,
-    'e-DAS': EDAS,
-
-    // visibilità separata
-    Fattura_Client: fatturaCli,
-    Packing_Client: packingCli,
-
-    // utili se vuoi elencarli altrove
-    Allegato_1: att1,
-    Allegato_2: att2,
-    Allegato_3: att3,
-  };
-}
-
-/* Legge colli da lista testuale tipo "20x30x40 5kg; 10x10x10 1.5kg" */
-function colliFromListString(str){
-  if (!str) return [];
-  const parts = String(str).split(/[;|\n]+/);
-  const out = [];
-  for (const p of parts){
-    const m = String(p).match(/(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?).*?(\d+(?:[.,]\d+)?)/);
-    if (m){
-      out.push({
-        L: String(m[1]).replace(',', '.'),
-        W: String(m[2]).replace(',', '.'),
-        H: String(m[3]).replace(',', '.'),
-        kg: toNum(m[4]) || 0,
-      });
-    }
-  }
-  return out;
-}
-
-/* Fallback SMART per spedizioni "Altro":
-   - prova lista colli
-   - prova campo unico “Dimensioni (cm)” (es. 20x30x40)
-   - prova campi separati L/W/H con (cm)
-   - peso da vari campi */
-function buildColliSmart(fields){
-  // 1) Liste note
-  const list =
-    pickLoose(fields, 'Lista Colli Ordinata', 'Lista Colli', 'Contenuto Colli') || '';
-  const fromList = colliFromListString(list);
-  if (fromList.length) return fromList;
-
-  // 2) Campo unico Dimensioni (cm) / LxWxH / L×W×H
-  const dimStr = pickLoose(
-    fields,
-    'Dimensioni', 'Dimensioni (cm)', 'Dim. (cm)', 'LxWxH', 'L×W×H', 'Dim LxWxH', 'Dimensioni LxWxH'
-  );
-  let L, W, H;
-  if (dimStr){
-    const m = String(dimStr).match(/(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)/i);
-    if (m){
-      L = String(m[1]).replace(',', '.');
-      W = String(m[2]).replace(',', '.');
-      H = String(m[3]).replace(',', '.');
-    }
-  }
-
-  // 3) Campi separati
-  if (!L) L = pickLoose(fields, 'L', 'L (cm)', 'Lunghezza', 'Lunghezza (cm)', 'Dim L');
-  if (!W) W = pickLoose(fields, 'W', 'W (cm)', 'Larghezza', 'Larghezza (cm)', 'Dim W');
-  if (!H) H = pickLoose(fields, 'H', 'H (cm)', 'Altezza', 'Altezza (cm)', 'Dim H');
-
-  // Peso singolo collo / totale se non c'è il tot
-  let kg =
-    toNum(pickLoose(fields, 'Peso reale', 'Peso', 'Peso (kg)', 'Peso pezzo')) ||
-    0;
-
-  if (L && W && H){
-    return [{
-      L: String(L).replace(',', '.'),
-      W: String(W).replace(',', '.'),
-      H: String(H).replace(',', '.'),
-      kg,
-    }];
-  }
-
-  return []; // nessun fallback possibile
-}
-
-function badgeFor(stato) {
-  if (!stato) return 'gray';
-  const s = String(stato).toLowerCase();
-  if (['pronta alla spedizione','evasa','in transito','consegnata'].includes(s)) return 'green';
-  if (s === 'nuova') return 'gray';
-  return 'yellow';
-}
-
-/* ──────────────────────────────────────────────────────────────
-   Normalizzazione record Airtable → shape UI
-   ────────────────────────────────────────────────────────────── */
-
-export function normalizeShipmentRecord(rec) {
+/* Normalizzazione record */
+export function normalizeShipmentRecord(rec){
   const f = rec.fields || {};
+  const idSped = pickLoose(f,'ID Spedizione') || rec.id;
+  const email  = pickLoose(f,'Creato da','Creato da email','Mail Cliente');
 
-  const idSped    = pickLoose(f, 'ID Spedizione') || rec.id;
-  const email     = pickLoose(f, 'Creato da', 'Creato da email', 'Mail Cliente');
+  // mittente/destinatario…
+  const mitt_paese = pickLoose(f,'Mittente - Paese','Mittente – Paese','Paese Mittente');
+  const mitt_citta = pickLoose(f,'Mittente - Città','Mittente – Città','Città Mittente');
+  const mitt_cap   = pickLoose(f,'Mittente - CAP','Mittente – CAP','CAP Mittente');
+  const mitt_indir = pickLoose(f,'Mittente - Indirizzo','Mittente – Indirizzo','Indirizzo Mittente');
+  const mitt_tel   = pickLoose(f,'Mittente - Telefono','Mittente – Telefono','Telefono Mittente');
+  const mitt_piva  = pickLoose(f,'Mittente - P.IVA/CF','Mittente – P.IVA/CF','PIVA Mittente');
+  const mitt_rs    = pickLoose(f,'Mittente - Ragione sociale','Mittente – Ragione sociale','Mittente – ragione sociale','Mittente');
+  const mitt_ref   = pickLoose(f,'Mittente - Referente','Referente Mittente','Persona di riferimento Mittente');
 
-  // Mittente
-  const mitt_paese = pickLoose(f, 'Mittente - Paese', 'Mittente – Paese', 'Paese Mittente');
-  const mitt_citta = pickLoose(f, 'Mittente - Città', 'Mittente – Città', 'Città Mittente');
-  const mitt_cap   = pickLoose(f, 'Mittente - CAP', 'Mittente – CAP', 'CAP Mittente');
-  const mitt_indir = pickLoose(f, 'Mittente - Indirizzo', 'Mittente – Indirizzo', 'Indirizzo Mittente');
-  const mitt_tel   = pickLoose(f, 'Mittente - Telefono', 'Mittente – Telefono', 'Telefono Mittente');
-  const mitt_piva  = pickLoose(f, 'Mittente - P.IVA/CF', 'Mittente – P.IVA/CF', 'PIVA Mittente');
-  const mitt_rs    = pickLoose(f, 'Mittente - Ragione sociale', 'Mittente – Ragione sociale', 'Mittente – ragione sociale', 'Mittente');
-  const mitt_ref   = pickLoose(f, 'Mittente - Referente', 'Referente Mittente', 'Persona di riferimento Mittente');
+  const dest_paese = pickLoose(f,'Destinatario - Paese','Destinatario – Paese','Paese Destinatario');
+  const dest_citta = pickLoose(f,'Destinatario - Città','Destinatario – Città','Città Destinatario');
+  const dest_cap   = pickLoose(f,'Destinatario - CAP','Destinatario – CAP','CAP Destinatario');
+  const dest_indir = pickLoose(f,'Destinatario - Indirizzo','Destinatario – Indirizzo','Indirizzo Destinatario');
+  const dest_tel   = pickLoose(f,'Destinatario - Telefono','Destinatario – Telefono','Telefono Destinatario');
+  const dest_rs    = pickLoose(f,'Destinatario - Ragione sociale','Destinatario – Ragione sociale','Destinatario – ragione sociale','Destinatario');
+  const dest_ref   = pickLoose(f,'Destinatario - Referente','Referente Destinatario','Persona di riferimento Destinatario');
 
-  // Destinatario
-  const dest_paese = pickLoose(f, 'Destinatario - Paese', 'Destinatario – Paese', 'Paese Destinatario');
-  const dest_citta = pickLoose(f, 'Destinatario - Città', 'Destinatario – Città', 'Città Destinatario');
-  const dest_cap   = pickLoose(f, 'Destinatario - CAP', 'Destinatario – CAP', 'CAP Destinatario');
-  const dest_indir = pickLoose(f, 'Destinatario - Indirizzo', 'Destinatario – Indirizzo', 'Indirizzo Destinatario');
-  const dest_tel   = pickLoose(f, 'Destinatario - Telefono', 'Destinatario – Telefono', 'Telefono Destinatario');
-  const dest_rs    = pickLoose(f, 'Destinatario - Ragione sociale', 'Destinatario – Ragione sociale', 'Destinatario – ragione sociale', 'Destinatario');
-  const dest_ref   = pickLoose(f, 'Destinatario - Referente', 'Referente Destinatario', 'Persona di riferimento Destinatario');
+  const dest_piva  = pickLoose(f,'Destinatario - P.IVA/CF','P.IVA/CF Destinatario','PIVA Destinatario','P.IVA Destinatario','CF Destinatario','Codice Fiscale Destinatario');
 
-  // P.IVA/CF destinatario
-  const dest_piva  = pickLoose(
-    f,
-    'Destinatario - P.IVA/CF',
-    'P.IVA/CF Destinatario',
-    'PIVA Destinatario',
-    'P.IVA Destinatario',
-    'CF Destinatario',
-    'Codice Fiscale Destinatario'
-  );
-
-  // Stato nuovo / legacy
-  const statoNew      = pickLoose(f, 'Stato');
-  const statoLegacyEv = !!pickLoose(f, 'Stato Spedizione');
+  const statoNew      = pickLoose(f,'Stato');
+  const statoLegacyEv = !!pickLoose(f,'Stato Spedizione');
   const stato         = statoNew || (statoLegacyEv ? 'Evasa' : 'Nuova');
 
-  const ritiroData     = pickLoose(f, 'Ritiro - Data', 'Ritiro – Data', 'Data Ritiro');
-  const incoterm       = pickLoose(f, 'Incoterm');
-  const tipoSped       = pickLoose(f, 'Sottotipo', 'Tipo Spedizione');
+  const ritiroData     = pickLoose(f,'Ritiro - Data','Ritiro – Data','Data Ritiro');
+  const incoterm       = pickLoose(f,'Incoterm');
+  const tipoSped       = pickLoose(f,'Sottotipo','Tipo Spedizione');
+  const trackingNum    = pickLoose(f,'Tracking Number');
+  const trackingUrlFld = pickLoose(f,'Tracking URL');
 
-  const trackingNum    = pickLoose(f, 'Tracking Number');
-  const trackingUrlFld = pickLoose(f, 'Tracking URL');
+  const pesoTot = Number(pickLoose(f,'Peso reale tot','Peso Reale tot','Peso reale (tot)','Peso tariffato tot','Peso reale','Peso','Peso (kg)') || 0);
 
-  // ➜ Peso: aggiunto fallback a "Peso reale" se il tot non esiste
-  const pesoTot = Number(
-    pickLoose(
-      f,
-      'Peso reale tot','Peso Reale tot','Peso reale (tot)','Peso tariffato tot',
-      'Peso reale','Peso','Peso (kg)'
-    ) || 0
-  );
-
-  // Import abilitato
-  const destImportRaw  = pickLoose(f, 'Destinatario abilitato import', 'Abilitato import destinatario', 'Import OK Destinatario');
+  const destImportRaw  = pickLoose(f,'Destinatario abilitato import','Abilitato import destinatario','Import OK Destinatario');
   const dest_import_ok = (()=>{
     if (typeof destImportRaw === 'boolean') return destImportRaw;
     const s = String(destImportRaw || '').trim().toLowerCase();
     return ['si','sì','yes','true','ok','1'].includes(s);
   })();
 
-  const carrier = (function(){
-    const c = pickLoose(f, 'Corriere');
+  const carrier = (()=>{
+    const c = pickLoose(f,'Corriere');
     if (!c) return null;
     if (typeof c === 'string') return c;
     if (typeof c === 'object' && c.name) return c.name;
     return null;
   })();
 
-  // Colli: se non arrivano i linked records, prova fallback smart
   const docs  = { ...mapDocs(f) };
-  const colli = Array.isArray(rec.colli) && rec.colli.length
-    ? rec.colli
-    : buildColliSmart(f);
+  const colli = Array.isArray(rec.colli) && rec.colli.length ? rec.colli : buildColliSmart(f);
 
-  // Log una volta per aiutare debugging
-  if (!window.__BO_DEBUG_ONCE__) {
+  if (!window.__BO_DEBUG_ONCE__){
     window.__BO_DEBUG_ONCE__ = true;
     console.group('[BO] Debug primo record');
     console.debug('Keys Airtable:', Object.keys(f));
@@ -309,10 +130,7 @@ export function normalizeShipmentRecord(rec) {
   };
 }
 
-/* ──────────────────────────────────────────────────────────────
-   UI blocks
-   ────────────────────────────────────────────────────────────── */
-
+/* UI blocks */
 function renderLabelPanel(rec){
   const info = labelInfoFor(rec);
   return `
@@ -346,8 +164,7 @@ function renderTrackingBlock(rec){
   `;
 }
 
-
-/* print-grid: aggiungo un ID al campo “Colli (lista)” per aggiornamento post fetch */
+/* print-grid */
 function renderPrintGrid(rec){
   const colliListHtml = (rec.colli && rec.colli.length)
     ? rec.colli.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ')
@@ -372,25 +189,18 @@ function renderPrintGrid(rec){
   ];
 
   let html = `<div class="print-grid">`;
-  for (const [k,v] of fields){
-    html += `<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`;
-  }
+  for (const [k,v] of fields){ html += `<div class='k'>${k}</div><div>${v?String(v):'—'}</div>`; }
   html += `<div class='k'>Colli (lista)</div><div id="print-colli-${rec.id}">${colliListHtml}</div>`;
   html += `</div>`;
   return html;
 }
 
-/* ──────────────────────────────────────────────────────────────
-   Render list
-   ────────────────────────────────────────────────────────────── */
-
+/* Render list */
 function ensureListContainer() {
   let el = document.getElementById('list');
   if (el) return el;
   const host = document.getElementById('view-spedizioni') || document.body;
-  el = document.createElement('div');
-  el.id = 'list';
-  host.appendChild(el);
+  el = document.createElement('div'); el.id = 'list'; host.appendChild(el);
   console.warn('[BO] #list non trovato: creato dinamicamente dentro #view-spedizioni');
   return el;
 }
@@ -470,7 +280,6 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
       <div class="hr"></div>
 
       <div class="small" style="margin:4px 0 6px 0"><strong>Documenti necessari per spedire in ${country} (${tipo})</strong>: ${required.join(', ').replaceAll('_',' ')}</div>
-      <!-- RIMOSSA la riga ATTENZIONE su abilitazione import -->
 
       <div class="docs">
         ${required.map(name=>{
@@ -494,7 +303,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
 
       <!-- Notifica cliente -->
       <div class="notify" id="notify-${rec.id}" style="margin-top:10px;border:1px solid rgba(255,255,255,.12);border-radius:10px;padding:10px 12px;">
-        <div class="small" style="opacity:.9;margin-bottom:6px">Notifica cliente (stato in transito) — digita l’email per confermare</div>
+        <div class="small" style="opacity:.9;margin-bottom:6px">Notifica cliente — digita l’email e invia (richiede tracking salvato)</div>
         <div class="row" style="display:flex;gap:8px;align-items:center;">
           <input
             class="mail-input notify-email"
@@ -510,7 +319,7 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
           <button class="mini-btn send-mail">Invia mail</button>
           <span class="small" style="opacity:.7">L’indirizzo deve coincidere con quello del record.</span>
         </div>
-        <div class="small notify-sent hidden" style="margin-top:6px;color:#6ddf97;">Email inviata ✓</div>
+        <div class="small notify-sent ${rec._mailSent ? '' : 'hidden'}" style="margin-top:6px;color:#6ddf97;">Email inviata ✓</div>
       </div>
 
       <div class="actions">
@@ -569,26 +378,30 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
       saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
     }
 
-    // Invia mail (abilitata solo se stato = In transito)
-    const sendBtn = card.querySelector('.send-mail');
-    const emailInput = card.querySelector('.notify-email');
-    const sentFlag = card.querySelector('.notify-sent');
-    const isTransit = String(rec.stato||'').toLowerCase() === 'in transito';
-    if (!isTransit) {
+    // Invia mail: input SEMPRE abilitato; bottone abilitato solo se ho tracking
+    const sendBtn   = card.querySelector('.send-mail');
+    const emailInput= card.querySelector('.notify-email');
+    const sentFlag  = card.querySelector('.notify-sent');
+    const canNotify = !!(rec.tracking_carrier && rec.tracking_number);
+
+    if (!canNotify) {
+      sendBtn.disabled = true;
+      sendBtn.title = 'Disponibile dopo il salvataggio del tracking';
+    }
+    if (rec._mailSent) {
       sendBtn.disabled = true;
       emailInput.disabled = true;
-      emailInput.title = 'Disponibile dopo il salvataggio del tracking';
-      sendBtn.title = 'Disponibile dopo il salvataggio del tracking';
-    } else {
-      sendBtn.addEventListener('click', async ()=>{
-        const to = (emailInput.value || '').trim();
-        await onSendMail(rec, to, { onSuccess: ()=>{
-          sendBtn.disabled = true;
-          emailInput.disabled = true;
-          if (sentFlag) sentFlag.classList.remove('hidden');
-        }});
-      });
+      sentFlag?.classList.remove('hidden');
     }
+
+    sendBtn.addEventListener('click', async ()=>{
+      const to = (emailInput.value || '').trim();
+      await onSendMail(rec, to, { onSuccess: ()=>{
+        sendBtn.disabled = true;
+        emailInput.disabled = true;
+        if (sentFlag) sentFlag.classList.remove('hidden');
+      }});
+    });
 
     // Lazy-load colli se assenti + aggiorna anche la print-grid
     (async ()=>{
@@ -608,17 +421,14 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
             if (holder) holder.innerHTML = html;
             rec.colli = rows;
 
-            // ➜ aggiorna "Peso reale" nella card
             const pesoEl = card.querySelector(`#peso-${rec.id}`);
             if (pesoEl) pesoEl.textContent = toKg(totalPesoKg(rec));
 
-            // ➜ aggiorna la “Colli (lista)” nel riquadro Dettagli/Print
             const printCell = card.querySelector(`#print-colli-${rec.id}`);
             if (printCell){
               printCell.textContent = rows.map(c=>`${c.L}×${c.W}×${c.H}cm ${toKg(c.kg)}`).join(' ; ');
             }
           } else if (holder) {
-            // se nemmeno i linked records, prova ancora il fallback smart
             const fb = buildColliSmart(rec._rawFields || {});
             if (fb.length){
               const html = `
@@ -647,7 +457,5 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
     })();
 
     try { elList.appendChild(card); } catch (e) { console.error('[BO] append card fallito', e); }
-
-    console.debug('[BO] card', { id: rec.id, cliente: rec.cliente, colli: rec.colli?.length||0 });
   });
 }
