@@ -28,10 +28,7 @@
     "api/docs/unified/render.js": {
       "memory": 1024,
       "maxDuration": 60,
-      "includeFiles": [
-        "node_modules/@sparticuz/chromium/**",
-        "node_modules/@sparticuz/chromium/**/*"
-      ]
+      "includeFiles": "node_modules/@sparticuz/chromium/**"
     }
   }
 }
