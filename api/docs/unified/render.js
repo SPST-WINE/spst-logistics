@@ -2,7 +2,7 @@ import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import { renderUnifiedHTML } from "./template";
 
-export const config = { runtime: "nodejs18.x" };
+export const config = { runtime: "nodejs22.x" };
 
 const BASE_ID = process.env.AIRTABLE_BASE_ID;
 const PAT = process.env.AIRTABLE_PAT;
