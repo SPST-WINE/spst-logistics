@@ -1,4 +1,4 @@
-export const config = { runtime: "nodejs22.x" };
+export const config = { runtime: "nodejs" };
 
 const BASE_ID = process.env.AIRTABLE_BASE_ID;
 const PAT = process.env.AIRTABLE_PAT;
@@ -25,7 +25,6 @@ export default async function handler(req, res) {
     const renderUrl = `${PUBLIC_BASE_URL}/api/docs/unified/render?shipmentId=${encodeURIComponent(shipmentId)}&type=${encodeURIComponent(type)}&token=${encodeURIComponent(SECRET)}`;
     const filename = `${type.toUpperCase()}-${shipmentId}.pdf`;
 
-    // PATCH singolo record su Airtable con allegato via URL (Airtable scarica e salva)
     const patch = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TB)}/${shipmentId}`, {
       method: "PATCH",
       headers: { "Authorization": `Bearer ${PAT}`, "Content-Type": "application/json" },
