@@ -1,12 +1,23 @@
-export const config = { runtime: "nodejs" };
+export const config = { runtime: "nodejs", maxDuration: 60, memory: 1024 };
 
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import { renderUnifiedHTML } from "./template.js";
 
-// consigliati su Vercel
+// Impostazioni raccomandate per Vercel
 chromium.setHeadlessMode = true;
 chromium.setGraphicsMode = false;
+
+// Assicura il path delle librerie native (libnss3, ecc.)
+const LIB_CANDIDATES = [
+  "/var/task/node_modules/@sparticuz/chromium/lib",
+  "/var/runtime/node_modules/@sparticuz/chromium/lib",
+  "/var/task/.pnpm/@sparticuz/chromium/node_modules/@sparticuz/chromium/lib" // in caso di pnpm
+].filter(Boolean);
+process.env.LD_LIBRARY_PATH = [
+  ...(process.env.LD_LIBRARY_PATH ? [process.env.LD_LIBRARY_PATH] : []),
+  ...LIB_CANDIDATES
+].join(":");
 
 const BASE_ID = process.env.AIRTABLE_BASE_ID;
 const PAT = process.env.AIRTABLE_PAT;
@@ -24,7 +35,7 @@ export default async function handler(req, res) {
     if (!token || token !== SECRET) return res.status(401).send("Unauthorized");
     if (!shipmentId) return res.status(400).send("Missing shipmentId");
 
-    // 1) Fetch Airtable
+    // --- Fetch Airtable ---
     const rec = await fetch(
       `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TB)}/${shipmentId}`,
       { headers: { Authorization: `Bearer ${PAT}` } }
@@ -35,15 +46,13 @@ export default async function handler(req, res) {
     }
     const json = await rec.json();
     const f = json.fields || {};
-
-    // pick helper
     const pick = (alts, d="") => {
       const keys = Array.isArray(alts) ? alts : [alts];
       const k = keys.find(k => f[k] != null && f[k] !== "");
       return k ? f[k] : d;
     };
 
-    // 2) Normalize
+    // --- Normalize ---
     const sender = {
       name: pick(["Mittente_Ragione","Mittente","Sender_Name","Mittente Ragione Sociale"], "SPST S.r.l."),
       address: pick(["Mittente_Indirizzo","Mittente Indirizzo","Sender_Address"], "Via Esempio 1, 20100 Milano (MI), Italy"),
@@ -52,7 +61,6 @@ export default async function handler(req, res) {
       email: pick(["Mittente_Email","Email Mittente","Sender_Email"], "info@spst.it"),
       phone: pick(["Mittente_Telefono","Telefono Mittente","Sender_Phone"], "+39 320 144 1789"),
     };
-
     const consignee = {
       name: pick(["Ragione Sociale Destinatario Fattura","Destinatario","Consignee_Name"], "Consignee Ltd"),
       address: (() => {
@@ -66,7 +74,6 @@ export default async function handler(req, res) {
       email: pick(["Email Destinatario","Consignee_Email"], ""),
       phone: pick(["Telefono Destinatario Fattura","Consignee_Phone"], ""),
     };
-
     const pickupDate = formatDateIT(pick(["Ritiro - Data","Ritiro – Data","Data Ritiro","PickupDate"], ""));
     const incoterm = pick(["Incoterm"], "DAP");
     const currency = pick(["Valuta","Currency"], "EUR");
@@ -92,7 +99,6 @@ export default async function handler(req, res) {
       origin: r.origin || r.origine || "IT",
       weightKg: Number(r.weightKg ?? r.pesoKg ?? 0),
     }));
-
     const total = lines.reduce((s,r) => s + (Number(r.qty)||0) * (Number(r.unitPrice)||0), 0);
 
     const payload = {
@@ -109,19 +115,26 @@ export default async function handler(req, res) {
       lines, total
     };
 
-    // DEBUG: ritorna JSON senza Puppeteer
     if (String(debug) === "1") {
       return res.status(200).json({ ok:true, stage:"normalized", payload });
     }
 
-    // 3) HTML → PDF
+    // --- HTML → PDF ---
     const html = renderUnifiedHTML(payload);
 
     let browser;
     try {
       const executablePath = await chromium.executablePath();
+      if (!executablePath) return res.status(500).send("Chromium executable not found");
       browser = await puppeteer.launch({
-        args: chromium.args,
+        args: [
+          ...chromium.args,
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          "--single-process"
+        ],
         defaultViewport: chromium.defaultViewport,
         executablePath,
         headless: chromium.headless,
@@ -134,7 +147,12 @@ export default async function handler(req, res) {
     try {
       const page = await browser.newPage();
       await page.setContent(html, { waitUntil: "networkidle0" });
-      const pdf = await page.pdf({ format: "A4", printBackground: true, margin: { top: "12mm", right: "12mm", bottom: "16mm", left: "12mm" }});
+      await page.emulateMediaType("screen");
+      const pdf = await page.pdf({
+        format: "A4",
+        printBackground: true,
+        margin: { top: "12mm", right: "12mm", bottom: "16mm", left: "12mm" }
+      });
       await browser.close();
 
       res.setHeader("Content-Type", "application/pdf");
