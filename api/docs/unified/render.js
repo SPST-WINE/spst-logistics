@@ -3,6 +3,8 @@ export const config = { runtime: "nodejs", maxDuration: 60, memory: 1024 };
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import { renderUnifiedHTML } from "./template.js";
+import path from "node:path";
+
 
 // Impostazioni raccomandate per Vercel
 chromium.setHeadlessMode = true;
@@ -122,52 +124,62 @@ export default async function handler(req, res) {
     // --- HTML → PDF ---
     const html = renderUnifiedHTML(payload);
 
-    let browser;
-    try {
-      const executablePath = await chromium.executablePath();
-      if (!executablePath) return res.status(500).send("Chromium executable not found");
-      browser = await puppeteer.launch({
-        args: [
-          ...chromium.args,
-          "--no-sandbox",
-          "--disable-setuid-sandbox",
-          "--disable-dev-shm-usage",
-          "--disable-gpu",
-          "--single-process"
-        ],
-        defaultViewport: chromium.defaultViewport,
-        executablePath,
-        headless: chromium.headless,
-      });
-    } catch (e) {
-      console.error("puppeteer-launch", e);
-      return res.status(500).send(`Puppeteer launch failed: ${e?.message || e}`);
-    }
+let browser;
+try {
+  const executablePath = await chromium.executablePath();
+  if (!executablePath) return res.status(500).send("Chromium executable not found");
 
-    try {
-      const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: "networkidle0" });
-      await page.emulateMediaType("screen");
-      const pdf = await page.pdf({
-        format: "A4",
-        printBackground: true,
-        margin: { top: "12mm", right: "12mm", bottom: "16mm", left: "12mm" }
-      });
-      await browser.close();
+  // >>> Path fix per librerie su Vercel
+  const exeDir = path.dirname(executablePath);             // tipicamente /tmp/chromium
+  const libDir = path.join(exeDir, "lib");                 // /tmp/chromium/lib
+  const nmLib1 = "/var/task/node_modules/@sparticuz/chromium/lib";
+  const nmLib2 = "/var/runtime/node_modules/@sparticuz/chromium/lib";
 
-      res.setHeader("Content-Type", "application/pdf");
-      res.setHeader("Cache-Control", "no-store");
-      res.setHeader("Content-Disposition", `inline; filename="${payload.shipment.number}.pdf"`);
-      return res.status(200).send(Buffer.from(pdf));
-    } catch (e) {
-      console.error("puppeteer-render", e);
-      try { if (browser) await browser.close(); } catch {}
-      return res.status(500).send(`Puppeteer render failed: ${e?.message || e}`);
-    }
-  } catch (e) {
-    console.error("unified/render error", e);
-    return res.status(500).send("Internal Server Error");
-  }
+  process.env.LD_LIBRARY_PATH = [
+    exeDir,
+    libDir,
+    nmLib1,
+    nmLib2,
+    process.env.LD_LIBRARY_PATH
+  ].filter(Boolean).join(":");
+
+  browser = await puppeteer.launch({
+    args: [
+      ...chromium.args,
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-gpu",
+      "--single-process"
+    ],
+    defaultViewport: chromium.defaultViewport,
+    executablePath,
+    headless: chromium.headless
+  });
+} catch (e) {
+  console.error("puppeteer-launch", e);
+  return res.status(500).send(`Puppeteer launch failed: ${e?.message || e}`);
+}
+
+try {
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: "networkidle0" });
+  await page.emulateMediaType("screen");
+  const pdf = await page.pdf({
+    format: "A4",
+    printBackground: true,
+    margin: { top: "12mm", right: "12mm", bottom: "16mm", left: "12mm" }
+  });
+  await browser.close();
+
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Content-Disposition", `inline; filename="${payload.shipment.number}.pdf"`);
+  return res.status(200).send(Buffer.from(pdf));
+} catch (e) {
+  console.error("puppeteer-render", e);
+  try { if (browser) await browser.close(); } catch {}
+  return res.status(500).send(`Puppeteer render failed: ${e?.message || e}`);
 }
 
 function formatDateIT(d){
