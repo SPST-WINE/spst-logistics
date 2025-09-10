@@ -1,8 +1,8 @@
+export const config = { runtime: "nodejs" };
+
 import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
-import { renderUnifiedHTML } from "./template";
-
-export const config = { runtime: "nodejs22.x" };
+import { renderUnifiedHTML } from "./template.js";
 
 const BASE_ID = process.env.AIRTABLE_BASE_ID;
 const PAT = process.env.AIRTABLE_PAT;
@@ -17,12 +17,10 @@ export default async function handler(req, res) {
     }
 
     const { shipmentId, type = "proforma", token } = req.query;
-
-    // protezione semplice per uso da Airtable/BackOffice
     if (!token || token !== SECRET) return res.status(401).send("Unauthorized");
     if (!shipmentId) return res.status(400).send("Missing shipmentId");
 
-    // 1) Fetch record Airtable
+    // 1) Fetch Airtable
     const rec = await fetch(
       `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TB)}/${shipmentId}`,
       { headers: { Authorization: `Bearer ${PAT}` } }
@@ -31,9 +29,14 @@ export default async function handler(req, res) {
     const json = await rec.json();
     const f = json.fields || {};
 
-    // 2) Normalizzazione campi principali
-    const pick = (alts, d="") => (Array.isArray(alts)?alts:[alts]).find(k => f[k] != null && f[k] !== "") ? f[(Array.isArray(alts)?alts:[alts]).find(k => f[k] != null && f[k] !== "")] : d;
+    // pick helper
+    const pick = (alts, d="") => {
+      const keys = Array.isArray(alts) ? alts : [alts];
+      const k = keys.find(k => f[k] != null && f[k] !== "");
+      return k ? f[k] : d;
+    };
 
+    // 2) Normalize
     const sender = {
       name: pick(["Mittente_Ragione","Mittente","Sender_Name","Mittente Ragione Sociale"], "SPST S.r.l."),
       address: pick(["Mittente_Indirizzo","Mittente Indirizzo","Sender_Address"], "Via Esempio 1, 20100 Milano (MI), Italy"),
@@ -62,7 +65,6 @@ export default async function handler(req, res) {
     const currency = pick(["Valuta","Currency"], "EUR");
     const shipmentIdStr = pick(["ID Spedizione","Shipment_ID"], json.id);
 
-    // 3) Righe (dati PL/fattura). Preferisci JSON nel campo 'Lines_JSON' o 'Lista Colli Ordinata'
     let lines = [];
     const raw = pick(["Lines_JSON","Lista Colli Ordinata","Lista Colli"], "[]");
     try { lines = typeof raw === "string" ? JSON.parse(raw) : raw; } catch {}
@@ -75,7 +77,6 @@ export default async function handler(req, res) {
         hs: pick(["HS Code","HS"], ""), origin: "IT", weightKg: Number(pick(["Peso Totale Kg","Peso"], 0))
       }];
     }
-    // normalizza keys
     lines = lines.map((r,i) => ({
       description: r.description || r.descrizione || r.nome || `Item ${i+1}`,
       qty: Number(r.qty ?? r.quantita ?? 1),
@@ -101,12 +102,14 @@ export default async function handler(req, res) {
       lines, total
     };
 
-    // 4) HTML → PDF
+    // 3) HTML → PDF
     const html = renderUnifiedHTML(payload);
     const executablePath = await chromium.executablePath();
     const browser = await puppeteer.launch({
-      args: chromium.args, defaultViewport: chromium.defaultViewport,
-      executablePath, headless: chromium.headless,
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath,
+      headless: chromium.headless,
     });
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: "networkidle0" });
@@ -123,7 +126,6 @@ export default async function handler(req, res) {
   }
 }
 
-/* utils */
 function formatDateIT(d){
   try{
     const dt = typeof d === "string" ? new Date(d) : d;
