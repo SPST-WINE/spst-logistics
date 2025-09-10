@@ -4,6 +4,10 @@ import chromium from "@sparticuz/chromium";
 import puppeteer from "puppeteer-core";
 import { renderUnifiedHTML } from "./template.js";
 
+// consigliati su Vercel
+chromium.setHeadlessMode = true;
+chromium.setGraphicsMode = false;
+
 const BASE_ID = process.env.AIRTABLE_BASE_ID;
 const PAT = process.env.AIRTABLE_PAT;
 const TB = process.env.TB_SPEDIZIONI || "Spedizioni";
@@ -16,7 +20,7 @@ export default async function handler(req, res) {
       return res.status(405).send("Method Not Allowed");
     }
 
-    const { shipmentId, type = "proforma", token } = req.query;
+    const { shipmentId, type = "proforma", token, debug } = req.query;
     if (!token || token !== SECRET) return res.status(401).send("Unauthorized");
     if (!shipmentId) return res.status(400).send("Missing shipmentId");
 
@@ -25,7 +29,10 @@ export default async function handler(req, res) {
       `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TB)}/${shipmentId}`,
       { headers: { Authorization: `Bearer ${PAT}` } }
     );
-    if (!rec.ok) return res.status(rec.status).send("Airtable fetch failed");
+    if (!rec.ok) {
+      const txt = await rec.text().catch(()=>"");
+      return res.status(rec.status).send(`Airtable fetch failed: ${txt}`);
+    }
     const json = await rec.json();
     const f = json.fields || {};
 
@@ -102,24 +109,43 @@ export default async function handler(req, res) {
       lines, total
     };
 
+    // DEBUG: ritorna JSON senza Puppeteer
+    if (String(debug) === "1") {
+      return res.status(200).json({ ok:true, stage:"normalized", payload });
+    }
+
     // 3) HTML → PDF
     const html = renderUnifiedHTML(payload);
-    const executablePath = await chromium.executablePath();
-    const browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath,
-      headless: chromium.headless,
-    });
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "networkidle0" });
-    const pdf = await page.pdf({ format: "A4", printBackground: true, margin: { top: "12mm", right: "12mm", bottom: "16mm", left: "12mm" }});
-    await browser.close();
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Cache-Control", "no-store");
-    res.setHeader("Content-Disposition", `inline; filename="${payload.shipment.number}.pdf"`);
-    return res.status(200).send(Buffer.from(pdf));
+    let browser;
+    try {
+      const executablePath = await chromium.executablePath();
+      browser = await puppeteer.launch({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath,
+        headless: chromium.headless,
+      });
+    } catch (e) {
+      console.error("puppeteer-launch", e);
+      return res.status(500).send(`Puppeteer launch failed: ${e?.message || e}`);
+    }
+
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: "networkidle0" });
+      const pdf = await page.pdf({ format: "A4", printBackground: true, margin: { top: "12mm", right: "12mm", bottom: "16mm", left: "12mm" }});
+      await browser.close();
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("Content-Disposition", `inline; filename="${payload.shipment.number}.pdf"`);
+      return res.status(200).send(Buffer.from(pdf));
+    } catch (e) {
+      console.error("puppeteer-render", e);
+      try { if (browser) await browser.close(); } catch {}
+      return res.status(500).send(`Puppeteer render failed: ${e?.message || e}`);
+    }
   } catch (e) {
     console.error("unified/render error", e);
     return res.status(500).send("Internal Server Error");
