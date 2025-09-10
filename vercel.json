@@ -26,7 +26,6 @@
   ],
   "functions": {
     "api/docs/unified/render.js": {
-      "runtime": "nodejs22.x",
       "memory": 1024,
       "maxDuration": 60,
       "includeFiles": "node_modules/@sparticuz/chromium/**"
