@@ -4,10 +4,9 @@ export const config = { runtime: 'nodejs' };
 import { readFile } from 'fs/promises';
 import { resolve, normalize, extname } from 'path';
 
-// Primario: tutto il BO viene copiato qui in build (vedi step 2)
-const BASE = resolve(process.cwd(), 'public', 'back-office');
-// Fallback: sorgenti nel repo (utile se qualcosa non è stato copiato)
-const ALT  = resolve(process.cwd(), 'assets', 'esm');
+// SEMPLICE: serviamo direttamente i sorgenti del BO
+const BASE = resolve(process.cwd(), 'assets', 'esm');           // primario
+const ALT  = resolve(process.cwd(), 'public', 'back-office');   // fallback opzionale
 
 const TYPES = {
   '.js':  'text/javascript; charset=utf-8',
@@ -35,27 +34,19 @@ function setCORS(req, res) {
   return (req.method === 'OPTIONS');
 }
 
-async function tryRead(base, rel){
-  return readFile(resolve(base, rel));
-}
+async function tryRead(base, rel){ return readFile(resolve(base, rel)); }
 
 export default async function handler(req, res){
   if (setCORS(req, res)) return res.status(204).end();
 
   const parts   = Array.isArray(req.query.path) ? req.query.path : [req.query.path || ''];
   const reqPath = parts.join('/') || 'main.js';
-
-  // hardening contro path traversal
-  const safe = normalize(reqPath).replace(/^(\.\.(\/|\\|$))+/g, '');
+  const safe    = normalize(reqPath).replace(/^(\.\.(\/|\\|$))+/g, '');
 
   try{
     let buf;
-    try {
-      buf = await tryRead(BASE, safe);      // 1) public/back-office/**
-    } catch {
-      buf = await tryRead(ALT, safe);       // 2) assets/esm/**  (fallback)
-    }
-
+    try { buf = await tryRead(BASE, safe); }      // assets/esm/**
+    catch { buf = await tryRead(ALT,  safe); }    // (eventuale) public/back-office/**
     const type = TYPES[extname(safe)] || 'application/octet-stream';
     res.setHeader('Content-Type', type);
     res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600');
