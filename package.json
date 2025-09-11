@@ -1,19 +1,13 @@
 {
   "name": "spst-airtable-proxy",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
-  "version": "1.0.0",
-  "engines": {
-    "node": "22.x"
-  },
-  "scripts": {
-    "postinstall": "node scripts/sync-bo.js"
-  },
+  "engines": { "node": "22.x" },
   "dependencies": {
+    "@sparticuz/chromium": "^129.0.0",
+    "puppeteer-core": "^22.15.0",
     "@vercel/blob": "latest",
-    "resend": "^3.2.0",
-    "puppeteer-core": "^22.12.0",
-    "@sparticuz/chromium": "^131.0.0",
-    "puppeteer-core": "^22.15.0"
+    "resend": "^3.2.0"
   }
 }
