@@ -1,69 +1,55 @@
 // api/back-office/[...path].js
-// Espone gli asset del Back Office: legge prima da /public/back-office (bundle incluso),
-// poi fallback ai percorsi sorgente (back-office/*.css e assets/esm/*).
+export const config = { runtime: 'nodejs' };
 
-import { promises as fs } from "fs";
-import path from "path";
+import { readFile } from 'fs/promises';
+import { resolve, normalize, extname } from 'path';
 
-export const config = { runtime: "nodejs" };
+// cartella che contiene TUTTO il BO copiato in build
+const BASE = resolve(process.cwd(), 'public', 'back-office');
 
-const ROOT = process.cwd();
+const TYPES = {
+  '.js':  'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.json':'application/json; charset=utf-8'
+};
 
-function ctype(p) {
-  const ext = path.extname(p).toLowerCase();
-  if (ext === ".js" || ext === ".mjs") return "application/javascript; charset=utf-8";
-  if (ext === ".css") return "text/css; charset=utf-8";
-  if (ext === ".json" || ext === ".map") return "application/json; charset=utf-8";
-  if (ext === ".svg") return "image/svg+xml";
-  if (ext === ".png") return "image/png";
-  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
-  if (ext === ".woff2") return "font/woff2";
-  return "application/octet-stream";
+function setCORS(req, res) {
+  const allow = (process.env.ORIGIN_ALLOWLIST || '')
+    .split(',').map(s => s.trim()).filter(Boolean);
+  const origin = req.headers.origin || '';
+  const ok = allow.some(p => {
+    if (!p) return false;
+    if (p.includes('*')) {
+      const rx = new RegExp('^' + p.replace(/[.+?^${}()|[\]\\]/g,'\\$&').replace(/\*/g,'.*') + '$');
+      return rx.test(origin);
+    }
+    return origin === p;
+  });
+  if (ok) res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Vary','Origin');
+  res.setHeader('Access-Control-Allow-Methods','GET,OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers','*');
+  return (req.method === 'OPTIONS');
 }
 
-export default async function handler(req, res) {
-  // CORS per Webflow
-  res.setHeader("Access-Control-Allow-Origin", "https://www.spst.it");
-  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "*");
-  if (req.method === "OPTIONS") return res.status(204).end();
+export default async function handler(req, res){
+  if (setCORS(req, res)) return res.status(204).end();
 
-  try {
-    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-let rel = url.pathname
-  .replace(/^\/api\/back-office\/?/, '')
-  .replace(/^\/assets\/esm\/?/, '')     // ← supporta vecchi URL
-  .replace(/^\/back-office\/?/, '');    // ← eventuale uso diretto
-rel = decodeURIComponent(rel).replace(/^\/+/, '');
+  const parts = Array.isArray(req.query.path) ? req.query.path : [req.query.path || ''];
+  const reqPath = parts.join('/') || 'main.js';
 
+  // hardening: niente path traversal
+  const safe = normalize(reqPath).replace(/^(\.\.(\/|\\|$))+/g, '');
+  const file = resolve(BASE, safe);
 
-    if (!rel || rel.includes("..")) return res.status(400).send("Bad Request");
-
-    // 1) PRIMA cerca nell'output generato dal postinstall (che bundle-izziamo con includeFiles)
-    const fromPublic = path.join(ROOT, "public", "back-office", rel);
-
-    // 2) Fallback: sorgenti (utile in locale)
-    const fromCssSrc = path.join(ROOT, "back-office", rel);       // base.css, quotes-admin.css
-    const fromEsmSrc = path.join(ROOT, "assets", "esm", rel);     // main.js, ecc.
-
-    const candidates = [fromPublic, fromCssSrc, fromEsmSrc];
-
-    let found = null;
-    for (const p of candidates) {
-      try {
-        const st = await fs.stat(p);
-        if (st.isFile()) { found = p; break; }
-      } catch {}
-    }
-
-    if (!found) return res.status(404).send("Not Found");
-
-    const buf = await fs.readFile(found);
-    res.setHeader("Content-Type", ctype(found));
-    res.setHeader("Cache-Control", "public, max-age=300");
-    return res.status(200).end(buf);
-  } catch (e) {
-    console.error("back-office static error", e);
-    return res.status(500).send("Internal Error");
+  try{
+    const buf = await readFile(file);
+    const type = TYPES[extname(file)] || 'application/octet-stream';
+    res.setHeader('Content-Type', type);
+    res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600');
+    return res.status(200).send(buf);
+  }catch(e){
+    return res.status(404).send('Not Found');
   }
 }
