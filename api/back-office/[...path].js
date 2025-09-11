@@ -6,7 +6,7 @@ import { resolve, normalize, extname } from 'path';
 
 // Primario: bundle copiato in build (vedi scripts/sync-bo.js)
 const BASE = resolve(process.cwd(), 'api', 'back-office', '_bundle');
-// Fallback: sorgenti (utile anche per debug locale)
+// Fallback: sorgenti (utile in locale)
 const ALT  = resolve(process.cwd(), 'assets', 'esm');
 
 const TYPES = {
@@ -37,20 +37,7 @@ function setCORS(req, res) {
 
 async function tryRead(base, rel){ return readFile(resolve(base, rel)); }
 
-// debug: /api/back-office/__ls per vedere cosa è nel bundle
-async function debugList(base) {
-  async function ls(dir='') {
-    try { return await readdir(resolve(base, dir)); } catch { return []; }
-  }
-  return {
-    base,
-    top:     await ls(''),
-    ui:      await ls('ui'),
-    utils:   await ls('utils'),
-    airtable:await ls('airtable'),
-    rules:   await ls('rules')
-  };
-}
+async function ls(base, dir=''){ try { return await readdir(resolve(base, dir)); } catch { return []; } }
 
 export default async function handler(req, res){
   if (setCORS(req, res)) return res.status(204).end();
@@ -59,16 +46,35 @@ export default async function handler(req, res){
   const reqPath = parts.join('/') || 'main.js';
   const safe    = normalize(reqPath).replace(/^(\.\.(\/|\\|$))+/g, '');
 
+  // debug: GET /api/back-office/__ls
   if (safe === '__ls'){
     res.setHeader('Content-Type','application/json; charset=utf-8');
-    const info = { bundle: await debugList(BASE), alt: await debugList(ALT) };
-    return res.status(200).send(JSON.stringify(info, null, 2));
+    const payload = {
+      bundle: {
+        base: BASE,
+        top:       await ls(BASE),
+        ui:        await ls(BASE, 'ui'),
+        utils:     await ls(BASE, 'utils'),
+        airtable:  await ls(BASE, 'airtable'),
+        rules:     await ls(BASE, 'rules'),
+      },
+      alt: {
+        base: ALT,
+        top:       await ls(ALT),
+        ui:        await ls(ALT, 'ui'),
+        utils:     await ls(ALT, 'utils'),
+        airtable:  await ls(ALT, 'airtable'),
+        rules:     await ls(ALT, 'rules'),
+      }
+    };
+    return res.status(200).send(JSON.stringify(payload, null, 2));
   }
 
   try{
     let buf;
     try { buf = await tryRead(BASE, safe); }
     catch { buf = await tryRead(ALT,  safe); }
+
     const type = TYPES[extname(safe)] || 'application/octet-stream';
     res.setHeader('Content-Type', type);
     res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600');
