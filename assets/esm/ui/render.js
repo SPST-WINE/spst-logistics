@@ -7,14 +7,72 @@ import { computeRequiredDocs } from '../rules/docs.js';
 import { fetchColliFor } from '../airtable/api.js';
 
 /* Helpers (normKey, pickLoose, toNum, mapDocs, colli fallback, badgeFor) */
-// … (tutti gli helper identici alla versione che stai usando ora: non li ripeto qui per brevità)
 function normKey(s){return String(s||'').replace(/[–—]/g,'-').replace(/\s+/g,' ').trim().toLowerCase();}
 function pickLoose(fields,...names){if(!fields)return;const m=new Map(Object.keys(fields).map(k=>[normKey(k),k]));for(const n of names){const real=m.get(normKey(n));if(real!=null){const v=fields[real];if(v!==''&&v!=null)return v;}}for(const n of names){if(n in fields&&fields[n]!==''&&fields[n]!=null)return fields[n];}return;}
 function toNum(v){if(v==null||v==='')return NaN;const n=Number(String(v).replace(',', '.').replace(/[^0-9.]+/g,''));return isFinite(n)?n:NaN;}
-function mapDocs(fields){const getAttUrl=k=>{const v=pickLoose(fields,k);if(Array.isArray(v)&&v.length&&v[0]?.url)return v[0].url;if(typeof v==='string'&&v)return v;return'';};const fatturaCli=getAttUrl('Fattura - Allegato Cliente');const packingCli=getAttUrl('Packing List - Allegato Cliente');const ldv=getAttUrl('Allegato LDV')||getAttUrl('Lettera di Vettura');const fatturaBO=getAttUrl('Allegato Fattura');const dle=getAttUrl('Allegato DLE')||getAttUrl('Dichiarazione Esportazione');const plBO=getAttUrl('Allegato PL')||getAttUrl('Packing List');const att1=getAttUrl('Allegato 1');const att2=getAttUrl('Allegato 2');const att3=getAttUrl('Allegato 3');const PROFORMA=att1||att2||att3;const FDA_PN=att2||att1||att3;const EDAS=att3||att2||att1;return{Lettera_di_Vettura:ldv,Fattura_Commerciale:fatturaBO||fatturaCli,Fattura_Proforma:PROFORMA,Dichiarazione_Esportazione:dle,Packing_List:plBO||packingCli,FDA_Prior_Notice:FDA_PN,'e-DAS':EDAS,Fattura_Client:fatturaCli,Packing_Client:packingCli,Allegato_1:att1,Allegato_2:att2,Allegato_3:att3};}
-function colliFromListString(str){if(!str)return[];return String(str).split(/[;|\n]+/).map(p=>{const m=String(p).match(/(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?).*?(\d+(?:[.,]\d+)?)/);return m?{L:String(m[1]).replace(',', '.'),W:String(m[2]).replace(',', '.'),H:String(m[3]).replace(',', '.'),kg:toNum(m[4])||0}:{L:'-',W:'-',H:'-',kg:0};}).filter(x=>x.L!=='-');}
-function buildColliSmart(fields){const list=pickLoose(fields,'Lista Colli Ordinata','Lista Colli','Contenuto Colli')||'';const a=colliFromListString(list);if(a.length)return a;const dimStr=pickLoose(fields,'Dimensioni','Dimensioni (cm)','Dim. (cm)','LxWxH','L×W×H','Dim LxWxH','Dimensioni LxWxH');let L,W,H;if(dimStr){const m=String(dimStr).match(/(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)/i);if(m){L=String(m[1]).replace(',', '.');W=String(m[2]).replace(',', '.');H=String(m[3]).replace(',', '.');}}if(!L)L=pickLoose(fields,'L','L (cm)','Lunghezza','Lunghezza (cm)','Dim L');if(!W)W=pickLoose(fields,'W','W (cm)','Larghezza','Larghezza (cm)','Dim W');if(!H)H=pickLoose(fields,'H','H (cm)','Altezza','Altezza (cm)','Dim H');let kg=toNum(pickLoose(fields,'Peso reale','Peso','Peso (kg)','Peso pezzo'))||0;if(L&&W&&H){return[{L:String(L).replace(',', '.'),W:String(W).replace(',', '.'),H:String(H).replace(',', '.'),kg}];}return[];}
-function badgeFor(stato){if(!stato)return'gray';const s=String(stato).toLowerCase();if(['pronta alla spedizione','evasa','in transito','consegnata'].includes(s))return'green';if(s==='nuova')return'gray';return'yellow';}
+function mapDocs(fields){
+  const getAttUrl=k=>{
+    const v=pickLoose(fields,k);
+    if(Array.isArray(v)&&v.length&&v[0]?.url)return v[0].url;
+    if(typeof v==='string'&&v)return v;
+    return'';
+  };
+  const fatturaCli=getAttUrl('Fattura - Allegato Cliente');
+  const packingCli=getAttUrl('Packing List - Allegato Cliente');
+  const ldv=getAttUrl('Allegato LDV')||getAttUrl('Lettera di Vettura');
+  const fatturaBO=getAttUrl('Allegato Fattura');
+  const dle=getAttUrl('Allegato DLE')||getAttUrl('Dichiarazione Esportazione');
+  const plBO=getAttUrl('Allegato PL')||getAttUrl('Packing List');
+  const att1=getAttUrl('Allegato 1');
+  const att2=getAttUrl('Allegato 2');
+  const att3=getAttUrl('Allegato 3');
+  const PROFORMA=att1||att2||att3;
+  const FDA_PN=att2||att1||att3;
+  const EDAS=att3||att2||att1;
+  return{
+    Lettera_di_Vettura:ldv,
+    Fattura_Commerciale:fatturaBO||fatturaCli,
+    Fattura_Proforma:PROFORMA,
+    Dichiarazione_Esportazione:dle,
+    Packing_List:plBO||packingCli,
+    FDA_Prior_Notice:FDA_PN,
+    'e-DAS':EDAS,
+    Fattura_Client:fatturaCli,
+    Packing_Client:packingCli,
+    Allegato_1:att1,Allegato_2:att2,Allegato_3:att3
+  };
+}
+function colliFromListString(str){
+  if(!str)return[];
+  return String(str).split(/[;|\n]+/).map(p=>{
+    const m=String(p).match(/(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?)\D+(\d+(?:[.,]\d+)?).*?(\d+(?:[.,]\d+)?)/);
+    return m?{L:String(m[1]).replace(',', '.'),W:String(m[2]).replace(',', '.'),H:String(m[3]).replace(',', '.'),kg:toNum(m[4])||0}:{L:'-',W:'-',H:'-',kg:0};
+  }).filter(x=>x.L!=='-');
+}
+function buildColliSmart(fields){
+  const list=pickLoose(fields,'Lista Colli Ordinata','Lista Colli','Contenuto Colli')||'';
+  const a=colliFromListString(list);
+  if(a.length)return a;
+  const dimStr=pickLoose(fields,'Dimensioni','Dimensioni (cm)','Dim. (cm)','LxWxH','L×W×H','Dim LxWxH','Dimensioni LxWxH');
+  let L,W,H;
+  if(dimStr){
+    const m=String(dimStr).match(/(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)\s*[x×]\s*(\d+(?:[.,]\d+)?)/i);
+    if(m){L=String(m[1]).replace(',', '.');W=String(m[2]).replace(',', '.');H=String(m[3]).replace(',', '.');}
+  }
+  if(!L)L=pickLoose(fields,'L','L (cm)','Lunghezza','Lunghezza (cm)','Dim L');
+  if(!W)W=pickLoose(fields,'W','W (cm)','Larghezza','Larghezza (cm)','Dim W');
+  if(!H)H=pickLoose(fields,'H','H (cm)','Altezza','Altezza (cm)','Dim H');
+  let kg=toNum(pickLoose(fields,'Peso reale','Peso','Peso (kg)','Peso pezzo'))||0;
+  if(L&&W&&H){return[{L:String(L).replace(',', '.'),W:String(W).replace(',', '.'),H:String(H).replace(',', '.'),kg}];}
+  return[];
+}
+function badgeFor(stato){
+  if(!stato)return'gray';
+  const s=String(stato).toLowerCase();
+  if(['pronta alla spedizione','evasa','in transito','consegnata'].includes(s))return'green';
+  if(s==='nuova')return'gray';
+  return'yellow';
+}
 
 /* Normalizzazione record */
 export function normalizeShipmentRecord(rec){
@@ -205,7 +263,16 @@ function ensureListContainer() {
   return el;
 }
 
-export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, onSendMail}){
+export function renderList(
+  data,
+  {
+    onUploadForDoc,
+    onSaveTracking,
+    onComplete,
+    onSendMail,
+    onGenerateDoc // ← nuovo handler
+  }
+){
   const normalized = (data || []).map((rec) => rec && rec.fields ? normalizeShipmentRecord(rec) : rec);
 
   const elList = ensureListContainer();
@@ -226,6 +293,10 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
     const card = document.createElement('div');
     card.className = 'card';
     card.id = `card-${rec.id}`;
+
+    // flags per abilitare/disabilitare i bottoni di generazione
+    const hasProforma = !!(rec.docs && rec.docs.Fattura_Proforma);
+    const hasCommercial = !!(rec.docs && rec.docs.Fattura_Commerciale);
 
     card.innerHTML = `
       <div class="card-head" style="display:flex;gap:12px;align-items:center;">
@@ -288,9 +359,22 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
           const templateLink = TEMPLATES[name] ? `<a href="${TEMPLATES[name]}" target="_blank">template</a>` : '';
           const openLink = ok ? `<a href="${rec.docs[name]}" target="_blank">apri</a>` : '';
           const inputId = `${rec.id}-${name}-input`;
+
+          // Bottoni di generazione solo per Proforma/Commerciale
+          const genBtn = (()=>{
+            if (name === 'Fattura_Proforma') {
+              return `<button class="mini-btn generate-doc" data-type="proforma" ${ok?'disabled':''}>Genera Proforma</button>`;
+            }
+            if (name === 'Fattura_Commerciale') {
+              return `<button class="mini-btn generate-doc" data-type="commercial" ${ok?'disabled':''}>Genera Commercial</button>`;
+            }
+            return '';
+          })();
+
           return `<div class="doc ${cls}">
               <strong>${name.replaceAll('_',' ')}</strong>
               ${[openLink, templateLink].filter(Boolean).length? ' · ' + [openLink, templateLink].filter(Boolean).join(' · ') : ''}
+              ${genBtn ? ' · ' + genBtn : ''}
               · <button class="mini-btn upload-doc" data-doc="${name}" data-input="${inputId}">Carica</button>
               <input id="${inputId}" type="file" class="hidden per-doc-upload" accept=".pdf,.png,.jpg,.jpeg" data-doc="${name}">
             </div>`;
@@ -403,7 +487,23 @@ export function renderList(data, {onUploadForDoc, onSaveTracking, onComplete, on
       }});
     });
 
-    // Lazy-load colli se assenti + aggiorna anche la print-grid
+    // Generazione documenti (Proforma/Commercial)
+    card.querySelectorAll('.generate-doc').forEach(btn=>{
+      btn.addEventListener('click', async ()=>{
+        const type = btn.dataset.type || 'proforma';
+        btn.disabled = true;
+        btn.textContent = 'Generazione…';
+        try{
+          await onGenerateDoc(rec, type);
+          btn.textContent = 'Generata ✓';
+        }catch(e){
+          btn.disabled = false;
+          btn.textContent = (type === 'commercial' ? 'Genera Commercial' : 'Genera Proforma');
+        }
+      });
+    });
+
+    // Lazy-load colli se assenti + aggiorna print-grid
     (async ()=>{
       try{
         if (!rec.colli || !rec.colli.length) {
