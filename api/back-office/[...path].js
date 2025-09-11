@@ -30,8 +30,12 @@ export default async function handler(req, res) {
 
   try {
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    let rel = url.pathname.replace(/^\/api\/back-office\/?/, "");
-    rel = decodeURIComponent(rel).replace(/^\/+/, ""); // es. "main.js"
+let rel = url.pathname
+  .replace(/^\/api\/back-office\/?/, '')
+  .replace(/^\/assets\/esm\/?/, '')     // ← supporta vecchi URL
+  .replace(/^\/back-office\/?/, '');    // ← eventuale uso diretto
+rel = decodeURIComponent(rel).replace(/^\/+/, '');
+
 
     if (!rel || rel.includes("..")) return res.status(400).send("Bad Request");
 
