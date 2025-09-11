@@ -14,24 +14,18 @@ export default async function handler(req, res) {
       res.setHeader("Allow", "GET");
       return res.status(405).send("Method Not Allowed");
     }
+
     const { shipmentId, type = "proforma", token, debug, stage } = req.query;
     if (!token || token !== SECRET) return res.status(401).send("Unauthorized");
-
-    // Ping ultraleggero (niente Airtable/PDF)
     if (String(stage) === "ping") {
-      return res.status(200).json({
-        ok: true, stage: "ping",
-        env: { node: process.version, hasBase: !!BASE_ID, hasPat: !!PAT, table: TB }
-      });
+      return res.status(200).json({ ok: true, stage: "ping", env: { node: process.version, hasBase: !!BASE_ID, hasPat: !!PAT, table: TB } });
     }
-
     if (!shipmentId) return res.status(400).send("Missing shipmentId");
 
-    // ---- Fetch Airtable ----
-    const rec = await fetch(
-      `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TB)}/${shipmentId}`,
-      { headers: { Authorization: `Bearer ${PAT}` } }
-    );
+    // ------- Fetch Airtable -------
+    const rec = await fetch(`https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TB)}/${shipmentId}`, {
+      headers: { Authorization: `Bearer ${PAT}` }
+    });
     if (!rec.ok) {
       const txt = await rec.text().catch(() => "");
       return res.status(rec.status).send(`Airtable fetch failed: ${txt}`);
@@ -40,14 +34,13 @@ export default async function handler(req, res) {
     const f = json.fields || {};
     const pick = (alts, d = "") => {
       const keys = Array.isArray(alts) ? alts : [alts];
-      const k = keys.find((k) => f[k] != null && f[k] !== "");
+      const k = keys.find(k => f[k] != null && f[k] !== "");
       return k ? f[k] : d;
     };
 
-    // ---- Normalize ----
-    const mode      = type === "commercial" ? "commercial" : "proforma";
-    const title     = mode === "commercial" ? "Commercial Invoice" : "Proforma Invoice";
-    const watermark = mode === "commercial" ? "COMMERCIAL" : "PROFORMA";
+    // ------- Normalize -------
+    const mode  = type === "commercial" ? "commercial" : "proforma";
+    const title = mode === "commercial" ? "Commercial Invoice" : "Proforma Invoice";
 
     const sender = {
       name: pick(["Mittente_Ragione","Mittente","Sender_Name","Mittente Ragione Sociale"], "SPST S.r.l."),
@@ -57,9 +50,8 @@ export default async function handler(req, res) {
       email: pick(["Mittente_Email","Email Mittente","Sender_Email"], "info@spst.it"),
       phone: pick(["Mittente_Telefono","Telefono Mittente","Sender_Phone"], "+39 320 144 1789")
     };
-
     const consignee = {
-      name:  pick(["Ragione Sociale Destinatario Fattura","Destinatario","Consignee_Name"], "Consignee Ltd"),
+      name: pick(["Ragione Sociale Destinatario Fattura","Destinatario","Consignee_Name"], "Consignee Ltd"),
       line1: (() => {
         const addr = pick(["Indirizzo Destinatario Fattura","Indirizzo Destinatario","Consignee_Address"], "Street 1");
         const cap  = pick(["CAP Destinatario Fattura","CAP Destinatario","Consignee_Zip"], "");
@@ -83,14 +75,7 @@ export default async function handler(req, res) {
     if (!Array.isArray(lines) || !lines.length) {
       const qty = Number(pick(["Qta Colli","Qty"], 1));
       const totalVal = Number(pick(["Valore Totale EUR","Total_Value"], 0));
-      lines = [{
-        description: pick(["Contenuto","Descrizione Generica"], "Goods"),
-        qty,
-        unitPrice: qty ? totalVal/qty : 0,
-        hs: pick(["HS Code","HS"], ""),
-        origin: "IT",
-        weightKg: Number(pick(["Peso Totale Kg","Peso"], 0))
-      }];
+      lines = [{ description: pick(["Contenuto","Descrizione Generica"], "Goods"), qty, unitPrice: qty ? totalVal/qty : 0, hs: "", origin: "IT", weightKg: Number(pick(["Peso Totale Kg","Peso"], 0)) }];
     }
     lines = lines.map((r,i)=>({
       description: r.description || r.descrizione || r.nome || `Item ${i+1}`,
@@ -103,7 +88,7 @@ export default async function handler(req, res) {
     const total = lines.reduce((s,r)=> s + (Number(r.qty)||0) * (Number(r.unitPrice)||0), 0);
 
     const payload = {
-      mode, title, watermark,
+      title,
       sender, consignee,
       shipment: { id: shipmentIdStr, number: makeDocNumber(mode, json.id), issueDate: fmtDate(new Date()), pickupDate, incoterm, currency },
       lines, total
@@ -111,14 +96,11 @@ export default async function handler(req, res) {
 
     if (String(debug) === "1") return res.status(200).json({ ok:true, stage:"normalized", payload });
 
-    // ====== PDF ======
+    // ------- PDF (safe) -------
     const doc = new PDFDocument({ size: "A4", margins: { top: 52, left: 46, right: 46, bottom: 56 } });
     const chunks = [];
     doc.on("data", c => chunks.push(c));
-    doc.on("error", err => {
-      console.error("pdfkit-error", err);
-      try { res.status(500).send(`PDF error: ${err?.message || err}`); } catch {}
-    });
+    doc.on("error", e => { console.error("pdfkit-error", e); try { res.status(500).send(`PDF error: ${e?.message || e}`); } catch {} });
     doc.on("end", () => {
       const pdf = Buffer.concat(chunks);
       res.setHeader("Content-Type", "application/pdf");
@@ -129,133 +111,122 @@ export default async function handler(req, res) {
 
     const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
-    // Page numbers
-    let pageNo = 1;
-    const drawFooter = () => {
-      const y = doc.page.height - doc.page.margins.bottom + 24;
-      doc.font("Helvetica").fontSize(9).fillColor("#9CA3AF")
-        .text(`Page ${pageNo}`, doc.page.margins.left, y, { width: pageW, align: "center" });
-    };
-    doc.on("pageAdded", () => { pageNo += 1; drawFooter(); });
-
-    // Watermark
-    doc.save()
-      .fillColor("#0f172a").opacity(0.06).fontSize(110)
-      .translate(doc.page.width/2, doc.page.height/2).rotate(-24)
-      .text(payload.watermark, -280, -40, { width: 560, align: "center" })
-      .restore().opacity(1);
+    // Watermark semplice (senza translate/rounded)
+    doc.save();
+    doc.fillColor("#0f172a").opacity(0.06).fontSize(100);
+    doc.rotate(-24, { origin: [doc.page.width/2, doc.page.height/2] });
+    doc.text(mode === "commercial" ? "COMMERCIAL" : "PROFORMA", 0, doc.page.height/2 - 40, { width: doc.page.width, align: "center" });
+    doc.restore().opacity(1);
 
     // Header
-    const headerY = doc.y;
-    chipSafe(doc, "Sender", doc.page.margins.left, headerY, "#f3f4f6", "#e5e7eb");
-    doc.font("Helvetica-Bold").fontSize(20).fillColor("#111827").text(payload.sender.name, doc.page.margins.left, headerY + 18);
+    doc.font("Helvetica-Bold").fontSize(20).fillColor("#111827").text(payload.sender.name);
     doc.font("Helvetica").fontSize(10).fillColor("#6b7280")
       .text(`${payload.sender.address} · VAT ${payload.sender.vat}`)
       .text(`${payload.sender.email} · ${payload.sender.phone}`);
 
-    // Doc meta (card destra)
-    const metaW = 280, metaH = 78, metaX = doc.page.margins.left + pageW - metaW, metaY = headerY;
-    roundedStroke(doc, metaX, metaY, metaW, metaH, 10, "#e5e7eb", 0.8);
+    // Doc meta (box a destra)
+    const metaW = 260, metaH = 66, metaX = doc.page.margins.left + pageW - metaW, metaY = doc.page.margins.top;
+    doc.rect(metaX, metaY, metaW, metaH).stroke("#e5e7eb");
     doc.font("Helvetica-Bold").fontSize(11).fillColor("#0ea5e9")
-      .text(title.toUpperCase(), metaX + 12, metaY + 8, { width: metaW - 24, align: "right" });
+      .text(payload.title, metaX + 10, metaY + 8, { width: metaW - 20, align: "right" });
     doc.font("Helvetica").fontSize(10).fillColor("#111")
-      .text(`No.: ${payload.shipment.number}`,  metaX + 12, metaY + 28, { width: metaW - 24, align: "right" })
-      .text(`Date: ${payload.shipment.issueDate}`, metaX + 12, metaY + 42, { width: metaW - 24, align: "right" })
-      .text(`Shipment ID: ${payload.shipment.id}`, metaX + 12, metaY + 56, { width: metaW - 24, align: "right" });
+      .text(`No.: ${payload.shipment.number}`,  metaX + 10, metaY + 26, { width: metaW - 20, align: "right" })
+      .text(`Date: ${payload.shipment.issueDate}`, metaX + 10, metaY + 38, { width: metaW - 20, align: "right" })
+      .text(`Shipment ID: ${payload.shipment.id}`, metaX + 10, metaY + 50, { width: metaW - 20, align: "right" });
 
-    doc.moveDown(1.2); hr(doc);
+    hr(doc);
 
-    // Cards
-    const gridY = doc.y;
+    // Cards (rettangoli semplici)
     const colW = (pageW - 12)/2;
+    const y0 = doc.y + 6;
 
-    cardSafe(doc, doc.page.margins.left, gridY, colW, 92, () => {
-      sectionTitle(doc, "Consignee");
-      doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text(consignee.name);
-      doc.font("Helvetica").fontSize(10).fillColor("#374151")
-        .text(consignee.line1)
-        .text(`Tax ID: ${consignee.taxId || "-"}`)
-        .text(`Email: ${consignee.email || "-"} · Tel: ${consignee.phone || "-"}`);
-    });
+    // Consignee
+    doc.rect(doc.page.margins.left, y0, colW, 86).stroke("#e5e7eb");
+    doc.save().translate(doc.page.margins.left + 8, y0 + 8);
+    section(doc, "Consignee");
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text(consignee.name);
+    doc.font("Helvetica").fontSize(10).fillColor("#374151")
+      .text(consignee.line1)
+      .text(`Tax ID: ${consignee.taxId || "-"}`)
+      .text(`Email: ${consignee.email || "-"} · Tel: ${consignee.phone || "-"}`);
+    doc.restore();
 
-    cardSafe(doc, doc.page.margins.left + colW + 12, gridY, colW, 72, () => {
-      sectionTitle(doc, "Shipment Details");
-      doc.font("Helvetica").fontSize(10).fillColor("#374151")
-        .text(`Pickup date: ${payload.shipment.pickupDate || "-"}`)
-        .text(`Incoterm: ${payload.shipment.incoterm} · Currency: ${payload.shipment.currency}`);
-    });
+    // Shipment details
+    const sx = doc.page.margins.left + colW + 12;
+    doc.rect(sx, y0, colW, 66).stroke("#e5e7eb");
+    doc.save().translate(sx + 8, y0 + 8);
+    section(doc, "Shipment Details");
+    doc.font("Helvetica").fontSize(10).fillColor("#374151")
+      .text(`Pickup date: ${payload.shipment.pickupDate || "-"}`)
+      .text(`Incoterm: ${payload.shipment.incoterm} · Currency: ${payload.shipment.currency}`);
+    doc.restore();
 
-    doc.moveDown(0.8);
+    doc.moveDown(1);
 
     // Table header
     const thY = doc.y + 6;
+    doc.save().rect(doc.page.margins.left, thY, pageW, 22).fill("#f3f4f6").restore();
     const cols = [
-      { key: "#",   w: 22,  align: "left"  },
+      { key: "#", w: 22, align: "left" },
       { key: "Description", w: pageW - (22 + 80 + 110 + 110), align: "left" },
-      { key: "Qty", w: 80,  align: "right" },
-      { key: "Unit Price",  w: 110, align: "right" },
-      { key: "Amount",      w: 110, align: "right" }
+      { key: "Qty", w: 80, align: "right" },
+      { key: "Unit Price", w: 110, align: "right" },
+      { key: "Amount", w: 110, align: "right" }
     ];
-    doc.save().rect(doc.page.margins.left, thY, pageW, 24).fill("#f3f4f6").restore();
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#374151");
     let x = doc.page.margins.left;
-    cols.forEach(c => { doc.text(c.key, x + 6, thY + 6, { width: c.w - 12, align: c.align }); x += c.w; });
+    cols.forEach(c => { doc.text(c.key, x + 6, thY + 5, { width: c.w - 12, align: c.align }); x += c.w; });
 
     // Rows
-    let y = thY + 26;
-    const rowH = 30;
+    let y = thY + 24;
+    const rowH = 28;
+    doc.font("Helvetica").fontSize(10).fillColor("#111");
     lines.forEach((r, i) => {
-      if (y > doc.page.height - doc.page.margins.bottom - 110) {
-        drawFooter(); doc.addPage(); y = doc.page.margins.top;
-        doc.save().rect(doc.page.margins.left, y, pageW, 24).fill("#f3f4f6").restore();
-        doc.font("Helvetica-Bold").fontSize(10).fillColor("#374151");
+      if (y > doc.page.height - doc.page.margins.bottom - 100) {
+        doc.addPage();
+        y = doc.page.margins.top;
+        // repeat header
+        doc.save().rect(doc.page.margins.left, y, pageW, 22).fill("#f3f4f6").restore();
         let xx = doc.page.margins.left;
-        cols.forEach(c => { doc.text(c.key, xx + 6, y + 6, { width: c.w - 12, align: c.align }); xx += c.w; });
-        y += 26;
+        doc.font("Helvetica-Bold").fontSize(10).fillColor("#374151");
+        cols.forEach(c => { doc.text(c.key, xx + 6, y + 5, { width: c.w - 12, align: c.align }); xx += c.w; });
+        y += 24;
+        doc.font("Helvetica").fontSize(10).fillColor("#111");
       }
       if (i % 2 === 1) doc.save().rect(doc.page.margins.left, y - 2, pageW, rowH).fill("#FAFAFA").restore();
 
       let xx = doc.page.margins.left;
-      doc.font("Helvetica").fontSize(10).fillColor("#111")
-        .text(String(i+1), xx + 6, y + 4, { width: cols[0].w - 12, align: "left" });
-      xx += cols[0].w;
+      doc.text(String(i+1), xx + 6, y + 4, { width: cols[0].w - 12, align: "left" }); xx += cols[0].w;
 
       const desc = `${r.description}\nHS: ${r.hs || "-"} · Origin: ${r.origin || "-"} · Est. weight: ${num(r.weightKg)} kg`;
-      doc.text(desc, xx + 6, y + 4, { width: cols[1].w - 12, align: "left" });
-      xx += cols[1].w;
+      doc.text(desc, xx + 6, y + 4, { width: cols[1].w - 12, align: "left" }); xx += cols[1].w;
 
       doc.text(num(r.qty), xx + 6, y + 4, { width: cols[2].w - 12, align: "right" }); xx += cols[2].w;
       doc.text(money(r.unitPrice, currency), xx + 6, y + 4, { width: cols[3].w - 12, align: "right" }); xx += cols[3].w;
       doc.text(money((r.qty||0)*(r.unitPrice||0), currency), xx + 6, y + 4, { width: cols[4].w - 12, align: "right" });
 
-      doc.moveTo(doc.page.margins.left, y + rowH).lineTo(doc.page.margins.left + pageW, y + rowH)
-        .strokeColor("#e5e7eb").lineWidth(0.5).stroke();
+      doc.moveTo(doc.page.margins.left, y + rowH).lineTo(doc.page.margins.left + pageW, y + rowH).strokeColor("#e5e7eb").lineWidth(0.5).stroke();
       y += rowH;
     });
 
     // Totals
-    const totalsW = 260, totalsX = doc.page.margins.left + pageW - totalsW, totalsY = y + 8;
-    doc.roundedRect(totalsX, totalsY, totalsW, 46, 10).stroke("#e5e7eb");
-    doc.font("Helvetica").fontSize(10).fillColor("#111")
-      .text("Subtotal", totalsX + 12, totalsY + 12, { width: 120, align: "right" });
-    doc.font("Helvetica-Bold").fontSize(11)
-      .text(money(total, currency), totalsX + 136, totalsY + 10, { width: totalsW - 148, align: "right" });
+    const totalsW = 240, totalsX = doc.page.margins.left + pageW - totalsW, totalsY = y + 8;
+    doc.rect(totalsX, totalsY, totalsW, 40).stroke("#e5e7eb");
+    doc.font("Helvetica").fontSize(10).fillColor("#111").text("Subtotal", totalsX + 10, totalsY + 10, { width: 110, align: "right" });
+    doc.font("Helvetica-Bold").fontSize(11).text(money(total, currency), totalsX + 122, totalsY + 8, { width: totalsW - 132, align: "right" });
 
     // Declaration + firma
-    doc.moveDown(1.2);
+    doc.moveDown(1);
     doc.font("Helvetica").fontSize(9).fillColor("#374151")
       .text(`Declaration: This ${title.toLowerCase()} is issued for customs purposes only and does not constitute a tax invoice. The values shown are intended solely for determining customs value in accordance with applicable regulations.`);
 
-    doc.moveDown(0.6);
+    doc.moveDown(0.5);
     const sigY = doc.y + 6;
-    doc.font("Helvetica").fontSize(10).fillColor("#111")
-      .text(`Place & date: ${sender.city}, ${payload.shipment.issueDate}`);
-    const sBoxW = 200, sBoxH = 62, sBoxX = doc.page.margins.left + pageW - sBoxW;
-    // label + box firma
-    doc.font("Helvetica").fontSize(10).fillColor("#374151").text("Signature", sBoxX, sigY - 14);
-    doc.dash(3, { space: 3 }); doc.roundedRect(sBoxX, sigY, sBoxW, sBoxH, 8).stroke("#d1d5db"); doc.undash();
+    doc.font("Helvetica").fontSize(10).fillColor("#111").text(`Place & date: ${sender.city}, ${payload.shipment.issueDate}`);
+    const sW = 200, sH = 58, sX = doc.page.margins.left + pageW - sW;
+    doc.font("Helvetica").fontSize(10).fillColor("#374151").text("Signature", sX, sigY - 14);
+    doc.dash(3, { space: 3 }); doc.rect(sX, sigY, sW, sH).stroke("#d1d5db"); doc.undash();
 
-    drawFooter();
     doc.end();
   } catch (e) {
     console.error("unified/render error", e);
@@ -263,32 +234,14 @@ export default async function handler(req, res) {
   }
 }
 
-/* -------- helpers (safe) -------- */
+/* -------- helpers -------- */
 function hr(doc, y) {
-  const yy = y ?? doc.y + 6;
+  const yy = y ?? doc.y + 10;
   const w  = doc.page.width - doc.page.margins.left - doc.page.margins.right;
-  doc.moveTo(doc.page.margins.left, yy).lineTo(doc.page.margins.left + w, yy)
-    .strokeColor("#e5e7eb").lineWidth(1).stroke();
+  doc.moveTo(doc.page.margins.left, yy).lineTo(doc.page.margins.left + w, yy).strokeColor("#e5e7eb").lineWidth(1).stroke();
 }
-function sectionTitle(doc, t) { doc.font("Helvetica-Bold").fontSize(10).fillColor("#374151").text(t.toUpperCase()); doc.moveDown(0.25); }
-function roundedStroke(doc, x, y, w, h, r, color="#e5e7eb", lw=1) {
-  doc.save(); doc.lineWidth(lw).strokeColor(color); doc.roundedRect(x, y, w, h, r).stroke(); doc.restore();
-}
-function cardSafe(doc, x, y, w, h, draw) { roundedStroke(doc, x, y, w, h, 10); doc.save(); doc.translate(x+10, y+8); draw(); doc.restore(); }
-function chipSafe(doc, text, x, y, bg="#f3f4f6", stroke="#e5e7eb") {
-  doc.font("Helvetica").fontSize(9);
-  const padX=6, padY=2;
-  const width = doc.widthOfString(text.toUpperCase()) + padX*2;
-  const height= doc.currentLineHeight() + padY*2;
-  // fill
-  doc.save(); doc.fillColor(bg); doc.roundedRect(x, y, width, height, 6).fill(); doc.restore();
-  // stroke
-  doc.save(); doc.strokeColor(stroke); doc.roundedRect(x, y, width, height, 6).stroke(); doc.restore();
-  // text
-  doc.fillColor("#374151").text(text.toUpperCase(), x + padX, y + padY);
-  doc.fillColor("#111");
-}
+function section(doc, t){ doc.font("Helvetica-Bold").fontSize(10).fillColor("#374151").text(t.toUpperCase()); doc.moveDown(0.25); }
 function fmtDate(d){ try{ const t=typeof d==="string"?new Date(d):d; return `${String(t.getDate()).padStart(2,"0")}-${String(t.getMonth()+1).padStart(2,"0")}-${t.getFullYear()}` }catch{ return "" } }
-function num(v){ const x = Number(v || 0); return Number.isFinite(x) ? String(x) : "0"; }
-function money(n, cur="EUR"){ try{ return new Intl.NumberFormat("en-GB",{style:"currency",currency:cur}).format(Number(n||0)); }catch{ return `€ ${Number(n||0).toFixed(2)}`; } }
-function makeDocNumber(type, id){ const pref = type==="commercial"?(process.env.DOCS_COMMERCIAL_PREFIX||"CI"):(process.env.DOCS_PROFORMA_PREFIX||"PF"); return `${pref}-${id}`; }
+function num(v){ const x=Number(v||0); return Number.isFinite(x)?String(x):"0"; }
+function money(n,cur="EUR"){ try{ return new Intl.NumberFormat("en-GB",{style:"currency",currency:cur}).format(Number(n||0)); }catch{ return `€ ${Number(n||0).toFixed(2)}`; } }
+function makeDocNumber(type,id){ const pref = type==="commercial"?(process.env.DOCS_COMMERCIAL_PREFIX||"CI"):(process.env.DOCS_PROFORMA_PREFIX||"PF"); return `${pref}-${id}`; }
