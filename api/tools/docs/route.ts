@@ -1,0 +1,196 @@
+export const runtime = 'edge';
+
+const html = String.raw/*html*/`
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Utility Documenti</title>
+  <link rel="icon" href="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/6859a72cac2c0604fbd192e3_favicon.ico" />
+
+  <style>
+    :root{
+      --bg:#0b1220;
+      --card:#0f172a;
+      --muted:#8ea0bd;
+      --text:#e7ecf5;
+      --accent:#ff9a1f;
+      --accent-2:#ffb54f;
+      --line:rgba(255,255,255,.08);
+      --shadow:0 10px 30px rgba(0,0,0,.35);
+      --radius:18px;
+      --radius-sm:12px;
+      --gap:14px;
+      --w:720px;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0; background:radial-gradient(1200px 600px at 20% -10%, #11213f 0%, rgba(17,33,63,0) 60%), var(--bg);
+      color:var(--text); font:16px/1.4 system-ui, Segoe UI, Inter, Roboto, sans-serif;
+      display:flex; align-items:flex-start; justify-content:center; padding:32px 16px 60px;
+    }
+
+    .wrap{ width:min(var(--w), 100%); }
+
+    .page-title{
+      font-size: clamp(26px, 3.2vw, 34px);
+      font-weight: 800;
+      letter-spacing:.2px;
+      margin: 6px 0 6px;
+    }
+    .page-sub{
+      color: var(--muted);
+      margin: 0 0 18px;
+      max-width: 60ch;
+    }
+
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,.01)) , var(--card);
+      border:1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 18px;
+      width: 100%;
+    }
+
+    .row{ display:grid; grid-template-columns: 1fr; gap: var(--gap); }
+    .field{ display:flex; flex-direction:column; gap:8px; }
+    label{ color:var(--muted); font-weight:600; letter-spacing:.2px; }
+
+    input, select{
+      width:100%;
+      border:1px solid var(--line);
+      background:#0b1328;
+      color:var(--text);
+      border-radius: var(--radius-sm);
+      padding:12px 14px;
+      outline:none;
+      transition:border-color .15s ease, box-shadow .15s ease;
+    }
+    input:focus, select:focus{
+      border-color: rgba(255, 154, 31, .6);
+      box-shadow: 0 0 0 4px rgba(255, 154, 31, .15);
+    }
+
+    .actions{ margin-top:8px; display:flex; gap:10px; }
+    button{
+      appearance:none; border:0; cursor:pointer;
+      padding:14px 18px; width:100%;
+      border-radius: var(--radius-sm);
+      color:#111; font-weight:800; letter-spacing:.3px;
+      background: linear-gradient(180deg, var(--accent), var(--accent-2));
+      box-shadow: 0 6px 18px rgba(255,154,31,.25), inset 0 1px 0 rgba(255,255,255,.3);
+      transition: transform .05s ease, filter .15s ease, box-shadow .15s ease;
+    }
+    button:hover{ filter:brightness(1.02) }
+    button:active{ transform: translateY(1px) }
+    button[disabled]{ opacity:.55; cursor:not-allowed; filter:grayscale(.2); }
+
+    .note{
+      margin-top:12px; font-size:14px; color:var(--muted);
+      padding:10px 12px; border:1px dashed var(--line); border-radius:12px;
+    }
+
+    .log{
+      margin-top:12px; min-height:40px;
+      border-radius:12px; background:#0b1328; border:1px solid var(--line);
+      padding:10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      color:#cfe0ff; white-space:pre-wrap;
+    }
+
+    @media (min-width: 720px) {
+      .row.cols-2{ grid-template-columns: 1.2fr .8fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="page-title">Utility Documenti</div>
+    <div class="page-sub">Utilizza questo tool per creare <strong>Fattura proforma</strong>, <strong>Fattura commerciale</strong> e <strong>Dichiarazione libera esportazione</strong>.</div>
+
+    <div class="card">
+      <div class="row cols-2">
+        <div class="field">
+          <label for="idsped">ID Spedizione</label>
+          <input id="idsped" placeholder="es. SP-2025-09-04-2000" />
+        </div>
+        <div class="field">
+          <label for="tipo">Tipo documento</label>
+          <select id="tipo">
+            <option value="proforma">Proforma</option>
+            <option value="fattura">Fattura commerciale</option>
+            <option value="dle">Dichiarazione libera esportazione</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="go">Genera e allega</button>
+      </div>
+
+      <div class="note">Nota: l’URL firmato scade in ~10 minuti; l’allegato viene salvato su Airtable.</div>
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+
+  <script>
+    const $ = (s, r=document)=> r.querySelector(s);
+
+    const inpId  = $('#idsped');
+    const selTp  = $('#tipo');
+    const btn    = $('#go');
+    const log    = $('#log');
+
+    function say(t, ok){
+      log.textContent = t || '';
+      log.style.borderColor = ok ? 'rgba(0,180,110,.35)' : 'rgba(255,120,120,.35)';
+    }
+
+    function validate(){
+      const v = String(inpId.value || '').trim();
+      btn.disabled = !v;
+      return !!v;
+    }
+    inpId.addEventListener('input', validate);
+    validate();
+
+    btn.addEventListener('click', async ()=>{
+      if (!validate()) return;
+      const idSped = inpId.value.trim();
+      const type   = selTp.value;
+
+      btn.disabled = true; say('Generazione in corso…');
+
+      try{
+        const r = await fetch('/api/docs/unified/generate', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify({ idSpedizione: idSped, type })
+        });
+        const data = await r.json().catch(()=> ({}));
+        if (!r.ok || data.ok === false){
+          throw new Error(data.error || ('HTTP ' + r.status));
+        }
+        say('Documento generato e allegato ✓', true);
+      }catch(e){
+        console.error(e);
+        say('Errore: ' + (e?.message || 'operazione fallita'), false);
+      }finally{
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
+`;
+
+export async function GET() {
+  return new Response(html, {
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Cache-Control': 'no-store',
+    },
+  });
+}
