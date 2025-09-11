@@ -3,173 +3,229 @@ export const config = { runtime: 'nodejs' };
 
 import crypto from 'crypto';
 
-/* ───────────── ENV ───────────── */
-const TB   = process.env.TB_SPEDIZIONI || 'Spedizioni';
-const BASE = process.env.AIRTABLE_BASE_ID;
-const PAT  = process.env.AIRTABLE_PAT;
-const SIGN = process.env.DOCS_SIGNING_SECRET || '';           // opzionale per token HMAC
-const ADMIN = (process.env.DOCS_ADMIN_KEY || '').trim();      // opzionale
-const UI_REFERERS = (process.env.DOCS_UI_REFERERS || 'https://spst-logistics.vercel.app/api/tools/docs')
-  .split(',').map(s => s.trim()).filter(Boolean);
+const TB    = process.env.TB_SPEDIZIONI || 'Spedizioni';
+const BASE  = process.env.AIRTABLE_BASE_ID || '';
+const PAT   = process.env.AIRTABLE_PAT || '';
+const SIGN  = process.env.DOCS_SIGNING_SECRET || '';
+const ADMIN = (process.env.DOCS_ADMIN_KEY || '').trim();
 
-/* ───────────── UTILS ───────────── */
-const FIELD_BY_TYPE = {
-  proforma: 'Allegato Proforma',
-  fattura:  'Allegato Fattura',
-  invoice:  'Allegato Fattura', // alias
-  dle:      'Allegato DLE',
-  pl:       'Allegato PL',
-};
-
-function log(tag, info){ console.log(`[docs/unified/generate] ${tag}`, info ?? ''); }
-function err(tag, info){ console.error(`[docs/unified/generate] ${tag}`, info ?? ''); }
-
-function hmacToken(params){
-  if (!SIGN) return '';
-  const qs = new URLSearchParams(params).toString();
-  return crypto.createHmac('sha256', SIGN).update(qs).digest('hex');
+function parseCsv(v) {
+  return String(v || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
 }
-function isRecId(s){ return /^rec[0-9A-Za-z]{14}/.test(String(s||'')); }
 
-function readJson(req){
+function checkAuth(req) {
+  // 1) Header admin key
+  const hdrAdmin =
+    (req.headers['x-admin-key'] && String(req.headers['x-admin-key'])) ||
+    (req.headers.authorization && String(req.headers.authorization).replace(/^Bearer\s+/i, ''));
+
+  if (ADMIN && hdrAdmin && hdrAdmin === ADMIN) {
+    return { ok: true, how: 'header' };
+  }
+
+  // 2) Referer allowlist (default: la pagina utility su questo progetto)
+  const referer = String(req.headers.referer || '');
+  const allowed = parseCsv(process.env.DOCS_UI_REFERERS || 'https://spst-logistics.vercel.app/api/tools/docs');
+  const byRef = allowed.some(p => referer.startsWith(p));
+  if (byRef) return { ok: true, how: 'referer' };
+
+  // 3) Se non hai impostato ADMIN e non vuoi bloccare in locale, consenti tutto (opzionale)
+  if (!ADMIN && !process.env.DOCS_UI_REFERERS) {
+    return { ok: true, how: 'open' };
+  }
+  return { ok: false };
+}
+
+function logReq(req, note = '') {
+  const safeHeaders = {
+    host: req.headers.host,
+    origin: req.headers.origin,
+    referer: req.headers.referer,
+    'x-forwarded-for': req.headers['x-forwarded-for'],
+    'user-agent': req.headers['user-agent'],
+  };
+  console.log('[docs/unified/generate]', note, {
+    method: req.method,
+    headers: safeHeaders,
+    time: new Date().toISOString(),
+  });
+}
+
+function readJson(req) {
   return new Promise((resolve, reject) => {
-    let b=''; req.on('data', c => b+=c);
-    req.on('end', () => { try{ resolve(b?JSON.parse(b):{});} catch(e){ reject(e); } });
+    let b = '';
+    req.on('data', c => (b += c));
+    req.on('end', () => {
+      try { resolve(b ? JSON.parse(b) : {}); }
+      catch (e) { reject(e); }
+    });
     req.on('error', reject);
   });
 }
 
-async function findRecordIdByBusinessId(idSped){
-  const url = `https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}?` +
-    new URLSearchParams({
-      maxRecords: '1',
-      filterByFormula: `{ID Spedizione} = "${String(idSped).replace(/"/g,'\\"')}"`
-    });
-  log('FIND url', url);
-  const r = await fetch(url, { headers: { 'Authorization': `Bearer ${PAT}` } });
-  const j = await r.json().catch(()=> ({}));
-  if (!r.ok){
-    err('FIND not-ok', { status:r.status, body:j });
-    throw new Error(`Airtable find ${r.status}`);
-  }
+function hmac(params) {
+  const qs = new URLSearchParams(params).toString();
+  return crypto.createHmac('sha256', SIGN).update(qs).digest('hex');
+}
+
+async function findRecIdByIdSpedizione(idSped) {
+  // Cerca il record con {ID Spedizione} = '...'
+  const formula = `({ID Spedizione} = '${String(idSped).replace(/'/g, "\\'")}')`;
+  const qs = new URLSearchParams({ filterByFormula: formula, maxRecords: '1' });
+  const url = `https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}?${qs}`;
+  const r = await fetch(url, { headers: { Authorization: `Bearer ${PAT}` } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Airtable ${r.status}: ${JSON.stringify(j)}`);
   const rec = Array.isArray(j.records) && j.records[0];
-  return rec ? rec.id : null;
+  return rec?.id || null;
 }
 
-function checkAuth(req){
-  const hdrAdmin =
-    (req.headers['x-admin-key'] && String(req.headers['x-admin-key'])) ||
-    (req.headers.authorization && String(req.headers.authorization).replace(/^Bearer\s+/i, ''));
-  if (ADMIN && hdrAdmin && hdrAdmin === ADMIN) return { ok:true, how:'header' };
-
-  const ref = String(req.headers.referer || '');
-  if (UI_REFERERS.some(p => ref.startsWith(p))) return { ok:true, how:'referer' };
-
-  return { ok:false };
+function typeKey(t) {
+  const s = String(t || '').trim().toLowerCase();
+  if (s === 'invoice' || s === 'fattura') return 'fattura';
+  if (s === 'proforma' || s === 'pf') return 'proforma';
+  if (s === 'dle' || s.includes('dichiarazione')) return 'dle';
+  if (s === 'pl' || s.includes('packing')) return 'pl';
+  return 'proforma';
 }
 
-/* ───────────── HANDLER ───────────── */
-export default async function handler(req, res){
-  const safeHeaders = {
-    host: req.headers.host, origin: req.headers.origin, referer: req.headers.referer,
-    'user-agent': req.headers['user-agent']
+function candidatesFor(type) {
+  const byEnv = {
+    proforma: process.env.DOCS_FIELD_PROFORMA,
+    fattura:  process.env.DOCS_FIELD_FATTURA,
+    dle:      process.env.DOCS_FIELD_DLE,
+    pl:       process.env.DOCS_FIELD_PL,
   };
-  log('IN', { method:req.method, headers:safeHeaders, time:new Date().toISOString() });
+  const defEnv = process.env.DOCS_FIELD_DEFAULT;
 
-  if (req.method !== 'POST'){
+  // Alias comuni in base al README / mapping storico
+  const fallbacks = {
+    proforma: ['Allegato Proforma', 'Fattura Proforma', 'Proforma', 'Allegato 1', 'Allegato_1', 'Doc_Unified_URL'],
+    fattura:  ['Allegato Fattura', 'Fattura - Allegato Cliente', 'Allegato 2', 'Allegato_2', 'Doc_Unified_URL'],
+    dle:      ['Allegato DLE', 'Dichiarazione Esportazione', 'Allegato 3', 'Allegato_3', 'Doc_Unified_URL'],
+    pl:       ['Allegato PL', 'Packing List', 'Packing List - Allegato Cliente', 'Doc_Unified_URL'],
+  };
+
+  const arr = [
+    byEnv[type],        // override per tipo
+    defEnv,             // override generico
+    ...fallbacks[type], // alias noti
+  ].filter(Boolean);
+
+  // de-dup conservando l’ordine
+  return Array.from(new Set(arr));
+}
+
+async function patchAttachment(recId, field, url, filename) {
+  const endpoint = `https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}/${encodeURIComponent(recId)}`;
+  const body = JSON.stringify({ fields: { [field]: [{ url, filename }] } });
+  const r = await fetch(endpoint, {
+    method: 'PATCH',
+    headers: { Authorization: `Bearer ${PAT}`, 'Content-Type': 'application/json' },
+    body,
+  });
+  const text = await r.text();
+  if (!r.ok) {
+    const short = text.length > 400 ? text.slice(0, 400) + '…' : text;
+    return { ok: false, status: r.status, text: short };
+  }
+  return { ok: true };
+}
+
+export default async function handler(req, res) {
+  logReq(req, 'IN');
+
+  if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
-    return res.status(405).json({ ok:false, error:'Method Not Allowed' });
+    return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
   }
 
-  // Auth soft: header oppure referer whitelisted
+  if (!BASE || !PAT || !SIGN) {
+    return res.status(500).json({
+      ok: false,
+      error: 'Missing env: AIRTABLE_BASE_ID, AIRTABLE_PAT, DOCS_SIGNING_SECRET are required',
+    });
+  }
+
   const auth = checkAuth(req);
-  if (!auth.ok){
-    err('401 auth', safeHeaders);
+  if (!auth.ok) {
+    logReq(req, '401 Unauthorized');
     return res.status(401).json({
-      ok:false, error:'Unauthorized',
-      hint:'Aggiungi X-Admin-Key oppure apri dalla pagina utility in DOCS_UI_REFERERS'
+      ok: false,
+      error: 'Unauthorized',
+      hint: 'Add X-Admin-Key header or open from a URL in DOCS_UI_REFERERS.',
     });
   }
 
-  if (!BASE || !PAT){
-    err('env-missing', { BASE:!!BASE, PAT:!!PAT });
-    return res.status(500).json({ ok:false, error:'Server non configurato (AIRTABLE_BASE_ID/AIRTABLE_PAT)' });
-  }
+  try {
+    const body = await readJson(req).catch(() => ({}));
+    let { shipmentId, idSpedizione, type = 'proforma' } = body || {};
 
-  let body;
-  try{ body = await readJson(req); }catch(e){
-    err('bad-json', e);
-    return res.status(400).json({ ok:false, error:'Invalid JSON body' });
-  }
-
-  const rawIdSped = (body.idSpedizione || '').trim();
-  const rawSid    = (body.shipmentId   || '').trim();
-  const type      = (body.type || 'proforma').toLowerCase();
-  const field     = FIELD_BY_TYPE[type] || FIELD_BY_TYPE.proforma;
-
-  log('payload', { idSpedizione:rawIdSped, shipmentId:rawSid, type, field });
-
-  // 1) Risolvi il recordId (Airtable) a partire da idSpedizione o shipmentId=rec…
-  let recordId = null;
-  if (rawSid && isRecId(rawSid)) {
-    recordId = rawSid;
-  } else if (rawIdSped) {
-    try{
-      recordId = await findRecordIdByBusinessId(rawIdSped);
-    }catch(e){
-      err('find-error', e);
-      return res.status(502).json({ ok:false, error:'Airtable search failed' });
+    // Accetta anche shipmentId=ID Spedizione (se non è recXXXX)
+    const looksRec = typeof shipmentId === 'string' && shipmentId.startsWith('rec');
+    if (!looksRec && !idSpedizione && shipmentId) {
+      idSpedizione = shipmentId;
+      shipmentId = undefined;
     }
-    if (!recordId){
-      return res.status(404).json({ ok:false, error:`Nessun record trovato per ID Spedizione "${rawIdSped}"` });
-    }
-  } else {
-    return res.status(400).json({ ok:false, error:'Fornisci idSpedizione (ID Spedizione) o shipmentId (rec...)' });
-  }
 
-  try{
-    // 2) Costruisci URL del renderer
-    const exp   = String(Math.floor(Date.now()/1000) + 60*10); // 10 min
-    const params= { shipmentId: recordId, type, exp };
-    const token = SIGN ? hmacToken(params) : '';
-    const host  = req.headers['x-forwarded-host'] || req.headers.host;
+    if (!shipmentId && !idSpedizione) {
+      return res.status(400).json({ ok: false, error: 'Provide shipmentId (recXXXX) or idSpedizione' });
+    }
+
+    // Risolvi recId
+    let recId = shipmentId;
+    if (!recId) {
+      recId = await findRecIdByIdSpedizione(idSpedizione);
+      if (!recId) {
+        return res.status(422).json({
+          ok: false,
+          error: 'Airtable 422: il recordId è obbligatorio. Ho cercato tramite "ID Spedizione" ma non riesco a patchare.',
+          hint: 'Controlla che il campo "ID Spedizione" corrisponda esattamente; in alternativa passa shipmentId=recXXXX nel body.',
+        });
+      }
+    }
+
+    const kind = typeKey(type);
+
+    // Firma URL di render
+    const exp = String(Math.floor(Date.now() / 1000) + 60 * 10);
+    const params = { sid: recId, type: kind, exp };
+    const sig = hmac(params);
+
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
     const proto = req.headers['x-forwarded-proto'] || 'https';
-    const url   = `${proto}://${host}/api/docs/unified/render?` +
-      new URLSearchParams({ ...params, token }).toString();
+    const renderUrl = `${proto}://${host}/api/docs/unified/render?${new URLSearchParams({ ...params, sig })}`;
+    const filename = `${kind.toUpperCase()}-${recId}.pdf`;
 
-    log('render-url', { url, recordId, field });
+    // Scegli campo e patcha con tentativi multipli
+    const tried = [];
+    const candidates = candidatesFor(kind);
+    let lastErr = null;
 
-    // 3) PATCH **single-record** (niente array): /{table}/{recordId}
-    const patchUrl = `https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}/${recordId}`;
-    const bodyPatch = { fields: { [field]: [{ url, filename: `${rawIdSped || recordId}-${type}.pdf` }] } };
-
-    log('PATCH', { patchUrl, bodyPatch });
-
-    const r = await fetch(patchUrl, {
-      method:'PATCH',
-      headers:{
-        'Authorization': `Bearer ${PAT}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify(bodyPatch)
-    });
-
-    const txt = await r.text();
-    if (!r.ok){
-      err('airtable-patch', { status:r.status, txt });
-      return res.status(r.status).json({
-        ok:false,
-        error:`Airtable ${r.status}: ${txt}`,
-        hint: r.status === 422
-          ? 'Controlla che il campo esista ed accetti allegati; in alternativa prova con shipmentId=recXXXX'
-          : undefined
-      });
+    for (const field of candidates) {
+      const out = await patchAttachment(recId, field, renderUrl, filename);
+      if (out.ok) {
+        console.log('[docs/generate] OK', { field, url: renderUrl, recId, type: kind });
+        return res.status(200).json({ ok: true, url: renderUrl, field, recId, type: kind, via: auth.how });
+      }
+      tried.push({ field, status: out.status, error: out.text });
+      lastErr = out;
+      // Se è UNKNOWN_FIELD_NAME o INVALID_CELL_VALUE continua; in altri casi puoi anche continuare comunque
     }
 
-    log('OK', { recordId, field });
-    return res.status(200).json({ ok:true, recordId, field, url });
-  }catch(e){
-    err('fatal', e);
-    return res.status(500).json({ ok:false, error:String(e.message||e) });
+    // Tutti falliti
+    console.warn('[docs/generate] tutti i tentativi falliti', { recId, type: kind, tried });
+    return res.status(422).json({
+      ok: false,
+      error: lastErr ? `Airtable ${lastErr.status}: ${lastErr.text}` : 'Airtable 422',
+      tried,
+      hint: 'Verifica i nomi dei campi allegato o imposta DOCS_FIELD_* negli env.',
+    });
+  } catch (e) {
+    console.error('[docs/generate] error', e);
+    return res.status(500).json({ ok: false, error: String(e?.message || e) });
   }
 }
