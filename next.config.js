@@ -1,44 +1,18 @@
+// next.config.js
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  async rewrites() {
-    return [
-      { source: '/back-office/:path*', destination: '/api/back-office/:path*' },
-      { source: '/assets/esm/:path*', destination: '/api/back-office/:path*' }, // ← cattura vecchi URL
-      { source: '/quote/:slug', destination: '/api/quotes/view/:slug' },
-    ];
-  },
   async headers() {
     return [
       {
-        source: '/assets/esm/:path*',
+        source: '/back-office/:path*', // o '/api/back-office/:path*' se usi API routes
         headers: [
-          { key: 'Access-Control-Allow-Origin',  value: 'https://www.spst.it' },
+          { key: 'Access-Control-Allow-Origin', value: 'https://www.spst.it' },
           { key: 'Access-Control-Allow-Methods', value: 'GET, OPTIONS' },
           { key: 'Access-Control-Allow-Headers', value: '*' },
-          { key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' },
-        ],
-      },
-      {
-        source: '/back-office/:path*',
-        headers: [
-          { key: 'Access-Control-Allow-Origin',  value: 'https://www.spst.it' },
-          { key: 'Access-Control-Allow-Methods', value: 'GET, OPTIONS' },
-          { key: 'Access-Control-Allow-Headers', value: '*' },
-          { key: 'Cross-Origin-Resource-Policy', value: 'cross-origin' },
-        ],
-      },
-      {
-        source: '/api/:path*',
-        headers: [
-          { key: 'Access-Control-Allow-Origin',  value: 'https://www.spst.it' },
-          { key: 'Access-Control-Allow-Methods', value: 'GET,POST,OPTIONS' },
-          { key: 'Access-Control-Allow-Headers', value: 'Content-Type, Authorization, x-requested-with' },
-          { key: 'Access-Control-Max-Age',       value: '86400' },
+          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
         ],
       },
     ];
   },
-  reactStrictMode: true,
 };
 module.exports = nextConfig;
-next.config.js
