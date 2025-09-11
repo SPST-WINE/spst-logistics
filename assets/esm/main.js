@@ -14,7 +14,7 @@ import './back-office-tabs.js';
 const elSearch   = document.getElementById('search');
 const elOnlyOpen = document.getElementById('only-open');
 
-// Base API per tutte le route del proxy Vercel (notify, airtable, ecc.)
+// Base API per tutte le route del proxy Vercel (notify, airtable, docs, ecc.)
 const API_BASE =
   (AIRTABLE?.proxyBase || '')
     .replace(/\/airtable\/?$/i, '')  // es. https://spst-logistics.vercel.app/api
@@ -45,7 +45,13 @@ async function loadData(){
 
 function applyFilters(){
   const out = [...DATA].sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
-  renderList(out, { onUploadForDoc, onSaveTracking, onComplete, onSendMail });
+  renderList(out, {
+    onUploadForDoc,
+    onSaveTracking,
+    onComplete,
+    onSendMail,
+    onGenerateDoc,   // ← nuovo
+  });
 }
 
 /* ───────── helpers DOM ───────── */
@@ -69,7 +75,7 @@ function enableNotify(recId){
   }
 }
 
-/* ───────── actions ───────── */
+/* ───────── actions: upload allegati ───────── */
 async function onUploadForDoc(e, rec, docKey){
   try{
     const file = e?.target?.files && e.target.files[0];
@@ -96,6 +102,7 @@ async function onUploadForDoc(e, rec, docKey){
   }
 }
 
+/* ───────── actions: tracking ───────── */
 async function onSaveTracking(rec, carrier, tn){
   carrier = (carrier||'').trim();
   tn = (tn||'').trim();
@@ -118,6 +125,38 @@ async function onSaveTracking(rec, carrier, tn){
   }
 }
 
+/* ───────── actions: genera PDF e allega (server wrapper) ───────── */
+async function onGenerateDoc(rec, type = 'proforma'){
+  try{
+    const recId = rec._recId || rec.id;
+    if (!recId){ toast('Errore: id record mancante'); return; }
+
+    const url = `${API_BASE}/docs/unified/generate`;
+    const body = { shipmentId: recId, type };
+
+    if (DEBUG) console.log('[generateDoc] POST', url, body);
+    toast(`Generazione ${type.toUpperCase()}…`);
+
+    const r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(()=> ({}));
+    if (!r.ok || !j.ok){
+      throw new Error(j?.error || `HTTP ${r.status}`);
+    }
+
+    toast(`${type.toUpperCase()} generata e allegata ✓`);
+    // opzionale: refresh per vedere l'allegato nella card
+    await loadData();
+    return j;
+  }catch(err){
+    console.error('[onGenerateDoc] error', err);
+    toast(`Errore generazione ${type}`);
+  }
+}
+
 /* ───────── notify mail (Resend) ───────── */
 async function onSendMail(rec, typedEmail, opts = {}){
   try{
@@ -132,7 +171,7 @@ async function onSendMail(rec, typedEmail, opts = {}){
       toast('L’email digitata non coincide con quella del record');
       return;
     }
-    // nuova regola: si può inviare quando è presente il tracking
+    // regola: si può inviare quando è presente il tracking
     if (!(rec.tracking_carrier && rec.tracking_number)){
       toast('Salva prima corriere e numero tracking');
       return;
@@ -170,6 +209,7 @@ async function onSendMail(rec, typedEmail, opts = {}){
   }
 }
 
+/* ───────── evasione ───────── */
 async function onComplete(rec){
   const recId = rec._recId || rec.id;
   if (!recId){
@@ -195,4 +235,4 @@ if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
 /* ───────── bootstrap ───────── */
 loadData().catch(e=>console.warn('init loadData failed', e));
 
-export { onSendMail };
+export { onSendMail, onGenerateDoc };
