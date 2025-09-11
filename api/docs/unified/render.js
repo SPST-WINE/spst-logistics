@@ -1,97 +1,103 @@
 // api/docs/unified/render.js
 export const config = { runtime: 'nodejs' };
 
+import crypto from 'crypto';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
-import crypto from 'crypto';
 
-const TB   = process.env.TB_SPEDIZIONI || 'Spedizioni';
-const BASE = process.env.AIRTABLE_BASE_ID;
-const PAT  = process.env.AIRTABLE_PAT;
-const SIGN = process.env.DOCS_SIGNING_SECRET;
+// ── Env
+const SIGN = process.env.DOCS_SIGNING_SECRET || '';
 
-function verify(params) {
-  const { sid, type, exp, sig } = params;
+function log(note, extra = {}) {
+  console.log('[docs/unified/render]', note, { ...extra, t: new Date().toISOString() });
+}
+
+function bad(res, code, msg) {
+  log(`ERR ${code}`, { msg });
+  res.status(code).setHeader('Content-Type', 'text/plain; charset=utf-8');
+  return res.send(msg);
+}
+
+function okHeaders(res, filename = 'documento.pdf') {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+  res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=60');
+}
+
+function verify({ sid, type, exp, sig }) {
   if (!sid || !type || !exp || !sig) return false;
-  const now = Math.floor(Date.now()/1000);
-  if (Number(exp) < now - 5) return false;
-  const data = new URLSearchParams({ sid, type, exp }).toString();
-  const expected = crypto.createHmac('sha256', SIGN).update(data).digest('hex');
-  try{
-    return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
-  }catch{
-    return false;
-  }
+  const qs = new URLSearchParams({ sid, type, exp }).toString();
+  const expected = crypto.createHmac('sha256', SIGN).update(qs).digest('hex');
+  return expected === sig && Number(exp) >= Math.floor(Date.now() / 1000);
 }
 
-async function fetchRecord(id){
-  const r = await fetch(`https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}/${id}`, {
-    headers:{ 'Authorization':`Bearer ${PAT}` }
+export default async function handler(req, res) {
+  const { sid = '', type = 'proforma', exp = '', sig = '' } = req.query || {};
+  log('IN', {
+    method: req.method,
+    sid: String(sid).slice(0, 8) + '…',
+    type,
+    referer: req.headers.referer,
+    ua: req.headers['user-agent'],
   });
-  const txt = await r.text();
-  if (!r.ok) throw new Error(`Airtable ${r.status}: ${txt}`);
-  return JSON.parse(txt);
-}
 
-function templateHTML({ rec, type }){
-  const f = (k,d='') => rec.fields?.[k] ?? d;
-  return `<!doctype html>
-<html><head><meta charset="utf-8">
-<title>${type.toUpperCase()} • ${f('ID Spedizione', rec.id)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
-<style>
-  *{box-sizing:border-box} body{font-family:Inter,system-ui,Arial;margin:32px;color:#111}
-  h1{font-size:20px;margin:0 0 16px} .kv{display:grid;grid-template-columns:160px 1fr;gap:6px;margin:6px 0}
-  .tag{display:inline-block;padding:4px 8px;border:1px solid #ddd;border-radius:8px;font-size:12px}
-  table{width:100%;border-collapse:collapse;margin-top:12px} th,td{border:1px solid #ddd;padding:8px;font-size:12px}
-</style></head>
-<body>
-  <h1>${type.toUpperCase()}</h1>
-  <div class="kv"><div>ID spedizione</div><div>${f('ID Spedizione', rec.id)}</div></div>
-  <div class="kv"><div>Cliente</div><div>${f('Creato da email','—')}</div></div>
-  <div class="kv"><div>Incoterm</div><div><span class="tag">${f('Incoterm','—')}</span></div></div>
-  <div class="kv"><div>Ritiro</div><div>${f('Ritiro - Data','—')}</div></div>
-  <table><thead><tr><th>Descrizione</th><th>Q.tà</th><th>Peso</th></tr></thead>
-  <tbody><tr><td>Merce</td><td>1</td><td>${f('Peso reale tot', f('Peso tariffato tot','—'))}</td></tr></tbody></table>
-  <p style="margin-top:24px;color:#666;font-size:12px">Documento generato automaticamente.</p>
-</body></html>`;
-}
+  // HEAD: Airtable spesso fa HEAD prima di GET. Rispondiamo 200 con gli header giusti.
+  if (req.method === 'HEAD') {
+    if (!verify({ sid, type, exp, sig })) return bad(res, 401, 'Invalid signature (HEAD)');
+    okHeaders(res, `${sid}-${type}.pdf`);
+    return res.status(200).end();
+  }
 
-export default async function handler(req, res){
-  try{
-    const url = new URL(req.url, `http://${req.headers.host}`);
-    const p = Object.fromEntries(url.searchParams);
-    console.log('[docs/render] query', p);
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET,HEAD');
+    return bad(res, 405, 'Method Not Allowed');
+  }
 
-    if (!verify(p)) {
-      console.warn('[docs/render] signature check failed');
-      return res.status(403).send('Forbidden');
-    }
+  if (!verify({ sid, type, exp, sig })) return bad(res, 401, 'Invalid or expired signature');
 
-    console.log('[docs/render] fetching record', p.sid);
-    const rec  = await fetchRecord(p.sid);
-    const html = templateHTML({ rec, type: p.type });
+  // HTML minimal per provare l’attachment: sostituisci in futuro con il tuo template reale.
+  const html = `<!doctype html>
+  <html><head><meta charset="utf-8">
+    <style>
+      @page { size: A4; margin: 24mm 16mm; }
+      body{ font-family: -apple-system, Segoe UI, Inter, Roboto, Arial; color:#0b1220; }
+      h1{ font-size:24px; margin:0 0 8px; }
+      .muted{ color:#555; }
+      .box{ margin-top:18px; padding:12px; border:1px solid #ddd; border-radius:8px; }
+    </style>
+  </head>
+  <body>
+    <h1>Documento: ${String(type).toUpperCase()}</h1>
+    <div class="muted">Shipment (record id): <strong>${sid}</strong></div>
+    <div class="box">PDF generato automaticamente alle ${new Date().toLocaleString('it-IT')}</div>
+  </body></html>`;
 
-    console.log('[docs/render] launching chromium');
-    const browser = await puppeteer.launch({
+  let browser;
+  try {
+    const exePath = await chromium.executablePath();
+
+    browser = await puppeteer.launch({
       args: chromium.args,
-      executablePath: await chromium.executablePath(),
-      headless: true
+      defaultViewport: chromium.defaultViewport,
+      executablePath: exePath,
+      headless: chromium.headless,
     });
+
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdf = await page.pdf({ format: 'A4', printBackground:true,
-      margin:{ top:'12mm', bottom:'12mm', left:'12mm', right:'12mm' }
-    });
-    await browser.close();
 
-    res.setHeader('Content-Type','application/pdf');
-    res.setHeader('Cache-Control','public, max-age=60');
-    console.log('[docs/render] OK pdf bytes', pdf?.length);
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: { top: '16mm', right: '12mm', bottom: '16mm', left: '12mm' },
+    });
+
+    okHeaders(res, `${sid}-${type}.pdf`);
+    log('OK 200 PDF', { bytes: pdf.length });
     return res.status(200).send(Buffer.from(pdf));
-  }catch(e){
-    console.error('[docs/render] error', e);
-    return res.status(500).send('PDF error');
+  } catch (e) {
+    return bad(res, 500, 'Render failed: ' + (e?.message || e));
+  } finally {
+    try { await browser?.close(); } catch {}
   }
 }
