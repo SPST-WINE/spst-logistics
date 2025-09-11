@@ -1,4 +1,3 @@
-// api/back-office/[...path].js
 export const config = { runtime: 'nodejs' };
 
 import { readFile } from 'fs/promises';
@@ -50,8 +49,7 @@ export default async function handler(req, res){
     try {
       buf = await readFrom(BASE, safe);
     } catch {
-      // fallback se la copia non è finita nel bundle
-      buf = await readFrom(ALT, safe);
+      buf = await readFrom(ALT, safe); // fallback se la copia non è nel bundle
     }
     const type = TYPES[extname(safe)] || 'application/octet-stream';
     res.setHeader('Content-Type', type);

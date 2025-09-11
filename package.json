@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "version": "1.0.0",
-  "engines": { "node": "22.x" },
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "postinstall": "node scripts/sync-bo.js"
   },
