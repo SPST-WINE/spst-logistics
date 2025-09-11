@@ -5,10 +5,8 @@
   "version": "1.0.0",
   "engines": { "node": "22.x" },
   "dependencies": {
+    "pdfkit": "^0.15.0",
     "resend": "^3.2.0",
-    "puppeteer-core": "^22.12.0",
-    "@sparticuz/chromium": "^126.0.0",
-    "@vercel/blob": "^0.24.0",
-    "pdfkit": "^0.15.0"
+    "@vercel/blob": "^0.24.0"
   }
 }
