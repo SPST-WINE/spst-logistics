@@ -1,10 +1,13 @@
+// api/back-office/[...path].js
 export const config = { runtime: 'nodejs' };
 
 import { readFile } from 'fs/promises';
 import { resolve, normalize, extname } from 'path';
 
-const BASE = resolve(process.cwd(), 'public', 'back-office'); // primario
-const ALT  = resolve(process.cwd(), 'assets', 'esm');         // fallback
+// 1) sorgente primaria: tutto il BO sta qui
+const ALT  = resolve(process.cwd(), 'assets', 'esm');          // assets/esm/**/*
+// 2) fallback: eventuale copia in public
+const BASE = resolve(process.cwd(), 'public', 'back-office');  // public/back-office/**/*
 
 const TYPES = {
   '.js':  'text/javascript; charset=utf-8',
@@ -32,8 +35,8 @@ function setCORS(req, res) {
   return (req.method === 'OPTIONS');
 }
 
-async function readFrom(base, rel){
-  const file = resolve(base, rel);
+async function tryRead(root, rel){
+  const file = resolve(root, rel);
   return readFile(file);
 }
 
@@ -42,17 +45,19 @@ export default async function handler(req, res){
 
   const parts = Array.isArray(req.query.path) ? req.query.path : [req.query.path || ''];
   const reqPath = parts.join('/') || 'main.js';
+
+  // hardening: no path traversal
   const safe = normalize(reqPath).replace(/^(\.\.(\/|\\|$))+/g, '');
 
   try{
     let buf;
-    try { buf = await readFrom(BASE, safe); }
-    catch { buf = await readFrom(ALT, safe); } // fallback locale
+    try { buf = await tryRead(ALT,  safe); }     // 1) assets/esm/**
+    catch { buf = await tryRead(BASE, safe); }   // 2) fallback public/back-office/**
     const type = TYPES[extname(safe)] || 'application/octet-stream';
     res.setHeader('Content-Type', type);
     res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600');
     return res.status(200).send(buf);
-  }catch(e){
+  }catch{
     return res.status(404).send('Not Found');
   }
 }
