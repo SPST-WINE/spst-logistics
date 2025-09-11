@@ -32,17 +32,19 @@ function readJson(req){
 export default async function handler(req, res){
   if (req.method !== 'POST') return res.status(405).send('Method Not Allowed');
 
-  // Guard opzionale
   if (ADMIN && req.headers['x-admin-key'] !== ADMIN) {
+    console.warn('[docs/generate] 401 missing/bad admin key');
     return res.status(401).json({ ok:false, error:'Unauthorized' });
   }
 
   try{
     const { shipmentId, type='proforma' } = await readJson(req);
+    console.log('[docs/generate] body', { shipmentId, type });
+
     if (!shipmentId) return res.status(400).json({ ok:false, error:'shipmentId required' });
 
     const field = FIELD_BY_TYPE[type] || FIELD_BY_TYPE.proforma;
-    const exp = String(Math.floor(Date.now()/1000) + 60*10); // 10 minuti
+    const exp = String(Math.floor(Date.now()/1000) + 60*10);
     const params = { sid: shipmentId, type, exp };
     const sig = hmac(params);
 
@@ -50,27 +52,22 @@ export default async function handler(req, res){
     const proto = req.headers['x-forwarded-proto'] || 'https';
     const url = `${proto}://${host}/api/docs/unified/render?${new URLSearchParams({ ...params, sig })}`;
 
-    // Patch allegato su Airtable (Airtable scarica il PDF e lo internalizza)
     const body = {
-      records: [{
-        id: shipmentId,
-        fields: { [field]: [{ url, filename: `${shipmentId}-${type}.pdf` }] }
-      }]
+      records: [{ id: shipmentId, fields: { [field]: [{ url, filename: `${shipmentId}-${type}.pdf` }] } }]
     };
 
     const r = await fetch(`https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}`, {
       method:'PATCH',
-      headers:{
-        'Authorization':`Bearer ${PAT}`,
-        'Content-Type':'application/json'
-      },
+      headers:{ 'Authorization':`Bearer ${PAT}`, 'Content-Type':'application/json' },
       body: JSON.stringify(body)
     });
+    const txt = await r.text();
     if (!r.ok){
-      const t = await r.text().catch(()=> '');
-      throw new Error(`Airtable ${r.status}: ${t}`);
+      console.error('[docs/generate] Airtable error', r.status, txt);
+      throw new Error(`Airtable ${r.status}: ${txt}`);
     }
 
+    console.log('[docs/generate] OK', { field, url });
     return res.status(200).json({ ok:true, url, field });
   }catch(e){
     console.error('[docs/generate] error', e);
