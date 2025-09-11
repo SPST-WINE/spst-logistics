@@ -23,5 +23,10 @@
         { "key": "Access-Control-Max-Age", "value": "86400" }
       ]
     }
-  ]
+  ],
+  "functions": {
+    "api/back-office/[...path].js": {
+      "includeFiles": "public/back-office/**"
+    }
+  }
 }
