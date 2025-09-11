@@ -18,31 +18,34 @@ export default async function handler(req, res) {
     const { shipmentId, type = "proforma", token, debug, stage } = req.query;
     if (!token || token !== SECRET) return res.status(401).send("Unauthorized");
 
-    // Ping rapido
+    // ping rapido
     if (String(stage) === "ping") {
-      return res.status(200).json({ ok: true, stage: "ping", env: { node: process.version, hasBase: !!BASE_ID, hasPat: !!PAT, table: TB } });
+      return res.status(200).json({
+        ok: true, stage: "ping",
+        env: { node: process.version, hasBase: !!BASE_ID, hasPat: !!PAT, table: TB }
+      });
     }
 
     if (!shipmentId) return res.status(400).send("Missing shipmentId");
 
-    // Fetch Airtable
+    // fetch Airtable
     const rec = await fetch(
       `https://api.airtable.com/v0/${BASE_ID}/${encodeURIComponent(TB)}/${shipmentId}`,
       { headers: { Authorization: `Bearer ${PAT}` } }
     );
     if (!rec.ok) {
-      const txt = await rec.text().catch(()=>"");
+      const txt = await rec.text().catch(() => "");
       return res.status(rec.status).send(`Airtable fetch failed: ${txt}`);
     }
     const json = await rec.json();
     const f = json.fields || {};
-    const pick = (alts, d="") => {
+    const pick = (alts, d = "") => {
       const keys = Array.isArray(alts) ? alts : [alts];
-      const k = keys.find(k => f[k] != null && f[k] !== "");
+      const k = keys.find((k) => f[k] != null && f[k] !== "");
       return k ? f[k] : d;
     };
 
-    // Normalize
+    // normalize
     const mode      = type === "commercial" ? "commercial" : "proforma";
     const title     = mode === "commercial" ? "Commercial Invoice" : "Proforma Invoice";
     const watermark = mode === "commercial" ? "COMMERCIAL" : "PROFORMA";
@@ -70,10 +73,10 @@ export default async function handler(req, res) {
       phone: pick(["Telefono Destinatario Fattura","Consignee_Phone"], "")
     };
 
-    const pickupDate   = fmtDate(pick(["Ritiro - Data","Ritiro – Data","Data Ritiro","PickupDate"], ""));
-    const incoterm     = pick(["Incoterm"], "DAP");
-    const currency     = pick(["Valuta","Currency"], "EUR");
-    const shipmentIdStr= pick(["ID Spedizione","Shipment_ID"], json.id);
+    const pickupDate    = fmtDate(pick(["Ritiro - Data","Ritiro – Data","Data Ritiro","PickupDate"], ""));
+    const incoterm      = pick(["Incoterm"], "DAP");
+    const currency      = pick(["Valuta","Currency"], "EUR");
+    const shipmentIdStr = pick(["ID Spedizione","Shipment_ID"], json.id);
 
     let lines = [];
     const rawLines = pick(["Lines_JSON","Lista Colli Ordinata","Lista Colli"], "[]");
@@ -109,10 +112,14 @@ export default async function handler(req, res) {
 
     if (String(debug) === "1") return res.status(200).json({ ok:true, stage:"normalized", payload });
 
-    // ============= PDFKit render =============
+    // -------- PDFKit render --------
     const doc = new PDFDocument({ size: "A4", margins: { top: 52, left: 46, right: 46, bottom: 56 } });
     const chunks = [];
     doc.on("data", c => chunks.push(c));
+    doc.on("error", err => {
+      console.error("pdfkit-error", err);
+      try { res.status(500).send(`PDF error: ${err?.message || err}`); } catch {}
+    });
     doc.on("end", () => {
       const pdf = Buffer.concat(chunks);
       res.setHeader("Content-Type", "application/pdf");
@@ -123,13 +130,14 @@ export default async function handler(req, res) {
 
     const pageW = doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
-    // Footer con page number
+    // Page numbers (senza API non standard)
+    let pageNo = 1;
     const drawFooter = () => {
-      const y = doc.page.height - doc.page.margins.bottom + 26;
+      const y = doc.page.height - doc.page.margins.bottom + 24;
       doc.font("Helvetica").fontSize(9).fillColor("#9CA3AF")
-        .text(`Page ${doc.page.number}`, doc.page.margins.left, y, { width: pageW, align: "center" });
+        .text(`Page ${pageNo}`, doc.page.margins.left, y, { width: pageW, align: "center" });
     };
-    doc.on("pageAdded", () => drawFooter());
+    doc.on("pageAdded", () => { pageNo += 1; drawFooter(); });
 
     // Watermark
     doc.save()
@@ -146,9 +154,9 @@ export default async function handler(req, res) {
       .text(`${payload.sender.address} · VAT ${payload.sender.vat}`)
       .text(`${payload.sender.email} · ${payload.sender.phone}`);
 
-    // Doc meta (card a destra)
+    // Doc meta (card destra)
     const metaW = 280, metaH = 78, metaX = doc.page.margins.left + pageW - metaW, metaY = headerY;
-    roundRect(doc, metaX, metaY, metaW, metaH, 10).strokeColor("#e5e7eb").lineWidth(0.8).stroke();
+    doc.roundedRect(metaX, metaY, metaW, metaH, 10).stroke("#e5e7eb");
     doc.font("Helvetica-Bold").fontSize(11).fillColor("#0ea5e9")
       .text(payload.title.toUpperCase(), metaX + 12, metaY + 8, { width: metaW - 24, align: "right" });
     doc.font("Helvetica").fontSize(10).fillColor("#111")
@@ -163,7 +171,7 @@ export default async function handler(req, res) {
     const gridY = doc.y;
     const colW = (pageW - 12)/2;
 
-    roundCard(doc, doc.page.margins.left, gridY, colW, 92, () => {
+    card(doc, doc.page.margins.left, gridY, colW, 92, () => {
       sectionTitle(doc, "Consignee");
       doc.font("Helvetica-Bold").fontSize(11).fillColor("#111").text(payload.consignee.name);
       doc.font("Helvetica").fontSize(10).fillColor("#374151")
@@ -172,7 +180,7 @@ export default async function handler(req, res) {
         .text(`Email: ${payload.consignee.email || "-"} · Tel: ${payload.consignee.phone || "-"}`);
     });
 
-    roundCard(doc, doc.page.margins.left + colW + 12, gridY, colW, 72, () => {
+    card(doc, doc.page.margins.left + colW + 12, gridY, colW, 72, () => {
       sectionTitle(doc, "Shipment Details");
       doc.font("Helvetica").fontSize(10).fillColor("#374151")
         .text(`Pickup date: ${payload.shipment.pickupDate || "-"}`)
@@ -190,7 +198,6 @@ export default async function handler(req, res) {
       { key: "Unit Price",  w: 110, align: "right" },
       { key: "Amount",      w: 110, align: "right" }
     ];
-    // header bg
     doc.save().rect(doc.page.margins.left, thY, pageW, 24).fill("#f3f4f6").restore();
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#374151");
     let x = doc.page.margins.left;
@@ -202,27 +209,21 @@ export default async function handler(req, res) {
     // Rows
     let y = thY + 26;
     const rowH = 30;
-    payload.lines.forEach((r, i) => {
+    lines.forEach((r, i) => {
       if (y > doc.page.height - doc.page.margins.bottom - 110) {
-        // footer + nuova pagina
         drawFooter();
         doc.addPage();
         y = doc.page.margins.top;
-        // ripeti header tabella
+
+        // repeat header
         doc.save().rect(doc.page.margins.left, y, pageW, 24).fill("#f3f4f6").restore();
         doc.font("Helvetica-Bold").fontSize(10).fillColor("#374151");
         let xx = doc.page.margins.left;
-        cols.forEach(c => {
-          doc.text(c.key, xx + 6, y + 6, { width: c.w - 12, align: c.align });
-          xx += c.w;
-        });
+        cols.forEach(c => { doc.text(c.key, xx + 6, y + 6, { width: c.w - 12, align: c.align }); xx += c.w; });
         y += 26;
       }
-      // zebra
-      if (i % 2 === 1) {
-        doc.save().rect(doc.page.margins.left, y - 2, pageW, rowH).fill("#FAFAFA").restore();
-      }
-      // contenuti
+      if (i % 2 === 1) doc.save().rect(doc.page.margins.left, y - 2, pageW, rowH).fill("#FAFAFA").restore();
+
       let xx = doc.page.margins.left;
       doc.font("Helvetica").fontSize(10).fillColor("#111")
         .text(String(i+1), xx + 6, y + 4, { width: cols[0].w - 12, align: "left" });
@@ -236,20 +237,19 @@ export default async function handler(req, res) {
       doc.text(money(r.unitPrice, currency), xx + 6, y + 4, { width: cols[3].w - 12, align: "right" }); xx += cols[3].w;
       doc.text(money((r.qty||0)*(r.unitPrice||0), currency), xx + 6, y + 4, { width: cols[4].w - 12, align: "right" });
 
-      // riga divisoria leggera
       doc.moveTo(doc.page.margins.left, y + rowH).lineTo(doc.page.margins.left + pageW, y + rowH)
         .strokeColor("#e5e7eb").lineWidth(0.5).stroke();
 
       y += rowH;
     });
 
-    // Totali box a destra
+    // Totals (box a destra)
     const totalsW = 260, totalsX = doc.page.margins.left + pageW - totalsW, totalsY = y + 8;
-    roundRect(doc, totalsX, totalsY, totalsW, 46, 10).strokeColor("#e5e7eb").lineWidth(0.8).stroke();
+    doc.roundedRect(totalsX, totalsY, totalsW, 46, 10).stroke("#e5e7eb");
     doc.font("Helvetica").fontSize(10).fillColor("#111")
       .text("Subtotal", totalsX + 12, totalsY + 12, { width: 120, align: "right" });
     doc.font("Helvetica-Bold").fontSize(11)
-      .text(money(payload.total, currency), totalsX + 136, totalsY + 10, { width: totalsW - 148, align: "right" });
+      .text(money(total, currency), totalsX + 136, totalsY + 10, { width: totalsW - 148, align: "right" });
 
     // Declaration + firma
     doc.moveDown(1.2);
@@ -259,10 +259,10 @@ export default async function handler(req, res) {
     doc.moveDown(0.6);
     const sigY = doc.y + 6;
     doc.font("Helvetica").fontSize(10).fillColor("#111")
-      .text(`Place & date: ${payload.sender.city}, ${payload.shipment.issueDate}`);
+      .text(`Place & date: ${sender.city}, ${payload.shipment.issueDate}`);
     const sBoxW = 200, sBoxH = 62, sBoxX = doc.page.margins.left + pageW - sBoxW;
     doc.font("Helvetica").fontSize(10).fillColor("#374151").text("Signature", sBoxX, sigY - 14);
-    roundRect(doc, sBoxX, sigY, sBoxW, sBoxH, 8).dash(3, { space: 3 }).strokeColor("#d1d5db").lineWidth(1).stroke().undash();
+    doc.roundedRect(sBoxX, sigY, sBoxW, sBoxH, 8).dash(3, { space: 3 }).stroke("#d1d5db").undash();
 
     drawFooter();
     doc.end();
@@ -283,26 +283,18 @@ function sectionTitle(doc, t) {
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#374151").text(t.toUpperCase());
   doc.moveDown(0.25);
 }
-function roundRect(doc, x, y, w, h, r=10) {
-  doc.moveTo(x+r, y)
-     .lineTo(x+w-r, y).quadraticCurveTo(x+w, y, x+w, y+r)
-     .lineTo(x+w, y+h-r).quadraticCurveTo(x+w, y+h, x+w-r, y+h)
-     .lineTo(x+r, y+h).quadraticCurveTo(x, y+h, x, y+h-r)
-     .lineTo(x, y+r).quadraticCurveTo(x, y, x+r, y);
-  return doc;
-}
-function roundCard(doc, x, y, w, h, draw) {
-  roundRect(doc, x, y, w, h, 10).strokeColor("#e5e7eb").lineWidth(1).stroke();
+function card(doc, x, y, w, h, draw) {
+  doc.roundedRect(x, y, w, h, 10).stroke("#e5e7eb");
   doc.save(); doc.translate(x+10, y+8); draw(); doc.restore();
 }
 function chip(doc, text, x, y, bg="#f3f4f6") {
-  const padX = 6, padY = 2;
   doc.font("Helvetica").fontSize(9);
-  const w = doc.widthOfString(text) + padX*2;
-  const h = doc.currentLineHeight() + padY*2;
-  roundRect(doc, x, y, w, h, 6).fillAndStroke(bg, "#e5e7eb");
+  const padX = 6, padY = 2;
+  const width = doc.widthOfString(text.toUpperCase()) + padX*2;
+  const height = doc.currentLineHeight() + padY*2;
+  doc.save().roundedRect(x, y, width, height, 6).fill(bg).stroke("#e5e7eb").restore();
   doc.fillColor("#374151").text(text.toUpperCase(), x + padX, y + padY);
-  doc.fillColor("#111"); // reset
+  doc.fillColor("#111");
 }
 function fmtDate(d) {
   try {
