@@ -18,6 +18,7 @@ export default async function handler(req, res) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex, nofollow" />
   <title>Utility Documenti</title>
   <link rel="icon" href="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/6859a72cac2c0604fbd192e3_favicon.ico" />
   <style>
@@ -32,15 +33,15 @@ export default async function handler(req, res) {
       margin:0; color:var(--text);
       background:radial-gradient(1200px 600px at 20% -10%, #11213f 0%, rgba(17,33,63,0) 60%), var(--bg);
       font:16px/1.45 system-ui, Segoe UI, Inter, Roboto, sans-serif;
-      display:flex; align-items:flex-start; justify-content:center; padding:32px 16px 60px;
+      display:flex; align-items:flex-start; justify-content:center; padding:32px 16px 72px;
     }
     .wrap{width:min(var(--w),100%)}
     .page-title{font-size:clamp(26px,3.2vw,34px);font-weight:800;letter-spacing:.2px;margin:6px 0 6px}
-    .page-sub{color:var(--muted);margin:0 0 18px;max-width:70ch}
+    .page-sub{color:var(--muted);margin:0 0 18px;max-width:72ch}
     .card{
       background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,.01)),var(--card);
-      border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:18px; width:100%;
-      overflow:hidden;
+      border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow);
+      padding:18px; width:100%; overflow:hidden;
     }
     .row{display:grid;grid-template-columns:1fr;gap:var(--gap)}
     @media (min-width:760px){ .row.cols-2{grid-template-columns:1.2fr .8fr} }
@@ -65,6 +66,9 @@ export default async function handler(req, res) {
     .note{margin-top:12px;font-size:14px;color:var(--muted);padding:10px 12px;border:1px dashed var(--line);border-radius:12px}
     .log{margin-top:12px;min-height:40px;border-radius:12px;background:#0b1328;border:1px solid var(--line);
          padding:10px 12px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;color:#cfe0ff;white-space:pre-wrap}
+    .result{display:flex;gap:8px;align-items:center;margin-top:10px}
+    .result a{max-width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:#8ec8ff}
+    .ghost{background:#1a2338;color:#e7ecf5}
   </style>
 </head>
 <body>
@@ -88,19 +92,36 @@ export default async function handler(req, res) {
         </div>
       </div>
 
-      <div class="actions"><button id="go">Genera e allega</button></div>
+      <div class="actions">
+        <button id="go">Genera e allega</button>
+      </div>
+
       <div class="note">Nota: l’URL firmato scade in ~10 minuti; l’allegato viene salvato su Airtable.</div>
+
       <div id="log" class="log"></div>
+      <div id="result" class="result" style="display:none">
+        <a id="resultLink" href="#" target="_blank" rel="noopener">Apri PDF generato</a>
+        <button id="copy" class="ghost" style="width:auto;padding:8px 10px">Copia URL</button>
+      </div>
     </div>
   </div>
 
 <script>
   (function(){
     var $ = function(s, r){ return (r||document).querySelector(s); };
+    var q = new URLSearchParams(location.search);
+
     var inpId = $('#idsped');
     var selTp = $('#tipo');
     var btn   = $('#go');
     var log   = $('#log');
+    var result = $('#result');
+    var resultLink = $('#resultLink');
+    var copyBtn = $('#copy');
+
+    // Prefill da querystring
+    if (q.get('id'))   inpId.value = q.get('id');
+    if (q.get('type')) selTp.value = q.get('type');
 
     function say(t, ok){
       log.textContent = t || '';
@@ -115,7 +136,18 @@ export default async function handler(req, res) {
       return !!v;
     }
     inpId.addEventListener('input', validate);
+    inpId.addEventListener('keydown', function(e){ if (e.key === 'Enter') btn.click(); });
     validate();
+
+    copyBtn.addEventListener('click', function(){
+      var href = resultLink.getAttribute('href') || '';
+      if (!href) return;
+      navigator.clipboard.writeText(href).then(function(){
+        say('URL copiato negli appunti.\\n\\n' + href, true);
+      }).catch(function(){
+        say('Impossibile copiare negli appunti.', false);
+      });
+    });
 
     btn.addEventListener('click', function(){
       if (!validate()) return;
@@ -124,6 +156,8 @@ export default async function handler(req, res) {
       var type   = selTp.value;
 
       btn.disabled = true;
+      result.style.display = 'none';
+      resultLink.removeAttribute('href');
       say('Generazione in corso…');
 
       var headers = { 'Content-Type':'application/json' };
@@ -143,6 +177,13 @@ export default async function handler(req, res) {
             var msg = (json && json.error) ? json.error : ('HTTP ' + r.status + ' ' + r.statusText);
             say('Errore: ' + msg + '\\n\\nDettagli:\\n' + text.slice(0,800), false);
             return;
+          }
+
+          // Success: mostra URL firmato
+          var url = json && json.url ? json.url : '';
+          if (url) {
+            resultLink.href = url;
+            result.style.display = '';
           }
           say('Documento generato e allegato ✓\\n\\nDettagli:\\n' + (json ? pretty(json) : text), true);
         });
