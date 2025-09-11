@@ -1,6 +1,5 @@
 {
   "rewrites": [
-    { "source": "/back-office/:path*", "destination": "/assets/esm/:path*" },
     { "source": "/quote/:slug", "destination": "/api/quotes/view/:slug" }
   ],
   "headers": [
@@ -12,14 +11,6 @@
         { "key": "Access-Control-Allow-Headers", "value": "*" },
         { "key": "Cross-Origin-Resource-Policy", "value": "cross-origin" },
         { "key": "Cache-Control", "value": "public, max-age=60" }
-      ]
-    },
-    {
-      "source": "/assets/esm/:path*",
-      "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "https://www.spst.it" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
-        { "key": "Access-Control-Allow-Headers", "value": "*" }
       ]
     },
     {
