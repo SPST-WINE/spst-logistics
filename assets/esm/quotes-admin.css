@@ -1,0 +1,228 @@
+/* === Scope Preventivi ===================================================== */
+#quotes-admin{
+  --brand:#f7911e;
+  --input-bg:#15213b;
+  --muted:#97a0b3;
+  --text:#e7ecf5;
+}
+
+/* --- Testi / titoli ------------------------------------------------------ */
+#quotes-admin .qa-title{margin:0 0 2px;font-size:20px;font-weight:700}
+#quotes-admin .qa-breadcrumbs{margin:0 0 6px;font-size:12px;color:var(--muted)}
+#quotes-admin .qa-h{margin:0 0 10px;font-size:16px;font-weight:600}
+#quotes-admin .qa-sub{margin:0 0 8px;font-size:14px;font-weight:600}
+#quotes-admin .qa-label{display:block;font-size:12px;color:var(--muted);margin:6px 0}
+
+/* --- Layout --------------------------------------------------------------- */
+#quotes-admin .qa-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+
+#quotes-admin .qa-split{
+  display:grid;
+  grid-template-columns:1fr 360px; /* contenuto | riepilogo */
+  gap:16px;
+  align-items:start;
+}
+#quotes-admin .qa-sticky{
+  position:sticky;
+  top:calc(var(--site-nav-h) + var(--bb-h) + 16px);
+  max-width:360px;
+}
+
+#quotes-admin .qa-inner{padding:12px}
+#quotes-admin .qa-grid{display:grid;gap:14px}
+#quotes-admin .qa-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+#quotes-admin .qa-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:980px){
+  #quotes-admin .qa-cols-2,#quotes-admin .qa-cols-3{grid-template-columns:1fr}
+}
+
+#quotes-admin .qa-keyval{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center}
+#quotes-admin .qa-divider{height:1px;background:rgba(255,255,255,.08);margin:10px 0}
+
+/* --- Campi --------------------------------------------------------------- */
+#quotes-admin input,
+#quotes-admin select,
+#quotes-admin textarea{
+  width:100%;
+  padding:10px 12px;
+  border:1px solid rgba(255,255,255,.14);
+  border-radius:10px;
+  background:var(--input-bg);
+  color:var(--text);
+  outline:none;
+}
+#quotes-admin input:focus,
+#quotes-admin select:focus,
+#quotes-admin textarea:focus{
+  border-color:#94a3b8;
+  box-shadow:0 0 0 3px rgba(148,163,184,.25);
+}
+#quotes-admin input::placeholder,
+#quotes-admin textarea::placeholder{color:#b9c4d8;opacity:.9}
+
+/* --- Card --------------------------------------------------------------- */
+#quotes-admin .card{border-radius:16px}
+
+/* --- Toolbar & Bottoni --------------------------------------------------- */
+#quotes-admin .qa-toolbar{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+}
+/* margine sopra per le toolbar dentro card (es. sezione finale) */
+#quotes-admin section.card .qa-toolbar{ margin-top:12px; }
+
+/* bottoni uniformi (sia header che card) */
+#quotes-admin .qa-toolbar .btn,
+#quotes-admin .qa-header .btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  height:42px;
+  padding:0 16px;
+  border-radius:10px;
+  font-weight:600;
+  line-height:1;
+  font-size:14px;
+  box-sizing:border-box;
+}
+#quotes-admin .btn.ghost{
+  background:transparent;
+  border:1px solid rgba(255,255,255,.18);
+  color:var(--text);
+}
+#quotes-admin .btn.primary{
+  background:#f7911e;
+  border:1px solid #f7911e;
+  color:#1a1300;
+}
+
+/* --- Badge OPZIONE ------------------------------------------------------- */
+#quotes-admin .qa-option{
+  position:relative;
+  padding-top:36px;           /* più spazio sotto il badge */
+}
+#quotes-admin .qa-badge{
+  position:absolute;
+  top:10px;
+  left:16px;                  /* in alto a sinistra */
+  right:auto;
+  font-size:10px;             /* più piccolo */
+  padding:3px 8px;
+  border-radius:999px;
+  background:rgba(247,145,30,.15);
+  border:1px solid #f7911e;
+  color:#f7911e;
+}
+
+/* ===== Recommend toggle & card highlight ===== */
+.qa-opt-head{
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:10px;
+}
+
+.qa-recommend input{ position:absolute; opacity:0; pointer-events:none; }
+
+.qa-recommend .qa-recommend-ui{
+  display:inline-flex; align-items:center; gap:8px;
+  padding:8px 12px; border-radius:999px;
+  background:#0e152b; border:1px solid rgba(255,255,255,.12);
+  cursor:pointer; user-select:none;
+  transition:all .16s ease;
+  font-size:12px; font-weight:600; color:#cfd6e6;
+}
+
+.qa-recommend .qa-recommend-ui .dot{
+  width:10px; height:10px; border-radius:50%;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.55);
+  background:transparent; transition:all .16s ease;
+}
+
+.qa-recommend input:checked + .qa-recommend-ui{
+  border-color: rgba(79,124,255,.55);
+  box-shadow: inset 0 0 0 1px rgba(79,124,255,.35);
+  color:#e7ecf5;
+}
+
+.qa-recommend input:checked + .qa-recommend-ui .dot{
+  box-shadow:none; background:var(--accent);
+}
+
+/* Evidenzia l'intera card quando consigliata */
+.qa-option{
+  transition: box-shadow .18s ease, border-color .18s ease, transform .12s ease;
+}
+.qa-option.is-recommended{
+  border-color: rgba(79,124,255,.45);
+  box-shadow: inset 0 0 0 1px rgba(79,124,255,.35), 0 6px 20px rgba(0,0,0,.28);
+}
+.qa-option.is-recommended .qa-badge{
+  background: rgba(79,124,255,.18);
+  border-color: rgba(79,124,255,.45);
+  color:#dbe4ff;
+}
+
+/* --- Opzioni di spedizione: spaziatura pill consigliata --- */
+.qa-option .qa-opt-head{
+  display:flex;
+  align-items:flex-start;   /* allinea il gruppo in alto */
+  gap:10px;
+  margin-bottom:10px;       /* aria sotto l’intestazione */
+}
+
+.qa-option .qa-badge{
+  margin-top:2px;           /* micro-allineamento badge con radio */
+}
+
+.qa-option .qa-recommend{
+  margin-top:10px;          /* spinge giù il pill rispetto al badge */
+}
+
+@media (min-width: 1024px){
+  .qa-option .qa-recommend{ margin-top:12px; }  /* un filo più giù su desktop */
+}
+
+/* === Packages (Colli) ============================================= */
+:root{
+  /* col1 quantità, col2-4 lati, col5 peso, col6 azione */
+  --pkg-grid: 110px 1fr 1fr 1fr 120px 90px;
+}
+
+#qa-packages .pkg-head{
+  display:grid;
+  grid-template-columns:var(--pkg-grid);
+  gap:8px;
+  padding:6px 0;
+}
+#qa-packages .pkg-head > div{ text-align:left; }
+
+#qa-packages .pkg-row{
+  display:grid;
+  grid-template-columns:var(--pkg-grid);
+  gap:8px;
+  margin:6px 0;
+  align-items:center;
+}
+
+#qa-packages .pkg-row input{
+  height:36px;
+  border-radius:10px;
+}
+
+/* Bottone “Elimina” coerente con tema */
+#qa-packages .pkg-remove{
+  width:100%; height:36px; border-radius:10px;
+  border:1px solid rgba(255,255,255,.12);
+  background:rgba(255,255,255,.06);
+  color:#e7ecf5; font-weight:600; cursor:pointer;
+}
+#qa-packages .pkg-remove:hover{ background:rgba(255,255,255,.10); }
+
+/* Se Webflow o qualche widget inietta bottoni di remove “propri”, li nascondiamo */
+#qa-packages .pkg-row .w-remove,
+#qa-packages .pkg-row .remove,
+#qa-packages .pkg-row button[aria-label="Remove"]{
+  display:none !important;
+}
