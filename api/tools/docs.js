@@ -1,13 +1,19 @@
-// api/tools/docs.js  — Pages Router (Node runtime)
+// api/tools/docs.js — Vercel Function (Pages Router style)
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', 'GET');
-    return res.status(405).send('Method Not Allowed');
-  }
+  const now = new Date().toISOString();
+  try {
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', 'GET');
+      return res.status(405).send('Method Not Allowed');
+    }
 
-  console.log('[tools/docs] GET', new Date().toISOString());
+    console.log('[tools/docs] GET', now, {
+      host: req.headers.host,
+      referer: req.headers.referer,
+      ua: req.headers['user-agent'],
+    });
 
-  const html = String.raw/*html*/`<!doctype html>
+    const html = String.raw/*html*/`<!doctype html>
 <html lang="it">
 <head>
   <meta charset="utf-8" />
@@ -19,23 +25,25 @@ export default async function handler(req, res) {
       --bg:#0b1220; --card:#0f172a; --muted:#8ea0bd; --text:#e7ecf5;
       --accent:#ff9a1f; --accent2:#ffb54f; --line:rgba(255,255,255,.08);
       --shadow:0 10px 30px rgba(0,0,0,.35);
-      --r:18px; --rsm:12px; --gap:14px; --w:720px;
+      --r:18px; --rsm:12px; --gap:14px; --w:760px;
     }
     *{box-sizing:border-box} html,body{height:100%}
     body{
       margin:0; color:var(--text);
       background:radial-gradient(1200px 600px at 20% -10%, #11213f 0%, rgba(17,33,63,0) 60%), var(--bg);
-      font:16px/1.4 system-ui, Segoe UI, Inter, Roboto, sans-serif;
+      font:16px/1.45 system-ui, Segoe UI, Inter, Roboto, sans-serif;
       display:flex; align-items:flex-start; justify-content:center; padding:32px 16px 60px;
     }
     .wrap{width:min(var(--w),100%)}
     .page-title{font-size:clamp(26px,3.2vw,34px);font-weight:800;letter-spacing:.2px;margin:6px 0 6px}
-    .page-sub{color:var(--muted);margin:0 0 18px;max-width:60ch}
+    .page-sub{color:var(--muted);margin:0 0 18px;max-width:70ch}
     .card{
       background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,.01)),var(--card);
       border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:18px; width:100%;
+      overflow:hidden;
     }
     .row{display:grid;grid-template-columns:1fr;gap:var(--gap)}
+    @media (min-width:760px){ .row.cols-2{grid-template-columns:1.2fr .8fr} }
     .field{display:flex;flex-direction:column;gap:8px}
     label{color:var(--muted);font-weight:600;letter-spacing:.2px}
     input,select{
@@ -57,7 +65,6 @@ export default async function handler(req, res) {
     .note{margin-top:12px;font-size:14px;color:var(--muted);padding:10px 12px;border:1px dashed var(--line);border-radius:12px}
     .log{margin-top:12px;min-height:40px;border-radius:12px;background:#0b1328;border:1px solid var(--line);
          padding:10px 12px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;color:#cfe0ff;white-space:pre-wrap}
-    @media (min-width:720px){ .row.cols-2{grid-template-columns:1.2fr .8fr} }
   </style>
 </head>
 <body>
@@ -110,7 +117,6 @@ export default async function handler(req, res) {
 
     try{
       const headers = { 'Content-Type':'application/json' };
-      // Se in futuro vuoi forzare la via header puoi esporre una variabile globale __ADMIN_KEY dal server
       if (window.__ADMIN_KEY) headers['X-Admin-Key'] = window.__ADMIN_KEY;
 
       const r = await fetch('/api/docs/unified/generate', {
@@ -122,16 +128,15 @@ export default async function handler(req, res) {
       const text = await r.text();
       let json = null; try { json = JSON.parse(text) } catch {}
 
-      // Log esteso in console
       console.log('[UI] POST /api/docs/unified/generate =>', r.status, r.statusText, { bodySent: { idSpedizione: idSped, type }, responseText: text });
 
       if (!r.ok || (json && json.ok === false)) {
-        const msg = (json && json.error) ? json.error : `HTTP ${r.status} ${r.statusText}`;
-        say(`Errore: ${msg}\n\nDettagli:\n${text.slice(0,800)}`, false);
+        const msg = (json && json.error) ? json.error : \`HTTP \${r.status} \${r.statusText}\`;
+        say(\`Errore: \${msg}\\n\\nDettagli:\\n\${text.slice(0,800)}\`, false);
         return;
       }
 
-      say('Documento generato e allegato ✓\n\nDettagli:\n' + (json ? pretty(json) : text), true);
+      say('Documento generato e allegato ✓\\n\\nDettagli:\\n' + (json ? pretty(json) : text), true);
     }catch(e){
       console.error(e);
       say('Errore di rete: ' + (e?.message || 'operazione fallita'), false);
@@ -143,7 +148,11 @@ export default async function handler(req, res) {
 </body>
 </html>`;
 
-  res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store');
-  return res.status(200).send(html);
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).send(html);
+  } catch (err) {
+    console.error('[tools/docs] 500', now, err);
+    return res.status(500).send('Internal Server Error');
+  }
 }
