@@ -12,12 +12,7 @@
   ],
   "functions": {
     "api/back-office/[...path].js": {
-      "includeFiles": [
-        "public/back-office/**/*",
-        "assets/esm/**/*",
-        "back-office/base.css",
-        "back-office/quotes-admin.css"
-      ]
+      "includeFiles": "public/back-office/**/*"
     }
   }
 }

@@ -46,11 +46,8 @@ export default async function handler(req, res){
 
   try{
     let buf;
-    try {
-      buf = await readFrom(BASE, safe);
-    } catch {
-      buf = await readFrom(ALT, safe); // fallback se la copia non è nel bundle
-    }
+    try { buf = await readFrom(BASE, safe); }
+    catch { buf = await readFrom(ALT, safe); } // fallback locale
     const type = TYPES[extname(safe)] || 'application/octet-stream';
     res.setHeader('Content-Type', type);
     res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600');
