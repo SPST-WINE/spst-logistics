@@ -1,5 +1,6 @@
 {
   "rewrites": [
+    { "source": "/back-office/:path*", "destination": "/api/back-office/:path*" },
     { "source": "/quote/:slug", "destination": "/api/quotes/view/:slug" }
   ],
   "headers": [
