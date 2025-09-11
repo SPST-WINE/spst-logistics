@@ -87,38 +87,59 @@ export default async function handler(req, res) {
     </div>
   </div>
 
-  <script>
-    const $ = (s, r=document)=> r.querySelector(s);
-    const inpId=$('#idsped'), selTp=$('#tipo'), btn=$('#go'), log=$('#log');
+<script>
+  const $ = (s, r=document)=> r.querySelector(s);
+  const inpId=$('#idsped'), selTp=$('#tipo'), btn=$('#go'), log=$('#log');
 
-    function say(t, ok){
-      log.textContent=t||'';
-      log.style.borderColor = ok ? 'rgba(0,180,110,.35)' : 'rgba(255,120,120,.35)';
+  function say(t, ok){
+    log.textContent = t || '';
+    log.style.borderColor = ok ? 'rgba(0,180,110,.35)' : 'rgba(255,120,120,.35)';
+  }
+  function pretty(obj) {
+    try { return JSON.stringify(obj, null, 2) } catch { return String(obj) }
+  }
+  function validate(){ const v=(inpId.value||'').trim(); btn.disabled=!v; return !!v; }
+  inpId.addEventListener('input', validate); validate();
+
+  btn.addEventListener('click', async ()=>{
+    if (!validate()) return;
+    const idSped = inpId.value.trim();
+    const type   = selTp.value;
+    btn.disabled = true;
+    say('Generazione in corso…');
+
+    try{
+      const headers = { 'Content-Type':'application/json' };
+      // Se in futuro vuoi forzare la via header puoi esporre una variabile globale __ADMIN_KEY dal server
+      if (window.__ADMIN_KEY) headers['X-Admin-Key'] = window.__ADMIN_KEY;
+
+      const r = await fetch('/api/docs/unified/generate', {
+        method:'POST',
+        headers,
+        body: JSON.stringify({ idSpedizione: idSped, type })
+      });
+
+      const text = await r.text();
+      let json = null; try { json = JSON.parse(text) } catch {}
+
+      // Log esteso in console
+      console.log('[UI] POST /api/docs/unified/generate =>', r.status, r.statusText, { bodySent: { idSpedizione: idSped, type }, responseText: text });
+
+      if (!r.ok || (json && json.ok === false)) {
+        const msg = (json && json.error) ? json.error : `HTTP ${r.status} ${r.statusText}`;
+        say(`Errore: ${msg}\n\nDettagli:\n${text.slice(0,800)}`, false);
+        return;
+      }
+
+      say('Documento generato e allegato ✓\n\nDettagli:\n' + (json ? pretty(json) : text), true);
+    }catch(e){
+      console.error(e);
+      say('Errore di rete: ' + (e?.message || 'operazione fallita'), false);
+    }finally{
+      btn.disabled = false;
     }
-    function validate(){ const v=(inpId.value||'').trim(); btn.disabled=!v; return !!v; }
-    inpId.addEventListener('input', validate); validate();
-
-    btn.addEventListener('click', async ()=>{
-      if (!validate()) return;
-      const idSped = inpId.value.trim();
-      const type   = selTp.value;
-      btn.disabled=true; say('Generazione in corso…');
-
-      try{
-        const r = await fetch('/api/docs/unified/generate', {
-          method:'POST',
-          headers:{ 'Content-Type':'application/json' },
-          body: JSON.stringify({ idSpedizione: idSped, type })
-        });
-        const data = await r.json().catch(()=> ({}));
-        if (!r.ok || data.ok === false) throw new Error(data.error || ('HTTP '+r.status));
-        say('Documento generato e allegato ✓', true);
-      }catch(e){
-        console.error(e);
-        say('Errore: ' + (e?.message || 'operazione fallita'), false);
-      }finally{ btn.disabled=false; }
-    });
-  </script>
+  });
+</script>
 </body>
 </html>`;
 
