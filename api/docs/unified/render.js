@@ -1,115 +1,128 @@
 // api/docs/unified/render.js
 export const config = { runtime: 'nodejs' };
 
+import crypto from 'crypto';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
-import crypto from 'crypto';
 
-function signHmac({ sid, type, exp }, secret) {
-  // Ordine *fisso*: sid, type, exp  → deve combaciare con /generate
-  const qs = new URLSearchParams([
-    ['sid', sid],
-    ['type', type],
-    ['exp', String(exp)],
-  ]).toString();
+// ——— utils ———
+function hmac(params, secret) {
+  const qs = new URLSearchParams(params).toString();
   return crypto.createHmac('sha256', secret).update(qs).digest('hex');
+}
+function nowSec() { return Math.floor(Date.now() / 1000); }
+function j(res, code, obj) {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  return res.status(code).send(JSON.stringify(obj));
 }
 
 export default async function handler(req, res) {
-  if (req.method !== 'GET') {
-    res.setHeader('Allow', 'GET');
-    return res.status(405).send('Method Not Allowed');
-  }
-
-  const q = req.query || {};
-  const sid  = Array.isArray(q.sid)  ? q.sid[0]  : (q.sid  || '');
-  const type = Array.isArray(q.type) ? q.type[0] : (q.type || 'proforma');
-  const exp  = Number(Array.isArray(q.exp) ? q.exp[0] : (q.exp || ''));
-  const sig  = Array.isArray(q.sig)  ? q.sig[0]  : (q.sig  || '');
-
-  const secret = process.env.DOCS_SIGNING_SECRET || '';
-  const now = Math.floor(Date.now() / 1000);
-
-  // LOG INIZIALE
-  console.log('[render] IN', {
-    sid, type, exp, now,
-    sigPrefix: (sig || '').slice(0, 12) + '…',
-    secretLen: secret ? String(secret).length : 0,
-    host: req.headers.host,
-  });
-
-  // VALIDAZIONI
-  if (!secret) {
-    console.error('[render] Missing DOCS_SIGNING_SECRET');
-    return res.status(500).json({ ok:false, error:'Server misconfigured', details:'DOCS_SIGNING_SECRET missing' });
-  }
-  if (!sid || !exp || !sig) {
-    console.warn('[render] Missing params', { hasSid: !!sid, hasExp: !!exp, hasSig: !!sig });
-    return res.status(401).json({ ok:false, error:'Unauthorized', details:'Missing sid/exp/sig' });
-  }
-  if (!Number.isFinite(exp) || exp < now) {
-    console.warn('[render] Link expired', { exp, now });
-    return res.status(401).json({ ok:false, error:'Unauthorized', details:'Expired link', exp, now });
-  }
-
-  const expected = signHmac({ sid, type, exp }, secret);
-  if (expected !== sig) {
-    console.warn('[render] Bad signature', {
-      expectedPrefix: expected.slice(0, 12) + '…',
-      gotPrefix:      (sig || '').slice(0, 12) + '…',
-      sid, type, exp
-    });
-    return res.status(401).json({
-      ok:false, error:'Unauthorized', details:'Bad signature',
-      expectedPrefix: expected.slice(0, 12) + '…',
-      gotPrefix: (sig || '').slice(0, 12) + '…'
-    });
-  }
+  const t0 = Date.now();
+  const { sid = '', type = 'proforma', exp = '0', sig = '', html, diag } = req.query || {};
 
   try {
-    // HTML *segnaposto* (sostituisci con il template reale)
-    const title =
-      type === 'fattura' ? 'FATTURA COMMERCIALE' :
-      type === 'dle'     ? 'DICHIARAZIONE LIBERA ESPORTAZIONE' :
-                           'FATTURA PROFORMA';
+    // 1) Validazione firma
+    const SECRET = process.env.DOCS_SIGNING_SECRET || process.env.DOCS_SIGNING_SECRET_UNIFIED || '';
+    if (!SECRET) return j(res, 500, { ok: false, error: 'Missing signing secret' });
 
-    const html = `
-      <html><head>
-        <meta charset="utf-8" />
-        <style>
-          body{ font-family: -apple-system, Segoe UI, Roboto, Inter, sans-serif; margin:36px; font-size:12pt; }
-          h1{ font-size:20pt; margin:0 0 10px }
-          .muted{ color:#666; font-size:10pt; margin-bottom:24px }
-          .box{ border:1px solid #ddd; padding:12px; border-radius:8px; }
-        </style>
-      </head><body>
-        <h1>${title}</h1>
-        <div class="muted">ID Spedizione: <strong>${sid}</strong></div>
-        <div class="box">
-          PDF dimostrativo generato dal render endpoint.
-        </div>
-      </body></html>`;
+    const params = { sid, type, exp: String(exp) };
+    const expected = hmac(params, SECRET);
+    if (!sid || !sig || sig !== expected) {
+      console.warn('[render] 401 bad-signature', { sid, type, exp, sigPrefix: String(sig).slice(0,10) });
+      return j(res, 401, { ok: false, error: 'Unauthorized' });
+    }
+    if (Number(exp) <= nowSec()) {
+      console.warn('[render] 410 expired', { sid, exp });
+      return j(res, 410, { ok: false, error: 'Link expired' });
+    }
+
+    // 2) Diag opzionale
+    if (diag) {
+      return j(res, 200, {
+        ok: true,
+        diag: {
+          node: process.version,
+          vercel: !!process.env.VERCEL,
+          region: process.env.VERCEL_REGION || '',
+          chromiumVersion: chromium.version,
+          headless: chromium.headless,
+          time: new Date().toISOString(),
+          query: { sid, type, exp, sig },
+        },
+      });
+    }
+
+    // 3) HTML di test (qui poi metteremo il template vero)
+    const htmlDoc = `<!doctype html>
+<html><head>
+  <meta charset="utf-8" />
+  <title>${type.toUpperCase()} – ${sid}</title>
+  <style>
+    body{ font-family: system-ui, -apple-system, Segoe UI, Inter, Roboto, sans-serif; margin:28px; }
+    h1{ margin:0 0 10px; }
+    .muted{ color:#666 }
+    table{ width:100%; border-collapse:collapse; margin-top:18px }
+    td,th{ border:1px solid #ddd; padding:8px; }
+  </style>
+</head>
+<body>
+  <h1>${type === 'fattura' ? 'Fattura commerciale' : type === 'dle' ? 'Dichiarazione libera esportazione' : 'Fattura proforma'}</h1>
+  <div class="muted">ID Spedizione: <strong>${sid}</strong></div>
+  <div class="muted">Generato: ${new Date().toLocaleString('it-IT')}</div>
+  <table>
+    <tr><th>Voce</th><th>Valore</th></tr>
+    <tr><td>Tipo</td><td>${type}</td></tr>
+    <tr><td>Nota</td><td>Template di prova: se lo vedi, la pipeline PDF funziona ✔︎</td></tr>
+  </table>
+</body></html>`;
+
+    // Se chiami con ?html=1 vedi l'HTML invece di un PDF (debug)
+    if (html === '1') {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      return res.status(200).send(htmlDoc);
+    }
+
+    // 4) Avvio Chromium (Sparticuz) + Puppeteer
+    console.log('[render] launching chromium…');
+    const executablePath = await chromium.executablePath();
 
     const browser = await puppeteer.launch({
       args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
+      defaultViewport: { width: 1200, height: 1600, deviceScaleFactor: 2 },
+      executablePath,
       headless: chromium.headless,
+      ignoreHTTPSErrors: true,
     });
 
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdf = await page.pdf({ format: 'A4', printBackground: true });
-    await browser.close();
+    try {
+      const page = await browser.newPage();
+      await page.setContent(htmlDoc, { waitUntil: ['domcontentloaded', 'networkidle0'] });
+      await page.emulateMediaType('screen');
 
-    console.log('[render] OK send pdf', { bytes: pdf.length });
+      const pdf = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '14mm', bottom: '16mm', left: '12mm', right: '12mm' },
+      });
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${sid}-${type}.pdf"`);
-    res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).send(pdf);
-  } catch (e) {
-    console.error('[render] ERROR', e);
-    return res.status(500).json({ ok:false, error:'Render error', details:String(e?.message || e) });
+      const filename = `${sid}-${type}.pdf`;
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
+
+      console.log('[render] OK pdf bytes=', pdf?.length, 'ms=', Date.now() - t0);
+      return res.status(200).send(Buffer.from(pdf));
+    } finally {
+      // chiudi il browser SEMPRE
+      try { await (await (globalThis.__br || Promise.resolve(null)))?.close?.(); } catch {}
+      try { await browser.close(); } catch {}
+    }
+  } catch (err) {
+    console.error('[render] 500', err);
+    return j(res, 500, {
+      ok: false,
+      error: 'Render error',
+      details: String(err?.message || err),
+    });
   }
 }
