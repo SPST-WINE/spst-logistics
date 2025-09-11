@@ -1,5 +1,6 @@
 // api/back-office/[...path].js
-// Serve gli asset del Back Office: JS da /assets/esm e CSS da /back-office
+// Espone gli asset del Back Office: legge prima da /public/back-office (bundle incluso),
+// poi fallback ai percorsi sorgente (back-office/*.css e assets/esm/*).
 
 import { promises as fs } from "fs";
 import path from "path";
@@ -8,7 +9,7 @@ export const config = { runtime: "nodejs" };
 
 const ROOT = process.cwd();
 
-function contentType(p) {
+function ctype(p) {
   const ext = path.extname(p).toLowerCase();
   if (ext === ".js" || ext === ".mjs") return "application/javascript; charset=utf-8";
   if (ext === ".css") return "text/css; charset=utf-8";
@@ -28,34 +29,33 @@ export default async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(204).end();
 
   try {
-    // Estrai il path richiesto direttamente da req.url
     const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-    let rel = url.pathname.replace(/^\/api\/back-office\/?/, ""); // es. "main.js"
-    rel = decodeURIComponent(rel).replace(/^\/+/, ""); // no leading slash
+    let rel = url.pathname.replace(/^\/api\/back-office\/?/, "");
+    rel = decodeURIComponent(rel).replace(/^\/+/, ""); // es. "main.js"
 
-    // Hardening: niente traversal
     if (!rel || rel.includes("..")) return res.status(400).send("Bad Request");
 
-    // Ordine di ricerca:
-    // 1) CSS tenuti in /back-office (base.css, quotes-admin.css)
-    // 2) tutto l'ESM in /assets/esm
-    const candidates = [
-      path.join(ROOT, "back-office", rel),
-      path.join(ROOT, "assets", "esm", rel),
-    ];
+    // 1) PRIMA cerca nell'output generato dal postinstall (che bundle-izziamo con includeFiles)
+    const fromPublic = path.join(ROOT, "public", "back-office", rel);
 
-    let filePath = null;
+    // 2) Fallback: sorgenti (utile in locale)
+    const fromCssSrc = path.join(ROOT, "back-office", rel);       // base.css, quotes-admin.css
+    const fromEsmSrc = path.join(ROOT, "assets", "esm", rel);     // main.js, ecc.
+
+    const candidates = [fromPublic, fromCssSrc, fromEsmSrc];
+
+    let found = null;
     for (const p of candidates) {
       try {
         const st = await fs.stat(p);
-        if (st.isFile()) { filePath = p; break; }
+        if (st.isFile()) { found = p; break; }
       } catch {}
     }
 
-    if (!filePath) return res.status(404).send("Not Found");
+    if (!found) return res.status(404).send("Not Found");
 
-    const buf = await fs.readFile(filePath);
-    res.setHeader("Content-Type", contentType(filePath));
+    const buf = await fs.readFile(found);
+    res.setHeader("Content-Type", ctype(found));
     res.setHeader("Cache-Control", "public, max-age=300");
     return res.status(200).end(buf);
   } catch (e) {
