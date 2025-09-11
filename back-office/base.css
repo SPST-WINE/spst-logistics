@@ -1,5 +1,5 @@
 /* ======================================================================
-   SPST Back Office — base styles (pulito)
+   SPST Back Office — base styles (final)
    ====================================================================== */
 
 /* ---- Vars / palette -------------------------------------------------- */
@@ -15,9 +15,9 @@
   --ok:#1fbf75;
   --warn:#ffb020;
   --err:#ff5a65;
-  --brand-orange: #f7911e;
-  --spst-orange:#f7911e;            /* brand */
-  --elev-bg: rgba(19,22,30,.72);     /* header translucido */
+  --brand-orange:#f7911e;
+  --spst-orange:#f7911e;
+  --elev-bg: rgba(19,22,30,.72);
 }
 
 /* ---- Reset ----------------------------------------------------------- */
@@ -40,8 +40,9 @@ body{
 }
 .brandbar .wrap{
   max-width:1100px; margin:0 auto; padding:10px 16px;
-  display:flex; align-items:center; gap:12px;
+  display:flex; align-items:center; gap:12px; justify-content:space-between;
 }
+.brand-left{ display:flex; align-items:center; gap:10px; }
 .brandbar .logo{ height:24px; width:auto; display:block }
 .brandbar .divider{ width:1px; height:22px; background:rgba(255,255,255,.12) }
 .brandbar .title{ font-weight:700; letter-spacing:.2px }
@@ -88,6 +89,8 @@ input[type="text"], select{
   border:1px solid rgba(255,255,255,.08);
   border-radius:12px; padding:12px 14px; outline:none; width:260px;
 }
+input::placeholder{ color:#8ea0c2; opacity:.9 }
+
 .chip{
   display:inline-flex; align-items:center; gap:8px;
   padding:10px 12px; border-radius:999px;
@@ -95,17 +98,34 @@ input[type="text"], select{
   cursor:pointer; user-select:none;
 }
 .chip input{ accent-color:var(--accent) }
-.btn{ background:var(--accent); color:#fff; padding:10px 14px; border-radius:12px; border:none; cursor:pointer; font-weight:600 }
+
+.btn{
+  background:var(--accent); color:#fff; padding:10px 14px;
+  border-radius:12px; border:none; cursor:pointer; font-weight:600
+}
 .btn.ghost{ background:transparent; border:1px solid rgba(255,255,255,.15) }
+
 .mini-btn{
   font-size:11px; padding:6px 10px; border-radius:8px;
   border:1px solid rgba(255,255,255,.18); background:transparent; color:var(--text); cursor:pointer;
 }
 .mini-btn:hover{ background:rgba(255,255,255,.06) }
+.mini-btn.primary{ background:#4d6fff; color:#fff; border:1px solid transparent; }
+.mini-btn.success{ background:rgba(31,191,117,.18); color:#8ff0c1; border-color:rgba(31,191,117,.35); }
+.mini-btn.warn{ background:rgba(255,176,32,.18); color:#ffd48a; border-color:rgba(255,176,32,.35); }
+.btn[disabled], .mini-btn[disabled]{ opacity:.55; cursor:not-allowed; filter:grayscale(.2) }
 
 /* ---- Cards / grid ---------------------------------------------------- */
 .grid{ display:grid; grid-template-columns:1fr; gap:12px; margin-top:12px }
-.card{ background:var(--card); border:1px solid rgba(255,255,255,.06); border-radius:16px; padding:16px }
+.card{
+  background: var(--card);
+  border-radius: 16px;
+  border: 1px solid rgba(255,255,255,.16);
+  box-shadow:
+    0 10px 28px rgba(0,0,0,.28),
+    inset 0 0 0 1px rgba(255,255,255,.06);
+  padding: 16px;
+}
 .card h3{ margin:0 0 8px 0; font-size:16px }
 .actions{ display:flex; gap:8px; margin-top:10px }
 
@@ -127,6 +147,13 @@ input[type="text"], select{
   border-radius:10px;
   letter-spacing:.02em;
 }
+/* variante “brand” */
+.id-chip--spst{
+  background: var(--brand-orange) !important;
+  color: #0b1020;
+  border-color: transparent;
+  font-weight: 700;
+}
 
 /* ---- Badges / small / helpers --------------------------------------- */
 .small{ font-size:12px; color:var(--muted) }
@@ -146,12 +173,23 @@ input[type="text"], select{
 /* ---- Documenti ------------------------------------------------------- */
 .docs{ display:flex; flex-wrap:wrap; gap:8px; margin-top:6px }
 .doc{
-  display:flex; align-items:center; gap:8px;
+  display:flex; flex-wrap:wrap; align-items:center; gap:8px;
   padding:8px 10px; border-radius:10px;
   border:1px dashed rgba(255,255,255,.12);
 }
-.doc.ok{ border-style:solid }
+.doc.ok{
+  border-style:solid; border-color:rgba(31,191,117,.55);
+  background:rgba(31,191,117,.12);
+}
+.doc.missing{
+  border-color:rgba(255,90,101,.55);
+  background:rgba(255,90,101,.12);
+}
 .doc a{ color:inherit; text-decoration:none }
+.doc .generate-doc{ /* bottoni genera */
+  /* usa .mini-btn di base; qui solo micro-tocco per spacing */
+  margin-left:0;
+}
 
 /* ---- Tabelle colli --------------------------------------------------- */
 table.colli{ width:100%; border-collapse:collapse; margin-top:6px }
@@ -161,6 +199,8 @@ table.colli th, table.colli td{
 }
 table.colli tbody tr:nth-child(odd){ background:rgba(255,255,255,.02) }
 table.colli td:last-child, table.colli th:last-child{ text-align:right }
+/* centra la colonna dimensioni */
+table.colli th:first-child, table.colli td:first-child{ text-align:center }
 
 /* ---- Label rules panel ---------------------------------------------- */
 .label-panel{
@@ -239,76 +279,16 @@ a.link-orange:hover{ opacity:.9 }
   100%{ box-shadow:0 0 0 14px rgba(79,124,255,0) }
 }
 
-.brandbar .wrap{ display:flex; align-items:center; justify-content:space-between; gap:12px; }
-.brand-left{ display:flex; align-items:center; gap:10px; }
-.brandbar .title{ font-weight:700; letter-spacing:.2px; }
-
-
-
-/* Rendi la topbar non fissa */
+/* Rendi la topbar non fissa (richiesto) */
 .bo-header{ position: static; backdrop-filter:none; background: transparent; border-bottom:none; }
-
-/* --- Chip ID arancione SPST --- */
-.id-chip{
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: .85rem;
-  padding: 4px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,.12);
-  background: #10131a;
-  letter-spacing: .02em;
-  display: inline-block;
-}
-
-/* Chip ID arancione */
-.id-chip--spst{
-  background: var(--brand-orange) !important;
-  color: #0b1020;          /* testo scuro per contrasto */
-  border-color: transparent;
-  font-weight: 700;
-}
-
-.card .title-line{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-.card .dest{ font-weight:600; opacity:.95; }
-
-/* Docs: verde/rosso ben visibili */
-.doc{ border:1px dashed rgba(255,255,255,.12); padding:8px 10px; border-radius:10px; }
-.doc.ok{ border-style:solid; border-color:rgba(31,191,117,.55); background:rgba(31,191,117,.12); }
-.doc.missing{ border-color:rgba(255,90,101,.55); background:rgba(255,90,101,.12); }
-
-/* Track row: pulsante finale sulla stessa riga */
-.track{
-  display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:10px;
-  padding:10px; border:1px solid rgba(255,255,255,.08); border-radius:12px; background:rgba(255,255,255,.02)
-}
-.track input[type="text"], .track select{width:auto; min-width:160px; padding:10px 12px}
-.track .link{margin-left:auto}
-
-
-/* Centra la colonna "Dim. (L×W×H cm)" */
-table.colli th:first-child,
-table.colli td:first-child{
-  text-align: center;
-}
-
-.card{
-  background: var(--card);
-  border-radius: 16px;
-  /* bordo un filo più chiaro + lieve ring interno per stacco */
-  border: 1px solid rgba(255,255,255,.16);
-  box-shadow:
-    0 10px 28px rgba(0,0,0,.28),       /* ombra esterna morbida */
-    inset 0 0 0 1px rgba(255,255,255,.06); /* “luce” interna sul bordo */
-  padding: 16px;
-}
 
 /* Pill stato import destinatario */
 .import-flag{
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;          /* più “longilinea” */
-  border-radius: 16px;        /* pill sottile, non cerchio */
+  padding: 4px 10px;
+  border-radius: 16px;
   font-weight: 600;
   font-size: 12px;
   line-height: 1;
@@ -321,7 +301,6 @@ table.colli td:first-child{
   background: currentColor;
   opacity: .9;
 }
-
 .import-flag.yes{
   background: rgba(31,191,117,.12);
   color: #8ff0c1;
@@ -333,7 +312,7 @@ table.colli td:first-child{
   border-color: rgba(255,90,101,.35);
 }
 
-/* Card completa documentazione */
+/* Card con documentazione completa */
 .card.ok-docs{
   border-color: rgba(31,191,117,.45) !important;
   box-shadow:
@@ -341,7 +320,7 @@ table.colli td:first-child{
     0 6px 24px rgba(31,191,117,.12);
 }
 
-/* Mail row */
+/* Mail row (coerente) */
 .mail-row{
   margin-top: 10px;
   padding: 10px 12px;
@@ -351,9 +330,7 @@ table.colli td:first-child{
 }
 .mail-row.disabled{ opacity:.55; pointer-events:none; }
 
-.mail-controls{
-  display:flex; align-items:center; gap:8px; margin-top:8px;
-}
+.mail-controls{ display:flex; align-items:center; gap:8px; margin-top:8px; }
 
 .mail-input{
   flex: 1 1 auto;
@@ -365,28 +342,16 @@ table.colli td:first-child{
   border-radius: 8px;
   outline: none;
 }
-.mail-input::placeholder{
-  color: #7d8aa8;          /* placeholder più chiaro e freddo */
-  opacity: .9;
-}
+.mail-input::placeholder{ color: #7d8aa8; opacity:.9; }
 .mail-input:focus{
   border-color: #4d6fff80;
   box-shadow: 0 0 0 3px #4d6fff22 inset;
 }
 
-.mini-btn.primary{
-  background: #4d6fff;
-  color: white;
-  border: 1px solid transparent;
-}
-.mini-btn.primary:hover{ filter: brightness(1.05); }
-
-/* Input coerente + placeholder evidente */
+/* Input di servizio */
 .nice-input {
-  width: 340px;
-  max-width: 100%;
-  height: 36px;
-  padding: 0 12px;
+  width: 340px; max-width: 100%;
+  height: 36px; padding: 0 12px;
   border-radius: 10px;
   border: 1px solid rgba(255,255,255,.15);
   background: rgba(255,255,255,.06);
@@ -399,11 +364,5 @@ table.colli td:first-child{
   background: rgba(255,255,255,.10);
   box-shadow: 0 0 0 3px rgba(247,145,30,.18);
 }
-.nice-input::placeholder {
-  color: #9fb2cc;         /* più chiaro del testo */
-  opacity: .9;
-  font-style: italic;     /* differenza visiva chiara */
-}
-.mail-row.disabled .nice-input { opacity: .6; cursor: not-allowed; }
-
-
+.nice-input::placeholder { color:#9fb2cc; opacity:.9; font-style:italic; }
+.mail-row.disabled .nice-input { opacity:.6; cursor:not-allowed; }
