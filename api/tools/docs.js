@@ -1,4 +1,4 @@
-// api/tools/docs.js — Vercel Function (Pages Router style)
+// api/tools/docs.js — Vercel Function (Pages Router)
 export default async function handler(req, res) {
   const now = new Date().toISOString();
   try {
@@ -95,55 +95,65 @@ export default async function handler(req, res) {
   </div>
 
 <script>
-  const $ = (s, r=document)=> r.querySelector(s);
-  const inpId=$('#idsped'), selTp=$('#tipo'), btn=$('#go'), log=$('#log');
+  (function(){
+    var $ = function(s, r){ return (r||document).querySelector(s); };
+    var inpId = $('#idsped');
+    var selTp = $('#tipo');
+    var btn   = $('#go');
+    var log   = $('#log');
 
-  function say(t, ok){
-    log.textContent = t || '';
-    log.style.borderColor = ok ? 'rgba(0,180,110,.35)' : 'rgba(255,120,120,.35)';
-  }
-  function pretty(obj) {
-    try { return JSON.stringify(obj, null, 2) } catch { return String(obj) }
-  }
-  function validate(){ const v=(inpId.value||'').trim(); btn.disabled=!v; return !!v; }
-  inpId.addEventListener('input', validate); validate();
+    function say(t, ok){
+      log.textContent = t || '';
+      log.style.borderColor = ok ? 'rgba(0,180,110,.35)' : 'rgba(255,120,120,.35)';
+    }
+    function pretty(obj) {
+      try { return JSON.stringify(obj, null, 2); } catch(e) { return String(obj); }
+    }
+    function validate(){
+      var v = (inpId.value || '').trim();
+      btn.disabled = !v;
+      return !!v;
+    }
+    inpId.addEventListener('input', validate);
+    validate();
 
-  btn.addEventListener('click', async ()=>{
-    if (!validate()) return;
-    const idSped = inpId.value.trim();
-    const type   = selTp.value;
-    btn.disabled = true;
-    say('Generazione in corso…');
+    btn.addEventListener('click', function(){
+      if (!validate()) return;
 
-    try{
-      const headers = { 'Content-Type':'application/json' };
+      var idSped = inpId.value.trim();
+      var type   = selTp.value;
+
+      btn.disabled = true;
+      say('Generazione in corso…');
+
+      var headers = { 'Content-Type':'application/json' };
       if (window.__ADMIN_KEY) headers['X-Admin-Key'] = window.__ADMIN_KEY;
 
-      const r = await fetch('/api/docs/unified/generate', {
+      fetch('/api/docs/unified/generate', {
         method:'POST',
-        headers,
-        body: JSON.stringify({ idSpedizione: idSped, type })
-      });
+        headers: headers,
+        body: JSON.stringify({ idSpedizione: idSped, type: type })
+      })
+      .then(function(r){
+        return r.text().then(function(text){
+          var json = null; try { json = JSON.parse(text); } catch(e){}
+          console.log('[UI] POST /api/docs/unified/generate =>', r.status, r.statusText, { bodySent: { idSpedizione: idSped, type: type }, responseText: text });
 
-      const text = await r.text();
-      let json = null; try { json = JSON.parse(text) } catch {}
-
-      console.log('[UI] POST /api/docs/unified/generate =>', r.status, r.statusText, { bodySent: { idSpedizione: idSped, type }, responseText: text });
-
-      if (!r.ok || (json && json.ok === false)) {
-        const msg = (json && json.error) ? json.error : \`HTTP \${r.status} \${r.statusText}\`;
-        say(\`Errore: \${msg}\\n\\nDettagli:\\n\${text.slice(0,800)}\`, false);
-        return;
-      }
-
-      say('Documento generato e allegato ✓\\n\\nDettagli:\\n' + (json ? pretty(json) : text), true);
-    }catch(e){
-      console.error(e);
-      say('Errore di rete: ' + (e?.message || 'operazione fallita'), false);
-    }finally{
-      btn.disabled = false;
-    }
-  });
+          if (!r.ok || (json && json.ok === false)) {
+            var msg = (json && json.error) ? json.error : ('HTTP ' + r.status + ' ' + r.statusText);
+            say('Errore: ' + msg + '\\n\\nDettagli:\\n' + text.slice(0,800), false);
+            return;
+          }
+          say('Documento generato e allegato ✓\\n\\nDettagli:\\n' + (json ? pretty(json) : text), true);
+        });
+      })
+      .catch(function(e){
+        console.error(e);
+        say('Errore di rete: ' + (e && e.message ? e.message : 'operazione fallita'), false);
+      })
+      .finally(function(){ btn.disabled = false; });
+    });
+  })();
 </script>
 </body>
 </html>`;
