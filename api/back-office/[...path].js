@@ -4,8 +4,8 @@ export const config = { runtime: 'nodejs' };
 import { readFile } from 'fs/promises';
 import { resolve, normalize, extname } from 'path';
 
-// cartella che contiene TUTTO il BO copiato in build
-const BASE = resolve(process.cwd(), 'public', 'back-office');
+const BASE = resolve(process.cwd(), 'public', 'back-office'); // primario
+const ALT  = resolve(process.cwd(), 'assets', 'esm');         // fallback
 
 const TYPES = {
   '.js':  'text/javascript; charset=utf-8',
@@ -33,19 +33,27 @@ function setCORS(req, res) {
   return (req.method === 'OPTIONS');
 }
 
+async function readFrom(base, rel){
+  const file = resolve(base, rel);
+  return readFile(file);
+}
+
 export default async function handler(req, res){
   if (setCORS(req, res)) return res.status(204).end();
 
   const parts = Array.isArray(req.query.path) ? req.query.path : [req.query.path || ''];
   const reqPath = parts.join('/') || 'main.js';
-
-  // hardening: niente path traversal
   const safe = normalize(reqPath).replace(/^(\.\.(\/|\\|$))+/g, '');
-  const file = resolve(BASE, safe);
 
   try{
-    const buf = await readFile(file);
-    const type = TYPES[extname(file)] || 'application/octet-stream';
+    let buf;
+    try {
+      buf = await readFrom(BASE, safe);
+    } catch {
+      // fallback se la copia non è finita nel bundle
+      buf = await readFrom(ALT, safe);
+    }
+    const type = TYPES[extname(safe)] || 'application/octet-stream';
     res.setHeader('Content-Type', type);
     res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600');
     return res.status(200).send(buf);
