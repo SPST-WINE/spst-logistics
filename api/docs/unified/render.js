@@ -28,8 +28,9 @@ async function fetchRecord(id){
   const r = await fetch(`https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}/${id}`, {
     headers:{ 'Authorization':`Bearer ${PAT}` }
   });
-  if (!r.ok) throw new Error(`Airtable ${r.status}`);
-  return r.json();
+  const txt = await r.text();
+  if (!r.ok) throw new Error(`Airtable ${r.status}: ${txt}`);
+  return JSON.parse(txt);
 }
 
 function templateHTML({ rec, type }){
@@ -61,11 +62,18 @@ export default async function handler(req, res){
   try{
     const url = new URL(req.url, `http://${req.headers.host}`);
     const p = Object.fromEntries(url.searchParams);
-    if (!verify(p)) return res.status(403).send('Forbidden');
+    console.log('[docs/render] query', p);
 
+    if (!verify(p)) {
+      console.warn('[docs/render] signature check failed');
+      return res.status(403).send('Forbidden');
+    }
+
+    console.log('[docs/render] fetching record', p.sid);
     const rec  = await fetchRecord(p.sid);
     const html = templateHTML({ rec, type: p.type });
 
+    console.log('[docs/render] launching chromium');
     const browser = await puppeteer.launch({
       args: chromium.args,
       executablePath: await chromium.executablePath(),
@@ -80,6 +88,7 @@ export default async function handler(req, res){
 
     res.setHeader('Content-Type','application/pdf');
     res.setHeader('Cache-Control','public, max-age=60');
+    console.log('[docs/render] OK pdf bytes', pdf?.length);
     return res.status(200).send(Buffer.from(pdf));
   }catch(e){
     console.error('[docs/render] error', e);
