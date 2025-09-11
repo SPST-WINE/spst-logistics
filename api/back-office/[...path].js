@@ -4,10 +4,10 @@ export const config = { runtime: 'nodejs' };
 import { readFile, readdir } from 'fs/promises';
 import { resolve, normalize, extname } from 'path';
 
-// Serviamo DIRETTAMENTE da assets/esm (sorgenti del BO)
-// (ALT è solo un fallback opzionale; puoi ignorarlo)
-const BASE = resolve(process.cwd(), 'assets', 'esm');
-const ALT  = resolve(process.cwd(), 'public', 'back-office');
+// Primario: bundle copiato in build (vedi scripts/sync-bo.js)
+const BASE = resolve(process.cwd(), 'api', 'back-office', '_bundle');
+// Fallback: sorgenti (utile anche per debug locale)
+const ALT  = resolve(process.cwd(), 'assets', 'esm');
 
 const TYPES = {
   '.js':  'text/javascript; charset=utf-8',
@@ -37,18 +37,18 @@ function setCORS(req, res) {
 
 async function tryRead(base, rel){ return readFile(resolve(base, rel)); }
 
-// Mini debug: lista cosa vede la funzione nei folder principali
-async function debugList() {
-  async function ls(rel='') {
-    try { return await readdir(resolve(BASE, rel)); } catch { return []; }
+// debug: /api/back-office/__ls per vedere cosa è nel bundle
+async function debugList(base) {
+  async function ls(dir='') {
+    try { return await readdir(resolve(base, dir)); } catch { return []; }
   }
   return {
-    base: BASE,
-    top: await ls(''),
-    ui: await ls('ui'),
-    utils: await ls('utils'),
-    airtable: await ls('airtable'),
-    rules: await ls('rules')
+    base,
+    top:     await ls(''),
+    ui:      await ls('ui'),
+    utils:   await ls('utils'),
+    airtable:await ls('airtable'),
+    rules:   await ls('rules')
   };
 }
 
@@ -59,17 +59,16 @@ export default async function handler(req, res){
   const reqPath = parts.join('/') || 'main.js';
   const safe    = normalize(reqPath).replace(/^(\.\.(\/|\\|$))+/g, '');
 
-  // Endpoint di test: /api/back-office/__ls
   if (safe === '__ls'){
-    const info = await debugList();
     res.setHeader('Content-Type','application/json; charset=utf-8');
+    const info = { bundle: await debugList(BASE), alt: await debugList(ALT) };
     return res.status(200).send(JSON.stringify(info, null, 2));
   }
 
   try{
     let buf;
-    try { buf = await tryRead(BASE, safe); }     // assets/esm/** (principale)
-    catch { buf = await tryRead(ALT,  safe); }   // fallback (se mai lo userai)
+    try { buf = await tryRead(BASE, safe); }
+    catch { buf = await tryRead(ALT,  safe); }
     const type = TYPES[extname(safe)] || 'application/octet-stream';
     res.setHeader('Content-Type', type);
     res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=600');
