@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Proforma Invoice — Preview</title>
+  <style>
+    :root{
+      --brand:#111827; /* charcoal */
+      --accent:#0ea5e9; /* aqua */
+      --text:#0b0f13;
+      --muted:#6b7280;
+      --border:#e5e7eb;
+      --border-strong:#d1d5db;
+      --bg:#ffffff;
+      --zebra:#fafafa;
+      --chip:#f3f4f6;
+      --success:#059669;
+      --spacing:14px;
+    }
+    *{box-sizing:border-box}
+    html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;}
+    .page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative;}
+
+    /* -------- watermark -------- */
+    .watermark{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none}
+    .watermark span{opacity:0.05; font-size:120px; letter-spacing:0.22em; transform:rotate(-24deg); font-weight:800; color:#0f172a}
+
+    /* -------- header -------- */
+    header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px}
+    .brand{max-width:70%}
+    .tag{display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#374151; background:var(--chip); border:1px solid var(--border); padding:2px 6px; border-radius:6px; margin-bottom:6px}
+    .logo{display:flex; align-items:center; gap:10px}
+    .logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:var(--brand)}
+    .brand .meta{margin-top:6px; font-size:12px; color:var(--muted)}
+
+    .doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
+    .doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); font-weight:800}
+    .doc-meta .kv{margin-top:6px}
+    .kv div{margin:2px 0}
+
+    hr.sep{border:none;border-top:1px solid var(--border); margin:16px 0 18px}
+
+    /* -------- cards -------- */
+    .grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+    .card{border:1px solid var(--border); border-radius:12px; padding:12px}
+    .card h3{margin:0 0 8px; font-size:11px; color:#374151; text-transform:uppercase; letter-spacing:.08em}
+    .small{font-size:12px; color:#374151}
+    .muted{color:var(--muted)}
+
+    /* -------- items table -------- */
+    table.items{width:100%; border-collapse:collapse; font-size:12px; margin-top:16px}
+    table.items th, table.items td{border-bottom:1px solid var(--border); padding:9px 8px; vertical-align:top}
+    table.items thead th{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#374151; text-align:left; background:var(--chip)}
+    table.items td.num, table.items th.num{text-align:right}
+    table.items tbody tr:nth-child(odd){background:var(--zebra)}
+    table.items tbody tr:last-child td{border-bottom:1px solid var(--border-strong)}
+
+    /* -------- totals -------- */
+    .totals{margin-top:10px; display:flex; justify-content:flex-end}
+    .totals table{font-size:12px; border-collapse:collapse; min-width:260px}
+    .totals td{padding:8px 10px; border-bottom:1px solid var(--border)}
+    .totals tr:last-child td{border-top:1px solid var(--border-strong); border-bottom:none; font-weight:700}
+
+    /* -------- footer -------- */
+    footer{margin-top:22px; font-size:11px; color:#374151}
+    .legal{margin-top:10px}
+    .sign{margin-top:20px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
+    .sign .box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
+    .sign .sig{display:flex; flex-direction:column; align-items:flex-start}
+    .sign .label{font-size:11px; color:#374151; margin-bottom:6px}
+
+    @media print{ body{background:#fff} .page{box-shadow:none} .watermark span{opacity:0.08} }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="watermark"><span>PROFORMA</span></div>
+
+    <header>
+      <div class="brand">
+        <div class="tag">Sender</div>
+        <div class="logo">
+          <!-- <img src="https://www.spst.it/logo.svg" alt="SPST" style="height:28px"> -->
+          <div class="word">SPST S.r.l.</div>
+        </div>
+        <div class="meta">
+          Via Esempio 1, 20100 Milano (MI), Italy · VAT IT12345678901<br/>
+          info@spst.it · +39 320 144 1789 · www.spst.it
+        </div>
+      </div>
+      <div class="doc-meta">
+        <div class="title">Proforma Invoice</div>
+        <div class="kv">
+          <div><strong>No.:</strong> PF-2025-0007</div>
+          <div><strong>Date:</strong> 10-09-2025</div>
+          <div><strong>Shipment ID:</strong> SPST-IT-2025-0910-001</div>
+        </div>
+      </div>
+    </header>
+
+    <hr class="sep" />
+
+    <section class="grid">
+      <div class="card">
+        <h3>Consignee</h3>
+        <div class="small"><strong>Casa del Vino GmbH</strong></div>
+        <div class="small">Theresienstraße 15, 80333 München (DE)</div>
+        <div class="small">Tax ID: DE123456789</div>
+        <div class="small">Email: acquisti@casadelvino.de · Tel: +49 89 123456</div>
+      </div>
+      <div class="card">
+        <h3>Shipment Details</h3>
+        <div class="small">Pickup date: 12-09-2025</div>
+        <div class="small">Incoterm: DAP · Currency: EUR</div>
+      </div>
+    </section>
+
+    <table class="items" aria-label="Goods details">
+      <thead>
+        <tr>
+          <th style="width:32px">#</th>
+          <th>Description</th>
+          <th style="width:90px" class="num">Qty</th>
+          <th style="width:120px" class="num">Unit Price</th>
+          <th style="width:130px" class="num">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>1</td>
+          <td>
+            <strong>Barolo DOCG 2019 (0.75 L)</strong><br/>
+            <span class="muted">HS: 2204.21 · Origin: IT · Est. weight: 45 kg</span>
+          </td>
+          <td class="num">60</td>
+          <td class="num">€ 14.50</td>
+          <td class="num">€ 870.00</td>
+        </tr>
+        <tr>
+          <td>2</td>
+          <td>
+            <strong>Prosecco DOC Extra Dry 2023 (0.75 L)</strong><br/>
+            <span class="muted">HS: 2204.10 · Origin: IT · Est. weight: 90 kg</span>
+          </td>
+          <td class="num">120</td>
+          <td class="num">€ 5.20</td>
+          <td class="num">€ 624.00</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="totals">
+      <table>
+        <tr>
+          <td style="text-align:right">Subtotal</td>
+          <td style="text-align:right; width:140px"><strong>€ 1,494.00</strong></td>
+        </tr>
+      </table>
+    </div>
+
+    <footer>
+      <div class="legal">
+        <strong>Declaration:</strong> This proforma invoice is issued for customs purposes only and does not constitute a tax invoice. The values shown are intended solely for determining customs value in accordance with applicable regulations.
+      </div>
+      <div class="sign">
+        <div>
+          <div class="small"><strong>Place & date:</strong> Milan, 10-09-2025</div>
+          <div class="small">Email: info@spst.it · Tel: +39 320 144 1789</div>
+        </div>
+        <div class="sig">
+          <div class="label">Signature</div>
+          <div class="box"></div>
+        </div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
