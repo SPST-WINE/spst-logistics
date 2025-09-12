@@ -1,83 +1,127 @@
-// api/docs/unified/render.js
-// Runtime esplicitato a livello vercel.json (nodejs18.x)
+// api/docs/unified/render.js  — Serverless Function (Node.js 20)
+
+import crypto from 'crypto';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
 
-function log(...a){ console.log('[render]', ...a); }
-function bad(res, status, error, details){
-  log('ERR', status, error, details || '');
-  return res.status(status).json({ ok:false, error, details });
+// Config Vercel: node runtime, memoria e timeout
+export const config = {
+  runtime: 'nodejs',
+  memory: 1024,
+  maxDuration: 60,
+};
+
+// ─────────────────────────────────────────────
+// Utils: firma HMAC e validazione query
+// ─────────────────────────────────────────────
+const SIGN = process.env.DOCS_SIGNING_SECRET || '';
+
+function hmac(params) {
+  const qs = new URLSearchParams(params).toString();
+  return crypto.createHmac('sha256', SIGN).update(qs).digest('hex');
+}
+function bad(res, code, payload) {
+  res.status(code).json({ ok: false, ...payload });
 }
 
-export default async function handler(req, res){
+// ─────────────────────────────────────────────
+// Handler
+// ─────────────────────────────────────────────
+export default async function handler(req, res) {
   const t0 = Date.now();
-  const q = req.query || {};
-  const { sid, type = 'proforma', exp, sig, debug } = q;
-
-  // --- Logs ambiente utili per debug
-  log('IN', {
-    node: process.version,
-    platform: process.platform,
-    arch: process.arch,
-    headers: {
-      host: req.headers.host,
-      'x-vercel-id': req.headers['x-vercel-id'],
-      'user-agent': req.headers['user-agent'],
+  try {
+    if (req.method !== 'GET') {
+      res.setHeader('Allow', 'GET');
+      return bad(res, 405, { error: 'Method Not Allowed' });
     }
-  });
 
-  // TODO: valida la firma se usi HMAC (sid,type,exp,sig).
-  if (!sid) return bad(res, 400, 'Missing sid');
-
-  // Impostazioni consigliate per Vercel/Lambda
-  chromium.setHeadlessMode = true;
-  chromium.setGraphicsMode = false;
-
-  let browser;
-  try{
-    const exePath = await chromium.executablePath();
-    log('chromium path', exePath ? 'OK' : 'NULL');
-    log('chromium headless?', chromium.headless, 'argsN', chromium.args?.length);
-
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: exePath,
-      headless: chromium.headless,
-      ignoreHTTPSErrors: true,
+    const { sid, type = 'proforma', exp, sig } = req.query || {};
+    // Log versione pacchetti e ambiente — utilissimo per debug in Vercel
+    console.log('[render] env', {
+      node: process.version,
+      chromiumVer: (await import('@sparticuz/chromium/package.json')).default.version,
+      puppeteerVer: (await import('puppeteer-core/package.json')).default.version,
+      region: process.env.VERCEL_REGION,
     });
 
-    const page = await browser.newPage();
+    // Validazioni base
+    if (!SIGN) return bad(res, 500, { error: 'Render misconfigured', details: 'DOCS_SIGNING_SECRET missing' });
+    if (!sid || !exp || !sig) return bad(res, 400, { error: 'Bad Request', details: 'Missing sid/exp/sig' });
 
-    // Qui puoi usare il TEO HTML reale. Per debugging generiamo una pagina minimale.
-    const html = `
-      <!doctype html><html><head>
+    // Check exp + signature
+    const now = Math.floor(Date.now() / 1000);
+    if (Number(exp) < now) return bad(res, 401, { error: 'Link expired' });
+
+    const expected = hmac({ sid, type, exp });
+    if (sig !== expected) return bad(res, 401, { error: 'Unauthorized', details: 'Bad signature' });
+
+    // HTML minimal per test (puoi sostituire con il tuo template reale)
+    const html = /*html*/`
+      <!doctype html>
+      <html>
+      <head>
         <meta charset="utf-8" />
-        <style>body{font:14px system-ui; padding:24px}</style>
-      </head><body>
-        <h1>Documento di test</h1>
-        <p>sid: <code>${sid}</code></p>
-        <p>type: <code>${type}</code></p>
-        <p>Generated: ${new Date().toISOString()}</p>
-      </body></html>
+        <style>
+          body { font: 14px/1.4 -apple-system, Segoe UI, Roboto, sans-serif; padding: 32px; }
+          h1 { margin: 0 0 10px; }
+          .muted { color: #666; }
+          .box { margin-top:16px; padding:12px; border:1px solid #ddd; border-radius:8px; }
+        </style>
+      </head>
+      <body>
+        <h1>Documento: ${type.toUpperCase()}</h1>
+        <div class="muted">Spedizione: ${sid}</div>
+        <div class="box">
+          <div>Generato il: ${new Date().toLocaleString('it-IT')}</div>
+          <div>Environment: Node ${process.version}</div>
+        </div>
+      </body>
+      </html>
     `;
 
-    await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '14mm', right: '14mm', bottom: '14mm', left: '14mm' },
+    // Parametri Puppeteer/Chromium (IMPORTANTISSIMI)
+    const executablePath = await chromium.executablePath(); // usa binario bundle
+    const launchOpts = {
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath,
+      headless: chromium.headless,     // true in serverless
+      ignoreHTTPSErrors: true,
+    };
+
+    console.log('[render] launch opts', {
+      headless: launchOpts.headless,
+      exe: launchOpts.executablePath,
+      args0: launchOpts.args?.slice(0, 5), // primi 5 args per non inondare i log
     });
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Cache-Control', 'no-store');
-    res.setHeader('Content-Disposition', `inline; filename="${sid}-${type}.pdf"`);
-    res.status(200).send(Buffer.from(pdf));
+    let browser;
+    try {
+      browser = await puppeteer.launch(launchOpts);
+    } catch (e) {
+      console.error('[render] launch error', e);
+      return bad(res, 500, { error: 'Render error', details: String(e?.message || e) });
+    }
 
-    log('OK', { ms: Date.now() - t0, size: pdf.length });
-  }catch(e){
-    return bad(res, 500, 'Render error', String(e && e.message || e));
-  }finally{
-    try{ await browser?.close(); }catch{}
+    try {
+      const page = await browser.newPage();
+      await page.setContent(html, { waitUntil: 'networkidle0' });
+
+      const pdf = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '16mm', right: '14mm', bottom: '16mm', left: '14mm' },
+      });
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${sid}-${type}.pdf"`);
+      res.status(200).send(Buffer.from(pdf));
+      console.log('[render] OK', { ms: Date.now() - t0 });
+    } finally {
+      await browser.close().catch(() => {});
+    }
+  } catch (err) {
+    console.error('[render] fatal', err);
+    return bad(res, 500, { error: 'Render error', details: String(err?.message || err) });
   }
 }
