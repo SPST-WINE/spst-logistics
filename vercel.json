@@ -1,13 +1,23 @@
 {
-  "headers": [
-    {
-      "source": "/assets/esm/:path*",
-      "headers": [
-        { "key": "Access-Control-Allow-Origin", "value": "https://www.spst.it" },
-        { "key": "Access-Control-Allow-Methods", "value": "GET,OPTIONS" },
-        { "key": "Access-Control-Allow-Headers", "value": "*" },
-        { "key": "Vary", "value": "Origin" }
-      ]
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/docs/unified/render.js": {
+      "includeFiles": [
+        "node_modules/@sparticuz/chromium/bin/**",
+        "node_modules/@sparticuz/chromium/lib/**",
+        "node_modules/@sparticuz/chromium/queries.json",
+        "node_modules/puppeteer-core/**"
+      ],
+      "memory": 1024,
+      "maxDuration": 60
+    },
+    "api/docs/unified/generate.js": {
+      "memory": 256,
+      "maxDuration": 30
+    },
+    "api/tools/docs.js": {
+      "memory": 128,
+      "maxDuration": 15
     }
-  ]
+  }
 }
