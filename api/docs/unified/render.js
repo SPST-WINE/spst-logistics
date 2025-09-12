@@ -1,25 +1,28 @@
 // /api/docs/unified/render.js
-// Runtime: Node.js (Vercel Node 20). Nessun puppeteer: HTML pronto per Stampa/Salva PDF.
+// Runtime: Node.js (Vercel Node 20). Nessun Puppeteer: HTML pronto per Stampa/Salva PDF.
 export const config = { runtime: "nodejs" };
 
 import crypto from "node:crypto";
 
-/* =======================
+/* ──────────────────────────────────────────────────────────────────────────
    ENV
-======================= */
+────────────────────────────────────────────────────────────────────────── */
 const env = (k, d) => process.env[k] ?? d;
 
-const AIRTABLE_PAT   = env("AIRTABLE_PAT");
-const AIRTABLE_BASE  = env("AIRTABLE_BASE_ID");
-const TB_SPEDIZIONI  = env("TB_SPEDIZIONI", "SpedizioniWebApp"); // tabella spedizioni
-const TB_PL          = env("TB_PL", "SPED_PL");                  // tabella righe (packing list)
+const AIRTABLE_PAT  = env("AIRTABLE_PAT");
+const AIRTABLE_BASE = env("AIRTABLE_BASE_ID");
+const TB_SPEDIZIONI = env("TB_SPEDIZIONI", "SpedizioniWebApp"); // tabella spedizioni
+const TB_PL         = env("TB_PL", "SPED_PL");                  // tabella righe (packing list)
 
-const DOCS_SIGN_SECRET = env("DOCS_SIGN_SECRET");
-const BYPASS_SIGNATURE = env("BYPASS_SIGNATURE") === "1";
+const DOCS_SIGN_SECRET  = env("DOCS_SIGN_SECRET");
+const BYPASS_SIGNATURE  = env("BYPASS_SIGNATURE") === "1";
 
-/* =======================
+// Campo ESATTO (case sensitive) come presente su Airtable
+const FIELD_ID_SPED = "ID Spedizione";
+
+/* ──────────────────────────────────────────────────────────────────────────
    UTILS
-======================= */
+────────────────────────────────────────────────────────────────────────── */
 const asJSON = (res, code, payload) => {
   res.status(code).setHeader("content-type", "application/json; charset=utf-8");
   res.end(JSON.stringify(payload));
@@ -40,47 +43,66 @@ const field = (rec, names, fb = "") => pick(rec?.fields || {}, names, fb);
 const hmac = (s) => crypto.createHmac("sha256", DOCS_SIGN_SECRET || "").update(s).digest("hex");
 const stringToSign = ({ sid, type, exp }) => [sid, type, exp].filter(Boolean).join("|");
 
-/* =======================
+/* ──────────────────────────────────────────────────────────────────────────
    Airtable helpers
-======================= */
+────────────────────────────────────────────────────────────────────────── */
 const airHeaders = () => ({
   Authorization: `Bearer ${AIRTABLE_PAT}`,
 });
 
-const airURL = (table, qs) =>
-  `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE)}/${encodeURIComponent(table)}${qs ? `?${qs}` : ""}`;
+const baseURL = `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE)}`;
+const tableURL = (table) => `${baseURL}/${encodeURIComponent(table)}`;
+const recordURL = (table, recId) => `${tableURL(table)}/${encodeURIComponent(recId)}`;
 
-// Spedizione: filtro per {ID Spedizione} == sid (nome campo con spazio!)
-async function airGetShipmentBySID(sid) {
-  const safe = String(sid || "").replace(/'/g, "\\'");
-  const filter = encodeURIComponent(`{ID Spedizione}='${safe}'`);
-  const url = airURL(TB_SPEDIZIONI, `filterByFormula=${filter}&maxRecords=1`);
+async function airFetch(url) {
   const r = await fetch(url, { headers: airHeaders() });
-  if (!r.ok) throw new Error(`Airtable ${r.status}: ${await r.text()}`);
-  const data = await r.json();
-  return data.records?.[0] || null;
+  const text = await r.text();
+  if (!r.ok) {
+    const err = new Error(`Airtable ${r.status}: ${text}`);
+    err.status = r.status;
+    err.body = text;
+    err.url = url;
+    throw err;
+  }
+  return JSON.parse(text);
 }
 
-// Righe (packing list): filtra per {ID Spedizione} == sid
+// Spedizione: se sid è recXXXX usa endpoint record, altrimenti filtra per {ID Spedizione}='...'
+async function airGetShipmentBySID(sid) {
+  if (/^rec[a-zA-Z0-9]{14}/.test(String(sid))) {
+    const url = recordURL(TB_SPEDIZIONI, sid);
+    console.log("[render] GET record by recId", { url });
+    return await airFetch(url);
+  } else {
+    const safe = String(sid || "").replace(/'/g, "\\'");
+    const formula = `{${FIELD_ID_SPED}}='${safe}'`; // NOME CAMPO ESATTO!
+    const qs = `filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`;
+    const url = `${tableURL(TB_SPEDIZIONI)}?${qs}`;
+    console.log("[render] GET by formula", { formula, url });
+    const data = await airFetch(url);
+    return data.records?.[0] || null;
+  }
+}
+
+// Righe (packing list): filtra per {ID Spedizione}='...'
 async function airGetPLRowsBySID(sid) {
   const safe = String(sid || "").replace(/'/g, "\\'");
-  const filter = encodeURIComponent(`{ID Spedizione}='${safe}'`);
+  const formula = `{${FIELD_ID_SPED}}='${safe}'`;
+  let url = `${tableURL(TB_PL)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100`;
+  console.log("[render] GET PL rows", { formula, url });
+
   const rows = [];
-  let url = airURL(TB_PL, `filterByFormula=${filter}&pageSize=100`);
-  // semplice paginazione
   while (url) {
-    const r = await fetch(url, { headers: airHeaders() });
-    if (!r.ok) throw new Error(`Airtable ${r.status}: ${await r.text()}`);
-    const data = await r.json();
-    rows.push(...(data.records || []));
-    url = data.offset ? airURL(TB_PL, `filterByFormula=${filter}&pageSize=100&offset=${data.offset}`) : null;
+    const r = await airFetch(url);
+    rows.push(...(r.records || []));
+    url = r.offset ? `${tableURL(TB_PL)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100&offset=${r.offset}` : null;
   }
   return rows;
 }
 
-/* =======================
-   Template
-======================= */
+/* ──────────────────────────────────────────────────────────────────────────
+   Template HTML (stampa/salva PDF da browser)
+────────────────────────────────────────────────────────────────────────── */
 function renderHTML({ doc, ship, consignee, items, totals, ui }) {
   const zebra = (i) => (i % 2 ? ' style="background:#fafafa"' : "");
 
@@ -226,16 +248,16 @@ table.items td.num, table.items th.num{text-align:right}
 </html>`;
 }
 
-/* =======================
+/* ──────────────────────────────────────────────────────────────────────────
    API Handler
-======================= */
+────────────────────────────────────────────────────────────────────────── */
 export default async function handler(req, res) {
   try {
     res.setHeader("cache-control", "no-store");
 
     // Query
     const q = req.query || {};
-    const sid = q.ship || q.sid;              // ID Spedizione
+    const sid = q.ship || q.sid;              // ID Spedizione (o recXXXX)
     const type = q.type || "proforma";
     const exp  = q.exp;
     const sig  = q.sig;
@@ -261,10 +283,19 @@ export default async function handler(req, res) {
     }
 
     // Spedizione
-    const rec = await airGetShipmentBySID(sid);
-    if (!rec) {
-      return asJSON(res, 404, { ok:false, error:"Not found", details:`Nessuna spedizione con {ID Spedizione}='${sid}'` });
+    let rec;
+    try {
+      rec = await airGetShipmentBySID(sid);
+    } catch (e) {
+      // Log dettagliato (in caso di 422 su field name errato)
+      console.error("[render] airtable shipment error", { message: e.message, url: e.url, body: e.body });
+      return asJSON(res, 500, { ok:false, error:"Render error", details:String(e.message) });
     }
+
+    if (!rec) {
+      return asJSON(res, 404, { ok:false, error:"Not found", details:`Nessuna spedizione con {${FIELD_ID_SPED}}='${sid}'` });
+    }
+
     const f = rec.fields || {};
 
     // Testata documento (mapping tollerante)
@@ -303,27 +334,34 @@ export default async function handler(req, res) {
     };
 
     // Righe da tabella SPED_PL
-    const rows = await airGetPLRowsBySID(sid);
-    const items = rows.map((r) => {
-      const rf = r.fields || {};
-      const qty = Number(pick(rf, ["Qta","Qtà","Quantità","Qty"], 0)) || 0;
-      const up  = Number(pick(rf, ["Prezzo","Prezzo Unitario","Unit Price","Prezzo unitario"], 0)) || 0;
-      const metaParts = [];
-      const hs = pick(rf, ["HS","HS Code","HS code","Codice HS"]);
-      const org = pick(rf, ["Origine","Paese origine","Origine merce"]);
-      const peso = pick(rf, ["Peso","Peso (kg)","Peso Kg"]);
-      if (hs) metaParts.push(`HS: ${hs}`);
-      if (org) metaParts.push(`Origine: ${org}`);
-      if (peso) metaParts.push(`Peso: ${peso} kg`);
-      return {
-        title: pick(rf, ["Descrizione","description","Prodotto","Articolo","Item","Item Description"], "—"),
-        meta: metaParts.join(" · "),
-        qty,
-        unit: eur(up, doc.currency),
-        amount: eur(qty * up, doc.currency),
-        _n: qty * up,
-      };
-    });
+    let items = [];
+    try {
+      const rows = await airGetPLRowsBySID(sid);
+      items = rows.map((r) => {
+        const rf = r.fields || {};
+        const qty = Number(pick(rf, ["Qta","Qtà","Quantità","Qty"], 0)) || 0;
+        const up  = Number(pick(rf, ["Prezzo","Prezzo Unitario","Unit Price","Prezzo unitario"], 0)) || 0;
+        const metaParts = [];
+        const hs = pick(rf, ["HS","HS Code","HS code","Codice HS"]);
+        const org = pick(rf, ["Origine","Paese origine","Origine merce"]);
+        const peso = pick(rf, ["Peso","Peso (kg)","Peso Kg"]);
+        if (hs) metaParts.push(`HS: ${hs}`);
+        if (org) metaParts.push(`Origine: ${org}`);
+        if (peso) metaParts.push(`Peso: ${peso} kg`);
+        return {
+          title: pick(rf, ["Descrizione","description","Prodotto","Articolo","Item","Item Description"], "—"),
+          meta: metaParts.join(" · "),
+          qty,
+          unit: eur(up, doc.currency),
+          amount: eur(qty * up, doc.currency),
+          _n: qty * up,
+        };
+      });
+    } catch (e) {
+      console.error("[render] airtable PL rows error", { message: e.message, url: e.url, body: e.body });
+      // Non bloccare il render: mostriamo comunque la testata
+      items = [];
+    }
 
     const total = items.reduce((s, it) => s + (it._n || 0), 0);
 
@@ -347,7 +385,7 @@ export default async function handler(req, res) {
     res.status(200).setHeader("content-type", "text/html; charset=utf-8");
     res.end(html);
 
-    console.log("[render] OK", { type, sid, tables: { TB_SPEDIZIONI, TB_PL } });
+    console.log("[render] OK", { type, sid, tables: { TB_SPEDIZIONI, TB_PL }, field: FIELD_ID_SPED });
   } catch (err) {
     console.error("[render] ERR", err);
     return asJSON(res, 500, { ok:false, error:"Render error", details:String(err?.message || err) });
