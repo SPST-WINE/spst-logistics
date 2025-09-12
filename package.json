@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": "22.x" },
+  "engines": { "node": "20.x" },
+  "scripts": {
+    "postinstall": "node scripts/sync-bo.js"
+  },
   "dependencies": {
     "@sparticuz/chromium": "^129.0.0",
     "puppeteer-core": "^22.15.0",
