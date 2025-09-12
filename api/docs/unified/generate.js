@@ -1,149 +1,119 @@
-// api/docs/unified/generate.js
-import crypto from 'crypto';
+// api/docs/unified/generate.js — Vercel Function (Pages Router)
+const crypto = require('crypto');
+const fetch = global.fetch; // disponibile su Vercel runtime
 
-// ── ENV ──────────────────────────────────────────────────────────────────
-const TB        = process.env.TB_SPEDIZIONI || 'SpedizioniWebApp';
-const BASE      = process.env.AIRTABLE_BASE_ID;
-const PAT       = process.env.AIRTABLE_PAT;
-const SIGN      = process.env.DOCS_SIGNING_SECRET;
-const ADMIN_KEY = (process.env.DOCS_ADMIN_KEY || '').trim();
+const SECRET = process.env.DOCS_SIGNING_SECRET || process.env.ATTACH_SECRET || '';
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || ''; // es. https://spst-logistics-....vercel.app
+const AIRTABLE_TOKEN = process.env.AIRTABLE_TOKEN || process.env.AIRTABLE_API_KEY || '';
+const AIRTABLE_BASE  = process.env.AIRTABLE_BASE || '';
+const TB_SPEDIZIONI  = process.env.TB_SPEDIZIONI || 'SpedizioniWebApp';
 
-const FIELD_BY_TYPE = (t) => {
-  const k = String(t || '').toLowerCase();
-  if (k === 'dle') return 'Allegato DLE';
-  if (k === 'pl')  return 'Allegato PL';
-  // proforma e fattura usano lo stesso campo
-  return 'Allegato Fattura';
+// mapping richiesto
+const FIELD_BY_TYPE = {
+  proforma: 'Allegato Fattura',
+  fattura:  'Allegato Fattura',
+  invoice:  'Allegato Fattura',
+  dle:      'Allegato DLE',
+  pl:       'Allegato PL',
 };
 
-// ── utils ────────────────────────────────────────────────────────────────
-function escapeFormula(s=''){
-  // doppia singola per Airtable
-  return String(s).replace(/'/g, "''");
+function hmacHex(payload) {
+  return crypto.createHmac('sha256', SECRET).update(payload).digest('hex');
 }
-function hmac(params) {
-  const qs = new URLSearchParams(params).toString();
-  return crypto.createHmac('sha256', SIGN).update(qs).digest('hex');
+function bad(res, code, error, details) {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  return res.status(code).send(JSON.stringify({ ok: false, error, details }));
 }
-function parseCsv(v) {
-  return String(v || '')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-}
-function logReq(req, note=''){
-  const safe = {
-    origin: req.headers.origin,
-    referer: req.headers.referer,
-    host: req.headers.host,
-    ua: req.headers['user-agent']
+
+async function attachToAirtable({ baseId, tableName, recId, fieldName, url, filename }) {
+  if (!AIRTABLE_TOKEN || !baseId || !tableName || !recId || !fieldName) {
+    return { ok:false, skipped:true, reason:'missing-config' };
+  }
+  const api = `https://api.airtable.com/v0/${encodeURIComponent(baseId)}/${encodeURIComponent(tableName)}/${encodeURIComponent(recId)}`;
+  const body = {
+    fields: {
+      [fieldName]: [{ url, filename }],
+    }
   };
-  console.log('[generate]', note || 'IN', { time: new Date().toISOString(), headers: safe });
-}
-
-async function readJson(req){
-  if (req.body && typeof req.body === 'object') return req.body;
-  return new Promise((resolve, reject) => {
-    let b=''; req.on('data', c => b+=c);
-    req.on('end', () => { try { resolve(b ? JSON.parse(b) : {}); } catch(e){ reject(e);} });
-    req.on('error', reject);
+  const r = await fetch(api, {
+    method: 'PATCH',
+    headers: {
+      'Authorization': `Bearer ${AIRTABLE_TOKEN}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
   });
+  if (!r.ok) {
+    const text = await r.text();
+    return { ok:false, error:`Airtable ${r.status}`, details:text };
+  }
+  return { ok:true };
 }
 
-// referer oppure admin header
-function checkAuth(req){
-  if (ADMIN_KEY) {
-    const hdr = (req.headers['x-admin-key'] || req.headers.authorization || '').toString().replace(/^Bearer\s+/i,'');
-    if (hdr && hdr === ADMIN_KEY) return { ok:true, how:'header' };
-  }
-  const allowed = parseCsv(process.env.DOCS_UI_REFERERS || 'https://spst-logistics-spsts-projects.vercel.app/api/tools/docs');
-  const ref = String(req.headers.referer || '');
-  if (allowed.some(x => ref.startsWith(x))) return { ok:true, how:'referer' };
-  return { ok:false };
-}
-
-// ── handler ──────────────────────────────────────────────────────────────
-export default async function handler(req, res){
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    return res.status(405).json({ ok:false, error:'Method Not Allowed' });
-  }
-
-  logReq(req);
-
-  const auth = checkAuth(req);
-  if (!auth.ok) {
-    console.warn('[generate] 401');
-    return res.status(401).json({ ok:false, error:'Unauthorized' });
-  }
-
+export default async function handler(req, res) {
   try {
-    const body = await readJson(req);
-    // accetta sia shipmentId (recXXXX) sia idSpedizione (valore del campo)
-    let { shipmentId, idSpedizione, type='proforma' } = body || {};
-    type = String(type || 'proforma').toLowerCase();
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return bad(res, 405, 'Method Not Allowed');
+    }
+    const now = new Date().toISOString();
+    const { idSpedizione, type = 'proforma', recId: sidFromBody, courier } = (req.body || {});
 
-    // se non ho recId, cerco via "ID Spedizione"
-    if (!shipmentId && idSpedizione) {
-      const url = `https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}?maxRecords=1&filterByFormula=${encodeURIComponent(
-        `{ID Spedizione}='${escapeFormula(idSpedizione)}'`
-      )}`;
-      const r = await fetch(url, { headers: { Authorization:`Bearer ${PAT}` } });
-      const j = await r.json();
-      const rec = j?.records?.[0];
-      if (!rec) return res.status(422).json({ ok:false, error:'record non trovato da "ID Spedizione"' });
-      shipmentId = rec.id;
-      console.log('[generate] lookup idSpedizione → recId', { idSpedizione, recId: shipmentId });
+    // Qui assumiamo che “recId” (sid) arrivi già risolto; in alternativa potresti
+    // fare una lookup su Airtable partendo da idSpedizione. Per semplicità, usiamo recId se c'è.
+    const sid = String(sidFromBody || '').trim();
+    if (!sid) return bad(res, 400, 'Missing recId (sid)');
+
+    if (!SECRET) return bad(res, 500, 'Server misconfigured', 'Missing DOCS_SIGNING_SECRET');
+
+    const t  = String(type || 'proforma').toLowerCase();
+    const exp = Math.floor(Date.now()/1000) + 60 * 15; // 15 minuti
+    const base = `${sid}.${t}.${exp}`;
+    const sig  = hmacHex(base);
+
+    const origin = PUBLIC_BASE_URL || `https://${req.headers.host}`;
+    const url = new URL('/api/docs/unified/render', origin);
+    url.searchParams.set('sid', sid);
+    url.searchParams.set('type', t);
+    url.searchParams.set('exp', String(exp));
+    url.searchParams.set('sig', sig);
+    // parametri NON firmati (safe)
+    if (idSpedizione) url.searchParams.set('ship', idSpedizione);
+    if (courier)      url.searchParams.set('courier', courier);
+
+    // Campo Airtable da usare
+    const field = FIELD_BY_TYPE[t] || 'Allegato 1';
+
+    // Allego su Airtable (se configurato)
+    let at = { ok:false, skipped:true, reason:'not-attempted' };
+    try {
+      // filename utile per distinguere
+      const fname = `${t}-${sid}-${exp}.html`;
+      at = await attachToAirtable({
+        baseId: AIRTABLE_BASE,
+        tableName: TB_SPEDIZIONI,
+        recId: sid,
+        fieldName: field,
+        url: url.toString() + '&format=html',
+        filename: fname
+      });
+    } catch (e) {
+      at = { ok:false, error:'attach-failed', details: e && e.message ? e.message : String(e) };
     }
 
-    if (!shipmentId) {
-      return res.status(422).json({ ok:false, error:'recordId obbligatorio' });
-    }
-
-    const field = FIELD_BY_TYPE(type);
-
-    // firma URL per /render
-    const exp = String(Math.floor(Date.now()/1000) + 60*10);
-    const params = { sid: shipmentId, type, exp };
-    const sig = hmac(params);
-
-    const proto = req.headers['x-forwarded-proto'] || 'https';
-    const host  = req.headers['x-forwarded-host'] || req.headers.host;
-
-    const base = `${proto}://${host}/api/docs/unified/render?${new URLSearchParams({ ...params, sig })}`;
-    const urlDownload = `${base}&dl=1`;  // per Airtable (download diretto)
-    const urlView     = base;            // per apertura in tab
-
-    // patch Airtable
-    const filename = `${idSpedizione || shipmentId}-${type}.pdf`;
-    const payload = {
-      records: [{ id: shipmentId, fields: { [field]: [{ url: urlDownload, filename }] } }]
-    };
-
-    const r = await fetch(`https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}`, {
-      method:'PATCH',
-      headers:{ 'Authorization':`Bearer ${PAT}`, 'Content-Type':'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    const txt = await r.text();
-    if (!r.ok) {
-      console.error('[generate] Airtable error', r.status, txt);
-      return res.status(r.status).json({ ok:false, error:`Airtable ${r.status}: ${txt}` });
-    }
-
-    console.log('[generate] OK', { field, recId: shipmentId, type, via: auth.how });
-    return res.status(200).json({
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).send(JSON.stringify({
       ok: true,
-      url: urlDownload,
-      viewUrl: urlView,
+      url: url.toString(),
       field,
-      recId: shipmentId,
-      type,
-      via: auth.how
-    });
-  } catch (e) {
-    console.error('[generate] error', e);
-    return res.status(500).json({ ok:false, error:String(e?.message || e) });
+      recId: sid,
+      type: t,
+      via: 'generate',
+      attached: at
+    }, null, 2));
+  } catch (err) {
+    console.error('[generate] 500', err);
+    return bad(res, 500, 'Generate error', err && err.message ? err.message : String(err));
   }
 }
