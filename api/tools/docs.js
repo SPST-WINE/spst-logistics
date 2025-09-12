@@ -1,12 +1,13 @@
-// api/tools/docs.js
-export default async function handler(req, res) {
-  if (req.method !== 'GET') { res.setHeader('Allow','GET'); return res.status(405).send('Method Not Allowed'); }
+// api/tools/docs.js  (UI con bottoni moderni + print che funziona con ?format=html&print=1)
+// RUNTIME: Node.js
+export const config = { runtime: 'nodejs' };
 
+export default async function handler(_req, res) {
   const html = `<!doctype html><html lang="it"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Utility Documenti</title>
 <style>
-:root{--bg:#0b1220;--card:#0f172a;--muted:#8ea0bd;--text:#e7ecf5;--accent:#ff9a1f;--accent2:#ffb54f;--line:rgba(255,255,255,.08);--r:18px;--rsm:12px;--gap:14px;--w:760px;}
+:root{--bg:#0b1220;--card:#0f172a;--muted:#8ea0bd;--text:#e7ecf5;--accent:#ff9a1f;--accent2:#ffb54f;--line:rgba(255,255,255,.08);--r:18px;--rsm:12px;--gap:14px;--w:760px}
 *{box-sizing:border-box}html,body{height:100%}body{margin:0;color:var(--text);background:radial-gradient(1200px 600px at 20% -10%, #11213f 0%, rgba(17,33,63,0) 60%), var(--bg);font:16px/1.45 system-ui,Segoe UI,Inter,Roboto,sans-serif;display:flex;align-items:flex-start;justify-content:center;padding:32px 16px 60px}
 .wrap{width:min(var(--w),100%)}.page-title{font-size:clamp(26px,3.2vw,34px);font-weight:800;letter-spacing:.2px;margin:6px 0 6px}.page-sub{color:var(--muted);margin:0 0 18px;max-width:70ch}
 .card{background:linear-gradient(180deg,rgba(255,255,255,.02),rgba(255,255,255,.01)),var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
@@ -39,7 +40,7 @@ input:focus,select:focus{border-color:rgba(255,154,31,.6);box-shadow:0 0 0 4px r
         <select id="tipo">
           <option value="proforma">Proforma</option>
           <option value="fattura">Fattura commerciale</option>
-          <option value="dle">Dichiarazione libera esportazione</option>
+          <option value="dle">DLE</option>
         </select>
       </div>
     </div>
