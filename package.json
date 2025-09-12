@@ -6,13 +6,13 @@
   "engines": { "node": "20.x" },
   "scripts": {},
   "dependencies": {
-    "@sparticuz/chromium": "114.0.0",
-    "puppeteer-core": "20.8.1",
+    "@sparticuz/chromium": "131.0.1",
+    "puppeteer-core": "22.15.0",
     "@vercel/blob": "latest",
     "resend": "^3.2.0"
   },
   "overrides": {
-    "@sparticuz/chromium": "114.0.0",
-    "puppeteer-core": "20.8.1"
+    "@sparticuz/chromium": "131.0.1",
+    "puppeteer-core": "22.15.0"
   }
 }
