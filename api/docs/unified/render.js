@@ -1,10 +1,10 @@
 // api/docs/unified/render.js  (ESM + Node 20)
-// RUNTIME: Node.js (NOT Edge)
 export const config = { runtime: 'nodejs' };
 
 import crypto from 'node:crypto';
 
 const SECRET = process.env.DOCS_SIGNING_SECRET || process.env.ATTACH_SECRET || '';
+const DEBUG  = (process.env.DEBUG_DOCS || '0') === '1';
 
 const hmacHex = (s) => crypto.createHmac('sha256', SECRET).update(s).digest('hex');
 const safeEq = (a, b) => {
@@ -21,7 +21,7 @@ const bad = (res, code, error, details) => {
 
 function htmlTemplate({ docTitle, docTag, shipId, courier, generatedAt }) {
   return `<!doctype html><html lang="it"><head>
-<meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>${docTitle} — Anteprima</title>
 <style>
 :root{--brand:#111827;--accent:#0ea5e9;--text:#0b0f13;--muted:#6b7280;--border:#e5e7eb;--border-strong:#d1d5db;--bg:#fff;--chip:#f3f4f6}
@@ -69,10 +69,7 @@ hr.sep{border:none;border-top:1px solid var(--border);margin:16px 0 18px}
   </section>
 </div>
 <script>
-(function(){
-  var p=new URLSearchParams(location.search);
-  if(p.get('print')==='1'){ setTimeout(()=>window.print(),120); }
-})();
+(function(){var p=new URLSearchParams(location.search); if(p.get('print')==='1'){ setTimeout(()=>window.print(),120); }})();
 </script>
 </body></html>`;
 }
@@ -85,12 +82,15 @@ export default async function handler(req, res) {
 
     const tRaw  = type ?? '';
     const tNorm = (tRaw || 'proforma').toLowerCase();
-    const bases = [`${sid}.${tNorm}.${exp}`, `${sid}.${tRaw}.${exp}`];
+    const bases = [`${sid}.${tNorm}.${exp}`, `${sid}.${tRaw}.${exp}`]; // compat
     if (!tRaw) bases.push(`${sid}..${exp}`);
 
-    let signed = false;
-    for (const b of bases) { if (safeEq(sig, hmacHex(b))) { signed = true; break; } }
-    if (!signed) return bad(res, 401, 'Unauthorized', 'Invalid signature');
+    let signed = false, matchedBase = '';
+    for (const b of bases) { const d = hmacHex(b); if (safeEq(sig, d)) { signed = true; matchedBase = b; break; } }
+    if (!signed) {
+      if (DEBUG) console.error('[render] bad sig', { got: String(sig).slice(0,10)+'…', sid, type:tRaw, exp, tried:bases });
+      return bad(res, 401, 'Unauthorized', 'Invalid signature');
+    }
 
     const now = Math.floor(Date.now()/1000);
     if (now > Number(exp)) return bad(res, 401, 'Link expired');
