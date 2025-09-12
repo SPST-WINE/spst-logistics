@@ -9,6 +9,7 @@
     "@sparticuz/chromium": "131.0.1",
     "puppeteer-core": "22.15.0",
     "@vercel/blob": "latest",
+    "pdf-lib": "^1.17.1",
     "resend": "^3.2.0"
   },
   "overrides": {
