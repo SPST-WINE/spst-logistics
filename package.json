@@ -4,11 +4,10 @@
   "private": true,
   "type": "module",
   "engines": { "node": "20.x" },
-  "scripts": {
-  },
+  "scripts": {},
   "dependencies": {
-    "@sparticuz/chromium": "^129.0.0",
-    "puppeteer-core": "^22.15.0",
+    "@sparticuz/chromium": "114.0.0",
+    "puppeteer-core": "20.8.1",
     "@vercel/blob": "latest",
     "resend": "^3.2.0"
   }
