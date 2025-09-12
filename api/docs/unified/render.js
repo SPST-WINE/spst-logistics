@@ -1,21 +1,10 @@
-// api/docs/unified/render.js — Serverless Function (Node 20)
+// api/docs/unified/render.js — PDF senza Chromium (pdf-lib)
 
 import crypto from 'crypto';
-import chromium from '@sparticuz/chromium';
-import puppeteer from 'puppeteer-core';
-import { createRequire } from 'module';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
-const require = createRequire(import.meta.url);
+export const config = { runtime: 'nodejs', memory: 256, maxDuration: 10 };
 
-export const config = {
-  runtime: 'nodejs',   // Node.js Serverless Functions
-  memory: 1024,
-  maxDuration: 60,
-};
-
-// ─────────────────────────────────────────────
-// HMAC & helpers
-// ─────────────────────────────────────────────
 const SIGN = process.env.DOCS_SIGNING_SECRET || '';
 
 function hmac(params) {
@@ -26,12 +15,8 @@ function bad(res, code, payload) {
   res.status(code).json({ ok: false, ...payload });
 }
 
-// ─────────────────────────────────────────────
-// Handler
-// ─────────────────────────────────────────────
 export default async function handler(req, res) {
   const t0 = Date.now();
-
   try {
     if (req.method !== 'GET') {
       res.setHeader('Allow', 'GET');
@@ -39,19 +24,15 @@ export default async function handler(req, res) {
     }
 
     const { sid, type = 'proforma', exp, sig } = req.query || {};
-
-    // Log ambiente (senza import JSON con assert)
-    let chromiumVer, puppeteerVer;
-    try { chromiumVer  = require('@sparticuz/chromium/package.json').version; } catch {}
-    try { puppeteerVer = require('puppeteer-core/package.json').version; } catch {}
-    console.log('[render] env', {
-      node: process.version,
-      chromiumVer,
-      puppeteerVer,
-      region: process.env.VERCEL_REGION,
+    console.log('[render-pdf] IN', {
+      time: new Date().toISOString(),
+      sid,
+      type,
+      exp,
+      hasSig: Boolean(sig),
+      region: process.env.VERCEL_REGION
     });
 
-    // Validazioni e auth link firmato
     if (!SIGN) return bad(res, 500, { error: 'Render misconfigured', details: 'DOCS_SIGNING_SECRET missing' });
     if (!sid || !exp || !sig) return bad(res, 400, { error: 'Bad Request', details: 'Missing sid/exp/sig' });
 
@@ -61,74 +42,59 @@ export default async function handler(req, res) {
     const expected = hmac({ sid, type, exp });
     if (sig !== expected) return bad(res, 401, { error: 'Unauthorized', details: 'Bad signature' });
 
-    // HTML di test: sostituisci con il template reale
-    const html = /*html*/`
-      <!doctype html>
-      <html>
-      <head>
-        <meta charset="utf-8" />
-        <style>
-          body { font: 14px/1.45 -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 32px; }
-          h1 { margin: 0 0 10px; }
-          .muted { color: #666; }
-          .box { margin-top:16px; padding:12px; border:1px solid #ddd; border-radius:8px; }
-        </style>
-      </head>
-      <body>
-        <h1>Documento: ${type.toUpperCase()}</h1>
-        <div class="muted">Spedizione: ${sid}</div>
-        <div class="box">
-          <div>Generato il: ${new Date().toLocaleString('it-IT')}</div>
-          <div>Runtime: Node ${process.version}</div>
-          <div>Chromium: ${chromiumVer || 'n/a'} • Puppeteer: ${puppeteerVer || 'n/a'}</div>
-        </div>
-      </body>
-      </html>
-    `;
+    // ===== PDF =====
+    const A4 = { w: 595.28, h: 841.89 }; // punti tipografici
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([A4.w, A4.h]);
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const fontB = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-    // Lancio Chromium “serverless” (SPARTICUZ) — fondamentale per evitare libnss3
-    const executablePath = await chromium.executablePath();
-    const launchOpts = {
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath,
-      headless: chromium.headless,
-      ignoreHTTPSErrors: true,
-    };
+    const title =
+      type === 'fattura'
+        ? 'Fattura commerciale'
+        : type === 'dle'
+        ? 'Dichiarazione libera esportazione'
+        : 'Fattura proforma';
 
-    console.log('[render] launch opts', {
-      headless: launchOpts.headless,
-      exe: launchOpts.executablePath,
-      args0: (launchOpts.args || []).slice(0, 5),
+    // intestazione
+    page.drawText('SPST Logistics', {
+      x: 40, y: A4.h - 60, size: 18, font: fontB, color: rgb(0.12, 0.12, 0.12),
+    });
+    page.drawText(`Documento: ${title}`, {
+      x: 40, y: A4.h - 90, size: 14, font, color: rgb(0.15, 0.15, 0.15),
+    });
+    page.drawText(`ID Spedizione: ${sid}`, {
+      x: 40, y: A4.h - 110, size: 12, font, color: rgb(0.2, 0.2, 0.2),
+    });
+    page.drawText(`Generato: ${new Date().toLocaleString('it-IT')}`, {
+      x: 40, y: A4.h - 130, size: 11, font, color: rgb(0.35, 0.35, 0.35),
     });
 
-    let browser;
-    try {
-      browser = await puppeteer.launch(launchOpts);
-    } catch (e) {
-      console.error('[render] launch error', e);
-      return bad(res, 500, { error: 'Render error', details: String(e?.message || e) });
-    }
+    // box placeholder contenuti (qui in futuro inseriremo i dati reali)
+    const boxY = A4.h - 180;
+    page.drawRectangle({
+      x: 40, y: boxY - 280, width: A4.w - 80, height: 280,
+      borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1, color: rgb(1,1,1),
+    });
+    page.drawText('Contenuti documento (placeholder)', {
+      x: 52, y: boxY - 24, size: 12, font: fontB, color: rgb(0.25, 0.25, 0.25),
+    });
+    page.drawText(
+      'Questa versione genera un PDF “pulito” senza Chromium.\n' +
+      'La pipeline di allegato su Airtable ora può funzionare senza dipendenze di sistema.\n' +
+      'Quando vuoi, sostituiremo questo placeholder con il layout definitivo.',
+      { x: 52, y: boxY - 46, size: 11, font, color: rgb(0.2, 0.2, 0.2), lineHeight: 14 }
+    );
 
-    try {
-      const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'networkidle0' });
+    const bytes = await pdf.save();
 
-      const pdf = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: { top: '16mm', right: '14mm', bottom: '16mm', left: '14mm' },
-      });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="${sid}-${type}.pdf"`);
+    res.status(200).send(Buffer.from(bytes));
 
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="${sid}-${type}.pdf"`);
-      res.status(200).send(Buffer.from(pdf));
-      console.log('[render] OK', { ms: Date.now() - t0 });
-    } finally {
-      await browser.close().catch(() => {});
-    }
+    console.log('[render-pdf] OK', { ms: Date.now() - t0, size: bytes.length });
   } catch (err) {
-    console.error('[render] fatal', err);
+    console.error('[render-pdf] ERR', err);
     return bad(res, 500, { error: 'Render error', details: String(err?.message || err) });
   }
 }
