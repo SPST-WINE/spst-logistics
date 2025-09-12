@@ -1,21 +1,25 @@
 // /api/docs/unified/render.js
-// Runtime: Node.js 20+ (ESM). Nessun puppeteer: output HTML pronto per Stampa/Salva PDF.
+// Runtime: Node.js (Vercel Node 20). Nessun puppeteer: HTML pronto per Stampa/Salva PDF.
 export const config = { runtime: "nodejs" };
 
 import crypto from "node:crypto";
 
 /* =======================
-   Env & helpers
+   ENV
 ======================= */
 const env = (k, d) => process.env[k] ?? d;
 
-const AIR_PAT  = env("AIRTABLE_PAT");
-const AIR_BASE = env("AIRTABLE_BASE_ID");
-const TB_SHIP  = env("TB_SPEDIZIONI", "SpedizioniWebApp");
+const AIRTABLE_PAT   = env("AIRTABLE_PAT");
+const AIRTABLE_BASE  = env("AIRTABLE_BASE_ID");
+const TB_SPEDIZIONI  = env("TB_SPEDIZIONI", "SpedizioniWebApp"); // tabella spedizioni
+const TB_PL          = env("TB_PL", "SPED_PL");                  // tabella righe (packing list)
 
-const SIGN_SECRET   = env("DOCS_SIGN_SECRET");   // <— nuovo nome
-const BYPASS_SIG    = env("BYPASS_SIGNATURE") === "1";
+const DOCS_SIGN_SECRET = env("DOCS_SIGN_SECRET");
+const BYPASS_SIGNATURE = env("BYPASS_SIGNATURE") === "1";
 
+/* =======================
+   UTILS
+======================= */
 const asJSON = (res, code, payload) => {
   res.status(code).setHeader("content-type", "application/json; charset=utf-8");
   res.end(JSON.stringify(payload));
@@ -28,41 +32,56 @@ const fmtDate = (d) => {
 const eur = (n, cur = "EUR") =>
   new Intl.NumberFormat("it-IT", { style: "currency", currency: cur }).format(Number(n || 0));
 
-const pick = (obj, candidates, fallback = "") =>
-  candidates
-    .map((k) => obj?.[k])
-    .find((v) => v !== undefined && v !== null && v !== "") ?? fallback;
+const pick = (obj, names, fb = "") =>
+  names.map((k) => obj?.[k]).find((v) => v !== undefined && v !== null && v !== "") ?? fb;
 
 const field = (rec, names, fb = "") => pick(rec?.fields || {}, names, fb);
 
-const hmac = (s) => crypto.createHmac("sha256", SIGN_SECRET || "").update(s).digest("hex");
-const stringToSign = ({ sid, type, exp, ship }) => [sid, type, exp, ship].filter(Boolean).join("|");
+const hmac = (s) => crypto.createHmac("sha256", DOCS_SIGN_SECRET || "").update(s).digest("hex");
+const stringToSign = ({ sid, type, exp }) => [sid, type, exp].filter(Boolean).join("|");
 
 /* =======================
-   Airtable minimal client
+   Airtable helpers
 ======================= */
 const airHeaders = () => ({
-  Authorization: `Bearer ${AIR_PAT}`,
+  Authorization: `Bearer ${AIRTABLE_PAT}`,
 });
 
 const airURL = (table, qs) =>
-  `https://api.airtable.com/v0/${encodeURIComponent(AIR_BASE)}/${encodeURIComponent(table)}${qs ? `?${qs}` : ""}`;
+  `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE)}/${encodeURIComponent(table)}${qs ? `?${qs}` : ""}`;
 
-async function airFindShipmentBySid(idSpedizione) {
-  const safe = String(idSpedizione || "").replace(/'/g, "\\'");
-  const filter = encodeURIComponent(`{idSpedizione}='${safe}'`);
-  const url = airURL(TB_SHIP, `filterByFormula=${filter}&maxRecords=1`);
+// Spedizione: filtro per {ID Spedizione} == sid (nome campo con spazio!)
+async function airGetShipmentBySID(sid) {
+  const safe = String(sid || "").replace(/'/g, "\\'");
+  const filter = encodeURIComponent(`{ID Spedizione}='${safe}'`);
+  const url = airURL(TB_SPEDIZIONI, `filterByFormula=${filter}&maxRecords=1`);
   const r = await fetch(url, { headers: airHeaders() });
   if (!r.ok) throw new Error(`Airtable ${r.status}: ${await r.text()}`);
   const data = await r.json();
   return data.records?.[0] || null;
 }
 
+// Righe (packing list): filtra per {ID Spedizione} == sid
+async function airGetPLRowsBySID(sid) {
+  const safe = String(sid || "").replace(/'/g, "\\'");
+  const filter = encodeURIComponent(`{ID Spedizione}='${safe}'`);
+  const rows = [];
+  let url = airURL(TB_PL, `filterByFormula=${filter}&pageSize=100`);
+  // semplice paginazione
+  while (url) {
+    const r = await fetch(url, { headers: airHeaders() });
+    if (!r.ok) throw new Error(`Airtable ${r.status}: ${await r.text()}`);
+    const data = await r.json();
+    rows.push(...(data.records || []));
+    url = data.offset ? airURL(TB_PL, `filterByFormula=${filter}&pageSize=100&offset=${data.offset}`) : null;
+  }
+  return rows;
+}
+
 /* =======================
-   Template HTML
+   Template
 ======================= */
 function renderHTML({ doc, ship, consignee, items, totals, ui }) {
-  const today = fmtDate(new Date());
   const zebra = (i) => (i % 2 ? ' style="background:#fafafa"' : "");
 
   return `<!doctype html>
@@ -111,7 +130,7 @@ table.items td.num, table.items th.num{text-align:right}
 </head>
 <body>
   <div class="printbar">
-    <button class="btn" onclick="window.open(location.href.replace(/([?&])format=html(&|$)/,'$1').replace(/[?&]$/,''), '_blank')">Apri versione HTML “pura”</button>
+    <button class="btn" onclick="window.open(location.href, '_blank')">Apri anteprima</button>
     <button class="btn primary" onclick="window.print()">Stampa / Salva PDF</button>
   </div>
 
@@ -128,7 +147,7 @@ table.items td.num, table.items th.num{text-align:right}
         <div class="title">${ui.headerTitle}</div>
         <div class="kv">
           <div><strong>No.:</strong> ${doc.number}</div>
-          <div><strong>Data:</strong> ${doc.date || fmtDate(new Date())}</div>
+          <div><strong>Data:</strong> ${doc.date}</div>
           <div><strong>ID Spedizione:</strong> ${ship.id}</div>
         </div>
       </div>
@@ -146,7 +165,7 @@ table.items td.num, table.items th.num{text-align:right}
       </div>
       <div class="card">
         <h3>Dettagli spedizione</h3>
-        <div class="small">Corriere: ${ship.carrier || "—"}</div>
+        ${ship.carrier ? `<div class="small">Corriere: ${ship.carrier}</div>` : ""}
         <div class="small">Incoterm: ${doc.incoterm || "—"} · Valuta: ${doc.currency}</div>
         ${ship.pickup ? `<div class="small">Pickup: ${ship.pickup}</div>` : ""}
       </div>
@@ -177,8 +196,8 @@ table.items td.num, table.items th.num{text-align:right}
         `).join("") : `
           <tr${zebra(0)}>
             <td>1</td>
-            <td><strong>Placeholder riga</strong><br/><span style="color:#6b7280">HS: 0000.00 · Origine: IT</span></td>
-            <td class="num">1</td>
+            <td><strong>—</strong></td>
+            <td class="num">0</td>
             <td class="num">${eur(0)}</td>
             <td class="num">${eur(0)}</td>
           </tr>
@@ -194,7 +213,7 @@ table.items td.num, table.items th.num{text-align:right}
 
     <div class="sign">
       <div>
-        <div class="small"><strong>Luogo & data:</strong> ${doc.place}, ${doc.date || fmtDate(new Date())}</div>
+        <div class="small"><strong>Luogo & data:</strong> ${doc.place}, ${doc.date}</div>
         <div class="small">${doc.sender.contacts}</div>
       </div>
       <div>
@@ -208,42 +227,50 @@ table.items td.num, table.items th.num{text-align:right}
 }
 
 /* =======================
-   Handler
+   API Handler
 ======================= */
 export default async function handler(req, res) {
   try {
     res.setHeader("cache-control", "no-store");
 
-    const { sid, type = "proforma", exp, sig, ship: sid2 } = req.query || {};
+    // Query
+    const q = req.query || {};
+    const sid = q.ship || q.sid;              // ID Spedizione
+    const type = q.type || "proforma";
+    const exp  = q.exp;
+    const sig  = q.sig;
 
-    // --- Signature check (disattivabile in preview) ---
-    if (!BYPASS_SIG) {
-      if (!SIGN_SECRET) return asJSON(res, 500, { ok:false, error:"Missing DOCS_SIGN_SECRET" });
+    // Auth: HMAC (disattivabile con BYPASS_SIGNATURE=1)
+    if (!BYPASS_SIGNATURE) {
+      if (!DOCS_SIGN_SECRET) return asJSON(res, 500, { ok:false, error:"Missing DOCS_SIGN_SECRET" });
       if (!sid || !exp || !sig) return asJSON(res, 401, { ok:false, error:"Unauthorized", details:"Missing query params" });
-
       const now = Math.floor(Date.now() / 1000);
       if (Number(exp) < now) return asJSON(res, 401, { ok:false, error:"Unauthorized", details:"Expired" });
-
-      const str = stringToSign({ sid, type, exp, ship: sid2 });
-      const good = hmac(str);
-      const safeEqual = crypto.timingSafeEqual(Buffer.from(good), Buffer.from(String(sig)));
-      if (!safeEqual) return asJSON(res, 401, { ok:false, error:"Unauthorized", details:"Bad signature" });
+      const toSign = stringToSign({ sid, type, exp });
+      const good = hmac(toSign);
+      const okSig = crypto.timingSafeEqual(Buffer.from(good), Buffer.from(String(sig)));
+      if (!okSig) return asJSON(res, 401, { ok:false, error:"Unauthorized", details:"Bad signature" });
     }
 
-    // --- Airtable fetch ---
-    if (!AIR_PAT || !AIR_BASE) {
+    // Checks
+    if (!AIRTABLE_PAT || !AIRTABLE_BASE) {
       return asJSON(res, 500, { ok:false, error:"Airtable not configured" });
     }
-    const rec = await airFindShipmentBySid(sid2 || sid);
+    if (!sid) {
+      return asJSON(res, 400, { ok:false, error:"Missing 'sid' (ID Spedizione)" });
+    }
+
+    // Spedizione
+    const rec = await airGetShipmentBySID(sid);
     if (!rec) {
-      return asJSON(res, 404, { ok:false, error:"Not found", details:`No shipment for idSpedizione='${sid2 || sid}'` });
+      return asJSON(res, 404, { ok:false, error:"Not found", details:`Nessuna spedizione con {ID Spedizione}='${sid}'` });
     }
     const f = rec.fields || {};
 
-    // --- Header/Doc fields (mapping tollerante) ---
+    // Testata documento (mapping tollerante)
     const doc = {
       kind: type,
-      number: field(rec, ["Numero Proforma","Numero Documento","Doc No","Numero"], `PF-${(sid2 || sid)}`),
+      number: field(rec, ["Numero Proforma","Numero Documento","Doc No","Numero"], `PF-${sid}`),
       date:   field(rec, ["Data Proforma","Data Documento","Data"], fmtDate(new Date())),
       currency: field(rec, ["Valuta","Currency"], "EUR"),
       incoterm: field(rec, ["Incoterm","Termini resa"], ""),
@@ -255,8 +282,9 @@ export default async function handler(req, res) {
       },
     };
 
+    // Destinatario
     const consignee = {
-      name: pick(f, ["Destinatario - Nome","Destinatario","Consignee","Cliente"], "—"),
+      name: pick(f, ["Destinatario - Nome","Destinatario","Consignee","Cliente"], ""),
       lines: [
         pick(f, ["Destinatario - Indirizzo","Indirizzo destinatario"]),
         [pick(f, ["Destinatario - CAP","CAP"]), pick(f, ["Destinatario - Città","Città"]), pick(f, ["Destinatario - Provincia","Provincia"])].filter(Boolean).join(" "),
@@ -267,53 +295,46 @@ export default async function handler(req, res) {
       phone: pick(f, ["Destinatario - Telefono","Telefono destinatario"]),
     };
 
+    // Spedizione (meta)
     const ship = {
-      id: sid2 || sid,
+      id: sid,
       carrier: pick(f, ["Corriere","Vettore"]),
       pickup: pick(f, ["Data ritiro","Pickup"]),
     };
 
-    // --- Righe: supporto JSON in campo testo (facoltativo) ---
-    // Se hai un campo come "Righe JSON" / "Items JSON" con array di oggetti:
-    // [{descrizione, qty, prezzo, hs, origine, peso}]
-    let items = [];
-    const rowsJSON = pick(f, ["Righe JSON","Items JSON","Proforma - Righe JSON"]);
-    if (rowsJSON) {
-      try {
-        const arr = JSON.parse(rowsJSON);
-        if (Array.isArray(arr)) {
-          items = arr.map((r) => {
-            const qty = Number(r.qty || r.quantita || 0) || 0;
-            const up  = Number(r.prezzo || r.unitPrice || 0) || 0;
-            const metaParts = [];
-            if (r.hs) metaParts.push(`HS: ${r.hs}`);
-            if (r.origine) metaParts.push(`Origine: ${r.origine}`);
-            if (r.peso) metaParts.push(`Peso: ${r.peso} kg`);
-            return {
-              title: r.descrizione || r.description || "—",
-              meta: metaParts.join(" · "),
-              qty,
-              unit: eur(up, doc.currency),
-              amount: eur(qty * up, doc.currency),
-              _n: qty * up,
-            };
-          });
-        }
-      } catch (e) {
-        console.warn("[render] Righe JSON parse error:", e?.message || e);
-      }
-    }
+    // Righe da tabella SPED_PL
+    const rows = await airGetPLRowsBySID(sid);
+    const items = rows.map((r) => {
+      const rf = r.fields || {};
+      const qty = Number(pick(rf, ["Qta","Qtà","Quantità","Qty"], 0)) || 0;
+      const up  = Number(pick(rf, ["Prezzo","Prezzo Unitario","Unit Price","Prezzo unitario"], 0)) || 0;
+      const metaParts = [];
+      const hs = pick(rf, ["HS","HS Code","HS code","Codice HS"]);
+      const org = pick(rf, ["Origine","Paese origine","Origine merce"]);
+      const peso = pick(rf, ["Peso","Peso (kg)","Peso Kg"]);
+      if (hs) metaParts.push(`HS: ${hs}`);
+      if (org) metaParts.push(`Origine: ${org}`);
+      if (peso) metaParts.push(`Peso: ${peso} kg`);
+      return {
+        title: pick(rf, ["Descrizione","description","Prodotto","Articolo","Item","Item Description"], "—"),
+        meta: metaParts.join(" · "),
+        qty,
+        unit: eur(up, doc.currency),
+        amount: eur(qty * up, doc.currency),
+        _n: qty * up,
+      };
+    });
 
-    // Totali
     const total = items.reduce((s, it) => s + (it._n || 0), 0);
 
-    // UI labels
+    // UI
     const ui = {
       title: "Proforma Invoice — Anteprima",
       headerTitle: "Proforma Invoice",
       watermark: "PROFORMA",
     };
 
+    // Render
     const html = renderHTML({
       doc,
       ship,
@@ -323,16 +344,10 @@ export default async function handler(req, res) {
       ui,
     });
 
-    // OK
     res.status(200).setHeader("content-type", "text/html; charset=utf-8");
     res.end(html);
 
-    // Log sintetico
-    console.log("[render] OK", {
-      type,
-      sid: sid2 || sid,
-      table: TB_SHIP,
-    });
+    console.log("[render] OK", { type, sid, tables: { TB_SPEDIZIONI, TB_PL } });
   } catch (err) {
     console.error("[render] ERR", err);
     return asJSON(res, 500, { ok:false, error:"Render error", details:String(err?.message || err) });
