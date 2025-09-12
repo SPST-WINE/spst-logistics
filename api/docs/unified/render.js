@@ -2,11 +2,15 @@
 export const config = { runtime: 'nodejs' };
 
 /**
- * HTML renderer for Proforma / Commercial Invoice (no headless browser).
+ * HTML renderer for:
+ *  - Proforma Invoice
+ *  - Commercial Invoice
+ *  - DLE (Export Free Declaration)
+ *
  * Query:
- *  - sid or ship: shipment identifier (business "ID Spedizione" or Airtable recId)
- *  - type: proforma | fattura | commercial | commerciale | invoice (default: proforma)
- *  - exp, sig: signed URL (HMAC-SHA256 over `${sid}.${type}.${exp}`) — bypassable with BYPASS_SIGNATURE=1
+ *  - sid | ship : shipment identifier (business "ID Spedizione" or Airtable recId)
+ *  - type       : proforma | fattura | commercial | commerciale | invoice | dle
+ *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
  *
  * Env:
  *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1
@@ -34,14 +38,14 @@ const API_ROOT = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
 const tableURL  = (t) => `${API_ROOT}/${encodeURIComponent(t)}`;
 const recordURL = (t, id) => `${tableURL(t)}/${encodeURIComponent(id)}`;
 
-async function airFetch(url, init={}) {
+async function airFetch(url, init = {}) {
   const res = await fetch(url, {
     ...init,
     headers: {
       Authorization: `Bearer ${AIRTABLE_PAT}`,
       'Content-Type': 'application/json',
-      ...(init.headers || {})
-    }
+      ...(init.headers || {}),
+    },
   });
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
@@ -55,8 +59,8 @@ async function airFetch(url, init={}) {
 
 // ---------- Field alias fallback for "ID Spedizione" ----------
 const SID_FIELD_CANDIDATES = [
-  'ID Spedizione','Id Spedizione','ID spedizione','id spedizione',
-  'ID\u00A0Spedizione','IDSpedizione','Spedizione ID','Spedizione - ID','ID'
+  'ID Spedizione', 'Id Spedizione', 'ID spedizione', 'id spedizione',
+  'ID\u00A0Spedizione', 'IDSpedizione', 'Spedizione ID', 'Spedizione - ID', 'ID',
 ];
 
 async function findOneByFieldAliases(tableName, value) {
@@ -99,7 +103,6 @@ async function findManyByFieldAliases(tableName, value) {
 
 // ---------- Shipment + PL loaders ----------
 async function getShipmentBySid(sid) {
-  // If it's a direct Airtable recId
   if (/^rec[0-9A-Za-z]{14}/.test(String(sid))) {
     return airFetch(recordURL(TB_SPEDIZIONI, sid));
   }
@@ -115,7 +118,7 @@ async function getPLRowsBySid(sidOrRecId) {
 function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
   if (BYPASS_SIGNATURE) return true;
   if (!sid || !rawType || !exp || !sig) return false;
-  const now = Math.floor(Date.now()/1000);
+  const now = Math.floor(Date.now() / 1000);
   if (Number(exp) < now) return false;
 
   const make = (t) => {
@@ -124,7 +127,6 @@ function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
     return h.digest('hex');
   };
 
-  // Accept both the raw type provided in the URL and our normalized type
   try {
     const cand1 = make(rawType);
     if (crypto.timingSafeEqual(Buffer.from(cand1), Buffer.from(String(sig)))) return true;
@@ -137,11 +139,11 @@ function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
 }
 
 function bad(res, code, msg, details) {
-  res.status(code).json({ ok:false, error: msg, details });
+  res.status(code).json({ ok: false, error: msg, details });
 }
 
 // ---------- Utils ----------
-const get = (obj, keys, def='') => {
+const get = (obj, keys, def = '') => {
   for (const k of keys) {
     const v = obj?.[k];
     if (v !== undefined && v !== null && v !== '') return v;
@@ -150,23 +152,24 @@ const get = (obj, keys, def='') => {
 };
 const fmtDate = (d) => { try { return new Date(d).toLocaleDateString('it-IT'); } catch { return ''; } };
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
-const money = (x, ccy='€') =>
+const money = (x, ccy = '€') =>
   `${ccy} ${num(x).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const escapeHTML = (x='') => String(x)
-  .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
-  .replaceAll('"','&quot;').replaceAll("'",'&#39;');
+const escapeHTML = (x = '') => String(x)
+  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 
 // ---------- Type normalization ----------
 function normalizeType(t) {
   const raw = String(t || 'proforma').toLowerCase().trim();
-  const commercialAliases = new Set([
-    'commercial', 'commerciale', 'invoice', 'fattura', 'fattura commerciale'
-  ]);
-  return commercialAliases.has(raw) ? 'commercial' : 'proforma';
+  const commercialAliases = new Set(['commercial', 'commerciale', 'invoice', 'fattura', 'fattura commerciale']);
+  const dleAliases = new Set(['dle', 'dichiarazione', 'libera', 'esportazione', 'export', 'export declaration']);
+  if (dleAliases.has(raw)) return 'dle';
+  if (commercialAliases.has(raw)) return 'commercial';
+  return 'proforma';
 }
 
-// ---------- HTML template ----------
-function renderHTML({ type, ship, lines, total }) {
+// ---------- INVOICE HTML ----------
+function renderInvoiceHTML({ type, ship, lines, total }) {
   const watermark = type === 'proforma';
   const docTitle  = type === 'proforma' ? 'Proforma Invoice' : 'Commercial Invoice';
   const ccy = get(ship.fields, ['Valuta', 'Currency'], 'EUR');
@@ -202,8 +205,6 @@ function renderHTML({ type, ship, lines, total }) {
   const place  = senderCity || '';
   const dateStr= fmtDate(pickupDate) || fmtDate(Date.now());
 
-  const proformaNote = `Goods are not for resale. Declared values are for customs purposes only.`;
-
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -212,7 +213,7 @@ function renderHTML({ type, ship, lines, total }) {
 <title>${docTitle} — ${escapeHTML(sid)}</title>
 <style>
 :root{
-  --brand:#111827; --accent:#0ea5e9; --text:#0b0f13; --muted:#6b7280;
+  --brand:#111827; --accent:#0ea5e9; --ok:#16a34a; --text:#0b0f13; --muted:#6b7280;
   --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --zebra:#fafafa; --chip:#f3f4f6;
 }
 *{box-sizing:border-box}
@@ -220,43 +221,36 @@ html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui
 .page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative}
 .watermark{position:absolute; inset:0; display:${watermark?'flex':'none'}; align-items:center; justify-content:center; pointer-events:none}
 .watermark span{opacity:0.06; font-size:180px; letter-spacing:0.22em; transform:rotate(-24deg); font-weight:800; color:#0f172a}
-
 header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px}
 .brand{max-width:70%}
 .tag{display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#374151; background:var(--chip); border:1px solid var(--border); padding:2px 6px; border-radius:6px; margin-bottom:6px}
-.logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:#brand}
+.logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:#111827}
 .brand .meta{margin-top:6px; font-size:12px; color:var(--muted)}
 .doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
-.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'#0ea5e9':'#16a34a'}; font-weight:800}
+.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'var(--accent)':'var(--ok)'}; font-weight:800}
 .doc-meta .kv{margin-top:6px}
 .kv div{margin:2px 0}
-
 hr.sep{border:none;border-top:1px solid var(--border); margin:16px 0 18px}
-
 .grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
 .card{border:1px solid var(--border); border-radius:12px; padding:12px}
 .card h3{margin:0 0 8px; font-size:11px; color:#374151; text-transform:uppercase; letter-spacing:.08em}
 .small{font-size:12px; color:#374151}
 .mono{font-feature-settings:"tnum" 1; font-variant-numeric: tabular-nums}
 .muted{color:var(--muted)}
-
 table.items{width:100%; border-collapse:collapse; font-size:12px; margin-top:16px}
 table.items th, table.items td{border-bottom:1px solid var(--border); padding:9px 8px; vertical-align:top}
 table.items thead th{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#374151; text-align:left; background:var(--chip)}
 table.items td.num, table.items th.num{text-align:right}
 table.items tbody tr:nth-child(odd){background:var(--zebra)}
 table.items tbody tr:last-child td{border-bottom:1px solid var(--border-strong)}
-
 .totals{margin-top:10px; display:flex; justify-content:flex-end}
 .totals table{font-size:12px; border-collapse:collapse; min-width:260px}
 .totals td{padding:8px 10px; border-bottom:1px solid var(--border)}
 .totals tr:last-child td{border-top:1px solid var(--border-strong); border-bottom:none; font-weight:700}
-
 footer{margin-top:22px; font-size:11px; color:#374151}
 .sign{margin-top:20px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
 .sign .box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
 .sign .label{font-size:11px; color:#374151; margin-bottom:6px}
-
 .printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
 .btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:8px; cursor:pointer}
 .btn:hover{background:#f9fafb}
@@ -273,9 +267,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
     <header>
       <div class="brand">
         <div class="tag">Sender</div>
-        <div class="logo">
-          <div class="word">${escapeHTML(senderName)}</div>
-        </div>
+        <div class="logo"><div class="word">${escapeHTML(senderName)}</div></div>
         <div class="meta">
           ${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}${senderCountry? ' · ' : ''}${senderVat ? ('VAT ' + escapeHTML(senderVat)) : ''}<br/>
           ${senderPhone ? ('Tel: ' + escapeHTML(senderPhone)) : ''}
@@ -359,12 +351,125 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 </html>`;
 }
 
+// ---------- DLE HTML ----------
+function renderDLEHTML({ ship }) {
+  const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
+  const senderRS  = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
+  const senderCity= get(ship.fields, ['Mittente - Città'], '');
+  const pickup    = get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
+  const dateStr   = fmtDate(pickup) || fmtDate(Date.now());
+  const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Export Free Declaration — ${escapeHTML(sid)}</title>
+<style>
+:root{
+  --brand:#111827; --accent:#0ea5e9; --text:#0b0f13; --muted:#6b7280;
+  --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --chip:#f3f4f6;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative}
+header{display:flex; align-items:flex-start; justify-content:space-between; gap:16px}
+.brand{max-width:70%}
+.logo .word{font-size:24px; font-weight:800; letter-spacing:.01em; color:#111827}
+.meta{margin-top:4px; font-size:12px; color:var(--muted)}
+.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
+.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#111827; font-weight:800}
+.doc-meta .kv{margin-top:6px}
+.kv div{margin:2px 0}
+hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
+h1{font-size:18px; margin:0 0 12px}
+.to{font-size:12px; color:#374151; margin-bottom:12px}
+.section{font-size:13px; line-height:1.55}
+.section p{margin:8px 0}
+.list{margin:8px 0 8px 16px; padding:0}
+.list li{margin:6px 0}
+.footer{margin-top:22px; font-size:12px; color:#374151}
+.sign{margin-top:22px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
+.box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
+.printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
+.btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:8px; cursor:pointer}
+.btn:hover{background:#f9fafb}
+@media print {.printbar{display:none}}
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="printbar">
+      <button class="btn" onclick="window.print()">Print / Save PDF</button>
+    </div>
+
+    <header>
+      <div class="brand">
+        <div class="logo"><div class="word">${escapeHTML(senderRS)}</div></div>
+        <div class="meta">Shipment ID: ${escapeHTML(sid)}</div>
+      </div>
+      <div class="doc-meta">
+        <div class="title">Export Free Declaration</div>
+        <div class="kv">
+          <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
+          <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
+        </div>
+      </div>
+    </header>
+
+    <hr class="sep" />
+
+    <div class="to"><strong>To:</strong> ${escapeHTML(carrier)}</div>
+
+    <div class="section">
+      <p>I, the undersigned <strong>${escapeHTML(senderRS)}</strong>, as Shipper, hereby declare under my sole responsibility that all goods entrusted to <strong>${escapeHTML(carrier)}</strong>:</p>
+      <ul class="list">
+        <li>Are not included in the list of products protected by the Washington Convention (CITES) – Council Regulation (EC) No. 338/97 and subsequent amendments.</li>
+        <li>Are not included in the list of goods covered by Council Regulation (EC) No. 116/2009 on the export of cultural goods.</li>
+        <li>Are not subject to Regulation (EU) No. 821/2021 on dual-use items and subsequent amendments.</li>
+        <li>Are not included in Regulation (EU) No. 125/2019 concerning trade in certain goods that could be used for capital punishment, torture, or other cruel, inhuman, or degrading treatment.</li>
+        <li>Do not contain cat or dog fur, in accordance with Council Regulation (EC) No. 1523/2007.</li>
+        <li>Are not subject to Regulation (EU) No. 649/2012 on the export and import of hazardous chemicals.</li>
+        <li>Are not included in Regulation (EU) No. 590/2024 on substances that deplete the ozone layer.</li>
+        <li>Are not subject to Regulation (EC) No. 1013/2006 concerning shipments of waste.</li>
+        <li>Are not included in the restrictive measures provided for by the following EU Regulations and Decisions:</li>
+      </ul>
+      <ul class="list">
+        <li>Regulation (EC) No. 1210/2003 (Iraq)</li>
+        <li>Regulation (EU) No. 2016/44 (Libya)</li>
+        <li>Regulation (EU) No. 36/2012 (Syria)</li>
+        <li>Regulation (EC) No. 765/2006 (Belarus)</li>
+        <li>Regulation (EU) No. 833/2014 and Council Decision 2014/512/CFSP (Russia/Ukraine)</li>
+        <li>Regulation (EU) No. 692/2014 (Crimea/Sevastopol)</li>
+        <li>Regulation (EU) No. 2022/263 (Ukrainian territories occupied by the Russian Federation)</li>
+      </ul>
+      <p>Furthermore, the goods:</p>
+      <ul class="list">
+        <li>Are not included in any other restrictive list under current EU legislation.</li>
+        <li>Are intended exclusively for civilian use and have no dual-use or military purpose.</li>
+      </ul>
+    </div>
+
+    <div class="footer">
+      <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
+      <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
+      <div class="sign" style="margin-top:10px">
+        <div><strong>Signature of Shipper:</strong></div>
+        <div class="box"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 // ---------- Handler ----------
 export default async function handler(req, res) {
   try {
     const q = req.query || {};
     const rawType = String(q.type || 'proforma').toLowerCase();
-    const type    = normalizeType(rawType); // 'proforma' or 'commercial'
+    const type    = normalizeType(rawType); // 'proforma' | 'commercial' | 'dle'
     const sidRaw  = q.sid || q.ship;
     const sig     = q.sig;
     const exp     = q.exp;
@@ -379,30 +484,37 @@ export default async function handler(req, res) {
     const ship = await getShipmentBySid(sidRaw);
     if (!ship) return bad(res, 404, 'Not found', `No shipment found for ${sidRaw}`);
 
-    // Load PL rows (try both recId and business SID)
-    const plByRec = await getPLRowsBySid(ship.id);
-    const plBySid = sidRaw ? await getPLRowsBySid(sidRaw) : [];
-    const unique  = new Map();
-    [...plByRec, ...plBySid].forEach(r => unique.set(r.id, r));
-    const pl = [...unique.values()];
+    let html;
 
-    // Build lines
-    const items = pl.length ? pl.map(r => {
-      const f = r.fields || {};
-      const title = get(f, ['Descrizione','Description','Prodotto','Articolo','SKU','Titolo'], '');
-      const qty   = num(get(f, ['Quantità','Qta','Qtà','Qty','Pezzi'], 0));
-      const price = num(get(f, ['Prezzo','Price','Valore Unitario','Unit Price'], 0));
-      const hs    = get(f, ['HS','HS code','HS Code'], '');
-      const origin= get(f, ['Origine','Country of origin','Origin'], '');
-      const metaBits = [];
-      if (hs) metaBits.push(`HS: ${hs}`);
-      if (origin) metaBits.push(`Origin: ${origin}`);
-      return { title, qty, price, meta: metaBits.join(' · ') };
-    }) : [{ title:'—', qty:0, price:0, meta:'' }];
+    if (type === 'dle') {
+      // DLE does not need PL rows
+      html = renderDLEHTML({ ship });
+    } else {
+      // Invoices: load PL (try both recId and business SID)
+      const plByRec = await getPLRowsBySid(ship.id);
+      const plBySid = sidRaw ? await getPLRowsBySid(sidRaw) : [];
+      const unique  = new Map();
+      [...plByRec, ...plBySid].forEach(r => unique.set(r.id, r));
+      const pl = [...unique.values()];
 
-    const total = items.reduce((s, r) => s + num(r.qty) * num(r.price), 0);
+      // Build lines
+      const items = pl.length ? pl.map(r => {
+        const f = r.fields || {};
+        const title = get(f, ['Descrizione','Description','Prodotto','Articolo','SKU','Titolo'], '');
+        const qty   = num(get(f, ['Quantità','Qta','Qtà','Qty','Pezzi'], 0));
+        const price = num(get(f, ['Prezzo','Price','Valore Unitario','Unit Price'], 0));
+        const hs    = get(f, ['HS','HS code','HS Code'], '');
+        const origin= get(f, ['Origine','Country of origin','Origin'], '');
+        const metaBits = [];
+        if (hs) metaBits.push(`HS: ${hs}`);
+        if (origin) metaBits.push(`Origin: ${origin}`);
+        return { title, qty, price, meta: metaBits.join(' · ') };
+      }) : [{ title:'—', qty:0, price:0, meta:'' }];
 
-    const html = renderHTML({ type, ship, lines: items, total });
+      const total = items.reduce((s, r) => s + num(r.qty) * num(r.price), 0);
+      html = renderInvoiceHTML({ type, ship, lines: items, total });
+    }
+
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.status(200).send(html);
   } catch (err) {
