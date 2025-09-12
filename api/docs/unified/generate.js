@@ -1,127 +1,71 @@
-// api/docs/unified/generate.js  (ESM + Node 20)
-export const config = { runtime: 'nodejs' };
-
+// api/docs/unified/generate.js
+// ESM: il progetto ha "type":"module" nel package.json
 import crypto from 'node:crypto';
 
-const SECRET          = process.env.DOCS_SIGNING_SECRET || process.env.ATTACH_SECRET || '';
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || '';
-const AIRTABLE_TOKEN  = process.env.AIRTABLE_TOKEN || process.env.AIRTABLE_API_KEY || '';
-const AIRTABLE_BASE   = process.env.AIRTABLE_BASE || '';
-const TB_SPEDIZIONI   = process.env.TB_SPEDIZIONI || 'SpedizioniWebApp';
+const SECRET = process.env.DOCS_SIGN_SECRET || '';
 
-const FIELD_BY_TYPE = {
-  proforma: 'Allegato Fattura',
-  fattura : 'Allegato Fattura',
-  invoice : 'Allegato Fattura',
-  dle     : 'Allegato DLE',
-  pl      : 'Allegato PL',
-};
-
-const hmacHex = (s) => crypto.createHmac('sha256', SECRET).update(s).digest('hex');
-const bad = (res, code, error, details) => {
-  res.setHeader('Content-Type','application/json; charset=utf-8');
-  return res.status(code).send(JSON.stringify({ ok:false, error, details }));
-};
-
-function readJsonBody(req){
-  return new Promise((resolve) => {
-    if (req.body && typeof req.body === 'object') return resolve(req.body);
-    let data=''; req.on('data', c => data += c);
-    req.on('end', () => { try{ resolve(JSON.parse(data || '{}')); } catch { resolve({}); } });
-    req.on('error', () => resolve({}));
-  });
+function canonical(params) {
+  // Firma STABILE (ordine fisso delle chiavi che usiamo)
+  const keys = ['sid', 'type', 'exp', 'ship'];
+  return keys
+    .filter((k) => params[k] !== undefined && params[k] !== null)
+    .map((k) => `${k}=${encodeURIComponent(String(params[k]))}`)
+    .join('&');
 }
 
-async function airtableLookupRecId(idSpedizione){
-  if (!AIRTABLE_TOKEN || !AIRTABLE_BASE || !idSpedizione) return null;
-  const table = encodeURIComponent(TB_SPEDIZIONI);
-  const base  = encodeURIComponent(AIRTABLE_BASE);
-  const escaped = idSpedizione.replace(/'/g,"''");
-  const url = `https://api.airtable.com/v0/${base}/${table}?maxRecords=1&filterByFormula=${encodeURIComponent(`{ID Spedizione}='${escaped}'`)}`;
-  const r = await fetch(url, { headers: { Authorization:`Bearer ${AIRTABLE_TOKEN}` }});
-  if (!r.ok) return null;
-  const j = await r.json().catch(()=>null);
-  return j?.records?.[0]?.id || null;
+function sign(params) {
+  return crypto.createHmac('sha256', SECRET).update(canonical(params)).digest('hex');
 }
 
-async function attachToAirtable({ recId, fieldName, url, filename }){
-  if (!AIRTABLE_TOKEN || !AIRTABLE_BASE || !recId || !fieldName) {
-    return { ok:false, skipped:true, reason:'missing-config-or-recId' };
-  }
-  const api = `https://api.airtable.com/v0/${encodeURIComponent(AIRTABLE_BASE)}/${encodeURIComponent(TB_SPEDIZIONI)}/${encodeURIComponent(recId)}`;
-  const body = { fields: { [fieldName]: [{ url, filename }] } };
-  const r = await fetch(api, {
-    method:'PATCH',
-    headers:{ 'Authorization':`Bearer ${AIRTABLE_TOKEN}`, 'Content-Type':'application/json' },
-    body: JSON.stringify(body)
-  });
-  if (!r.ok) {
-    const text = await r.text();
-    return { ok:false, error:`Airtable ${r.status}`, details:text };
-  }
-  return { ok:true };
-}
-
-export default async function handler(req, res){
-  const started = Date.now();
-  try{
-    if (req.method !== 'POST') { res.setHeader('Allow','POST'); return bad(res,405,'Method Not Allowed'); }
-
-    const body = await readJsonBody(req);
-    const idSpedizione = (body.idSpedizione || '').trim();
-    const type = String(body.type || 'proforma').toLowerCase();
-
-    if (!SECRET) return bad(res,500,'Server misconfigured','Missing DOCS_SIGNING_SECRET');
-    if (!idSpedizione) return bad(res,400,'Missing parameter','idSpedizione');
-
-    // recId serve solo per allegare su Airtable (non per la firma URL)
-    let recId = (body.recId || '').startsWith('rec') ? body.recId : null;
-    if (!recId) { try { recId = await airtableLookupRecId(idSpedizione); } catch {} }
-
-    // FIRMA SEMPRE CON idSpedizione
-    const sid = idSpedizione;
-    const exp = Math.floor(Date.now()/1000) + 60*15;
-    const sig = hmacHex(`${sid}.${type}.${exp}`);
-
-    const origin = PUBLIC_BASE_URL || `https://${req.headers.host}`;
-    const u = new URL('/api/docs/unified/render', origin);
-    u.searchParams.set('sid', sid);
-    u.searchParams.set('type', type);
-    u.searchParams.set('exp', String(exp));
-    u.searchParams.set('sig', sig);
-    u.searchParams.set('ship', idSpedizione);
-    if (body.courier) u.searchParams.set('courier', String(body.courier));
-
-    const field = FIELD_BY_TYPE[type] || 'Allegato 1';
-
-    let attach = { ok:false, skipped:true, reason:'not-attempted' };
-    if (recId) {
-      try{
-        attach = await attachToAirtable({
-          recId, fieldName: field,
-          url: u.toString() + '&format=html',
-          filename: `${type}-${idSpedizione}-${exp}.html`
-        });
-      }catch(e){
-        attach = { ok:false, error:'attach-failed', details: e?.message || String(e) };
-      }
+export default async function handler(req, res) {
+  const now = new Date().toISOString();
+  try {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST');
+      return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
+    }
+    if (!SECRET) {
+      return res.status(500).json({ ok: false, error: 'Missing DOCS_SIGN_SECRET' });
     }
 
-    res.setHeader('Content-Type','application/json; charset=utf-8');
-    res.setHeader('Cache-Control','no-store');
-    return res.status(200).send(JSON.stringify({
-      ok:true,
-      url: u.toString(),
-      field,
-      recId: recId || null,
-      sid,
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+    const idSpedizione = (body.idSpedizione || '').trim();
+    const type = (body.type || 'proforma').trim(); // 'proforma' | 'fattura' | 'dle'
+    if (!idSpedizione) {
+      return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
+    }
+
+    // Per ora usiamo l’ID spedizione “umano” come valore firmato.
+    // (In futuro potrai passare il recId Airtable, basta valorizzarlo qui dentro.)
+    const sid = idSpedizione;     // valore firmato
+    const ship = idSpedizione;    // mostrato nel template
+
+    const exp = Math.floor(Date.now() / 1000) + 15 * 60; // 15 minuti
+    const payload = { sid, type, exp, ship };
+    const sig = sign(payload);
+
+    const proto = (req.headers['x-forwarded-proto'] || 'https');
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const base = `${proto}://${host}`;
+
+    const qs = canonical(payload) + `&sig=${sig}`;
+    const url = `${base}/api/docs/unified/render?${qs}`;
+
+    console.log('[generate] OK', { time: now, type, sid, ship, exp });
+
+    // NB: mappatura campi per “allegato” (quando la userai):
+    // proforma -> Allegato Fattura, fattura -> Allegato Fattura, dle -> Allegato DLE
+    const fieldMap = { proforma: 'Allegato Fattura', fattura: 'Allegato Fattura', dle: 'Allegato DLE' };
+
+    return res.status(200).json({
+      ok: true,
+      url,
+      field: fieldMap[type] || 'Allegato Fattura',
       type,
-      via:'generate',
-      attached: attach,
-      ms: Date.now() - started
-    }, null, 2));
-  }catch(e){
-    console.error('[generate] 500', e);
-    return bad(res,500,'Generate error', e?.message || String(e));
+      via: 'referer',
+    });
+  } catch (err) {
+    console.error('[generate] 500', now, err);
+    return res.status(500).json({ ok: false, error: 'Server error' });
   }
 }
