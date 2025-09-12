@@ -1,100 +1,135 @@
-// api/docs/unified/render.js — PDF senza Chromium (pdf-lib)
-
+// api/docs/unified/render.js
 import crypto from 'crypto';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
-export const config = { runtime: 'nodejs', memory: 256, maxDuration: 10 };
+// ENV
+const TB   = process.env.TB_SPEDIZIONI || 'SpedizioniWebApp';
+const BASE = process.env.AIRTABLE_BASE_ID;
+const PAT  = process.env.AIRTABLE_PAT;
+const SIGN = process.env.DOCS_SIGNING_SECRET;
 
-const SIGN = process.env.DOCS_SIGNING_SECRET || '';
+const LABEL_BY_TYPE = {
+  proforma: 'Fattura proforma',
+  fattura:  'Fattura commerciale',
+  invoice:  'Fattura commerciale',
+  dle:      'Dichiarazione libera esportazione',
+  pl:       'Packing list'
+};
 
-function hmac(params) {
+function hmac(params){
   const qs = new URLSearchParams(params).toString();
   return crypto.createHmac('sha256', SIGN).update(qs).digest('hex');
 }
-function bad(res, code, payload) {
-  res.status(code).json({ ok: false, ...payload });
+
+function okJson(res, code, obj){
+  res.setHeader('Content-Type','application/json; charset=utf-8');
+  return res.status(code).send(JSON.stringify(obj));
 }
 
-export default async function handler(req, res) {
-  const t0 = Date.now();
+function fmtDate(){
   try {
-    if (req.method !== 'GET') {
-      res.setHeader('Allow', 'GET');
-      return bad(res, 405, { error: 'Method Not Allowed' });
-    }
+    return new Date().toLocaleString('it-IT', { timeZone: 'Europe/Rome', hour12:false });
+  } catch {
+    return new Date().toISOString().replace('T',' ').replace('Z','');
+  }
+}
 
-    const { sid, type = 'proforma', exp, sig } = req.query || {};
-    console.log('[render-pdf] IN', {
-      time: new Date().toISOString(),
-      sid,
-      type,
-      exp,
-      hasSig: Boolean(sig),
-      region: process.env.VERCEL_REGION
+async function fetchRecord(recId){
+  try{
+    const r = await fetch(`https://api.airtable.com/v0/${BASE}/${encodeURIComponent(TB)}/${recId}`, {
+      headers:{ Authorization:`Bearer ${PAT}` }
     });
+    if (!r.ok) return null;
+    return await r.json();
+  }catch{ return null; }
+}
 
-    if (!SIGN) return bad(res, 500, { error: 'Render misconfigured', details: 'DOCS_SIGNING_SECRET missing' });
-    if (!sid || !exp || !sig) return bad(res, 400, { error: 'Bad Request', details: 'Missing sid/exp/sig' });
+export default async function handler(req, res){
+  const q = req.query || {};
+  const { sid, type='proforma', exp, sig, dl } = q;
 
-    const now = Math.floor(Date.now() / 1000);
-    if (Number(exp) < now) return bad(res, 401, { error: 'Link expired' });
+  // log safe
+  console.log('[render] IN', {
+    sid: sid?.slice(0,4)+'…',
+    type,
+    dl,
+    exp,
+    time: new Date().toISOString()
+  });
 
-    const expected = hmac({ sid, type, exp });
-    if (sig !== expected) return bad(res, 401, { error: 'Unauthorized', details: 'Bad signature' });
+  if (!sid || !exp || !sig) {
+    return okJson(res, 400, { ok:false, error:'Bad request', details:'sid/exp/sig required' });
+  }
+  const now = Math.floor(Date.now()/1000);
+  if (Number(exp) <= now) {
+    return okJson(res, 401, { ok:false, error:'Expired link' });
+  }
+  const sigCalc = hmac({ sid, type, exp });
+  if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(sigCalc))) {
+    return okJson(res, 401, { ok:false, error:'Unauthorized' });
+  }
 
-    // ===== PDF =====
-    const A4 = { w: 595.28, h: 841.89 }; // punti tipografici
+  try{
+    // dati record (per stampare "ID Spedizione" e magari "Corriere")
+    const rec = await fetchRecord(sid);
+    const fields = rec?.fields || {};
+    const idSped = fields['ID Spedizione'] || sid;
+    const corriere = fields['Corriere'] || '';
+
+    // PDF ── layout A4
     const pdf = await PDFDocument.create();
-    const page = pdf.addPage([A4.w, A4.h]);
+    const page = pdf.addPage([595.28, 841.89]); // A4 pt
+    const { width, height } = page.getSize();
+    const margin = 56;
+
     const font = await pdf.embedFont(StandardFonts.Helvetica);
     const fontB = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-    const title =
-      type === 'fattura'
-        ? 'Fattura commerciale'
-        : type === 'dle'
-        ? 'Dichiarazione libera esportazione'
-        : 'Fattura proforma';
+    // Header
+    page.drawText('SPST Logistics', { x: margin, y: height - margin - 8, size: 18, font: fontB, color: rgb(0.07,0.12,0.20) });
+    page.drawText(`Documento: ${LABEL_BY_TYPE[type] || type}`, { x: margin, y: height - margin - 32, size: 12, font, color: rgb(0.12,0.17,0.30) });
+    page.drawText(`ID Spedizione: ${idSped}`, { x: margin, y: height - margin - 48, size: 11, font, color: rgb(0.12,0.17,0.30) });
+    if (corriere) page.drawText(`Corriere: ${corriere}`, { x: margin, y: height - margin - 64, size: 11, font, color: rgb(0.12,0.17,0.30) });
+    page.drawText(`Generato: ${fmtDate()}`, { x: margin, y: height - margin - 80, size: 10, font, color: rgb(0.35,0.40,0.55) });
 
-    // intestazione
-    page.drawText('SPST Logistics', {
-      x: 40, y: A4.h - 60, size: 18, font: fontB, color: rgb(0.12, 0.12, 0.12),
-    });
-    page.drawText(`Documento: ${title}`, {
-      x: 40, y: A4.h - 90, size: 14, font, color: rgb(0.15, 0.15, 0.15),
-    });
-    page.drawText(`ID Spedizione: ${sid}`, {
-      x: 40, y: A4.h - 110, size: 12, font, color: rgb(0.2, 0.2, 0.2),
-    });
-    page.drawText(`Generato: ${new Date().toLocaleString('it-IT')}`, {
-      x: 40, y: A4.h - 130, size: 11, font, color: rgb(0.35, 0.35, 0.35),
-    });
+    // Box contenuti (placeholder finché non inseriamo il layout definitivo)
+    const boxTop = height - margin - 120;
+    const boxH   = 300;
+    const boxW   = width - margin*2;
 
-    // box placeholder contenuti (qui in futuro inseriremo i dati reali)
-    const boxY = A4.h - 180;
+    // bordo
     page.drawRectangle({
-      x: 40, y: boxY - 280, width: A4.w - 80, height: 280,
-      borderColor: rgb(0.8, 0.8, 0.8), borderWidth: 1, color: rgb(1,1,1),
+      x: margin, y: boxTop - boxH, width: boxW, height: boxH,
+      borderWidth: 1, color: rgb(0.93,0.95,0.98), borderColor: rgb(0.78,0.82,0.90)
     });
+
     page.drawText('Contenuti documento (placeholder)', {
-      x: 52, y: boxY - 24, size: 12, font: fontB, color: rgb(0.25, 0.25, 0.25),
+      x: margin + 12, y: boxTop - 18, size: 11, font: fontB, color: rgb(0.20,0.26,0.40)
     });
-    page.drawText(
-      'Questa versione genera un PDF “pulito” senza Chromium.\n' +
-      'La pipeline di allegato su Airtable ora può funzionare senza dipendenze di sistema.\n' +
-      'Quando vuoi, sostituiremo questo placeholder con il layout definitivo.',
-      { x: 52, y: boxY - 46, size: 11, font, color: rgb(0.2, 0.2, 0.2), lineHeight: 14 }
-    );
+    const body = [
+      'Questa versione genera un PDF “pulito” senza Chromium.',
+      'La pipeline di allegato su Airtable ora può funzionare senza dipendenze di sistema.',
+      'Quando vuoi, sostituiremo questo placeholder con il layout definitivo.'
+    ];
+    body.forEach((line, i) => {
+      page.drawText(line, { x: margin + 12, y: boxTop - 42 - i*14, size: 10.5, font, color: rgb(0.20,0.26,0.40) });
+    });
 
     const bytes = await pdf.save();
 
+    // download diretto se dl=1|true, altrimenti inline (per “Apri PDF generato”)
+    const forceDownload = /^(1|true)$/i.test(String(dl || ''));
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="${sid}-${type}.pdf"`);
-    res.status(200).send(Buffer.from(bytes));
+    res.setHeader(
+      'Content-Disposition',
+      `${forceDownload ? 'attachment' : 'inline'}; filename="${idSped}-${type}.pdf"`
+    );
+    res.setHeader('Cache-Control','no-store');
+    res.setHeader('X-Render-How','pdf-lib');
 
-    console.log('[render-pdf] OK', { ms: Date.now() - t0, size: bytes.length });
-  } catch (err) {
-    console.error('[render-pdf] ERR', err);
-    return bad(res, 500, { error: 'Render error', details: String(err?.message || err) });
+    return res.status(200).send(Buffer.from(bytes));
+  }catch(e){
+    console.error('[render] error', e);
+    return okJson(res, 500, { ok:false, error:'Render error', details: String(e?.message || e) });
   }
 }
