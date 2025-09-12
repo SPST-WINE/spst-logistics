@@ -1,3 +1,29 @@
 {
-  "version": 2
+  "version": 2,
+  "functions": {
+    "api/docs/unified/render.js": {
+      "runtime": "nodejs20.x",
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  },
+  "headers": [
+    {
+      "source": "/back-office/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "https://www.spst.it" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "*" },
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/api/back-office/(.*)",
+      "headers": [
+        { "key": "Access-Control-Allow-Origin", "value": "https://www.spst.it" },
+        { "key": "Access-Control-Allow-Methods", "value": "GET, OPTIONS" },
+        { "key": "Access-Control-Allow-Headers", "value": "*" }
+      ]
+    }
+  ]
 }
