@@ -1,1 +1,37 @@
+# ── Node / Package managers ─────────────────────────────────────────────
+node_modules/
+**/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# (Consiglio: mantieni il lockfile in repo)
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+# ── Build / Output / Cache ──────────────────────────────────────────────
+.vercel/
+.next/
+out/
+dist/
+build/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# ── OS / Editor junk ────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+
+# ── Env locali (non committare segreti) ─────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Asset legacy non più usati da questo repo ───────────────────────────
 public/back-office/
