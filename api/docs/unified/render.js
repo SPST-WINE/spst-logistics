@@ -188,6 +188,7 @@ function renderHTML({ type, ship, lines, total }) {
   const rcZip     = get(ship.fields, ['Destinatario - CAP'], '');
   const rcCountry = get(ship.fields, ['Destinatario - Paese'], '');
   const rcPhone   = get(ship.fields, ['Destinatario - Telefono'], '');
+  const rcVat     = get(ship.fields, ['Destinatario - P.IVA/CF'], '');
 
   // Shipment meta
   const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
@@ -223,7 +224,7 @@ html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui
 header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px}
 .brand{max-width:70%}
 .tag{display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#374151; background:var(--chip); border:1px solid var(--border); padding:2px 6px; border-radius:6px; margin-bottom:6px}
-.logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:var(--brand)}
+.logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:#brand}
 .brand .meta{margin-top:6px; font-size:12px; color:var(--muted)}
 .doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
 .doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'#0ea5e9':'#16a34a'}; font-weight:800}
@@ -298,7 +299,8 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         <div class="small"><strong>${escapeHTML(rcName)}</strong></div>
         <div class="small">${escapeHTML(rcAddr)}</div>
         <div class="small">${escapeHTML(rcZip)} ${escapeHTML(rcCity)} (${escapeHTML(rcCountry)})</div>
-        <div class="small">${rcPhone ? ('Tel: ' + escapeHTML(rcPhone)) : ''}</div>
+        ${rcPhone ? `<div class="small">Tel: ${escapeHTML(rcPhone)}</div>` : ``}
+        ${rcVat   ? `<div class="small">VAT/CF: ${escapeHTML(rcVat)}</div>` : ``}
       </div>
       <div class="card">
         <h3>Shipment Details</h3>
@@ -340,7 +342,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
     </div>
 
     <footer>
-      ${type==='proforma' ? `<div class="small"><strong>Note:</strong> ${escapeHTML(proformaNote)}</div>` : ''}
+      ${type==='proforma' ? `<div class="small"><strong>Note:</strong> Goods are not for resale. Declared values are for customs purposes only.</div>` : ''}
       <div class="sign">
         <div>
           <div class="small"><strong>Place & date:</strong> ${escapeHTML(place)}, ${escapeHTML(dateStr)}</div>
