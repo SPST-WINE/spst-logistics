@@ -11,13 +11,13 @@ const env = (k, d) => process.env[k] ?? d;
 
 const AIRTABLE_PAT  = env("AIRTABLE_PAT");
 const AIRTABLE_BASE = env("AIRTABLE_BASE_ID");
-const TB_SPEDIZIONI = env("TB_SPEDIZIONI", "SpedizioniWebApp"); // tabella spedizioni
-const TB_PL         = env("TB_PL", "SPED_PL");                  // tabella righe (packing list)
+const TB_SPEDIZIONI = env("TB_SPEDIZIONI", "SpedizioniWebApp"); // tab: spedizioni
+const TB_PL         = env("TB_PL", "SPED_PL");                  // tab: righe (packing list)
 
 const DOCS_SIGN_SECRET  = env("DOCS_SIGN_SECRET");
 const BYPASS_SIGNATURE  = env("BYPASS_SIGNATURE") === "1";
 
-// Campo ESATTO (case sensitive) come presente su Airtable
+// Campo ESATTO (case sensitive) su Airtable
 const FIELD_ID_SPED = "ID Spedizione";
 
 /* ──────────────────────────────────────────────────────────────────────────
@@ -29,8 +29,10 @@ const asJSON = (res, code, payload) => {
 };
 
 const fmtDate = (d) => {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = d.getFullYear();
+  return `${dd}/${mm}/${yy}`;
 };
 const eur = (n, cur = "EUR") =>
   new Intl.NumberFormat("it-IT", { style: "currency", currency: cur }).format(Number(n || 0));
@@ -103,11 +105,11 @@ async function airGetPLRowsBySID(sid) {
 /* ──────────────────────────────────────────────────────────────────────────
    Template HTML (stampa/salva PDF da browser)
 ────────────────────────────────────────────────────────────────────────── */
-function renderHTML({ doc, ship, consignee, items, totals, ui }) {
+function renderHTML({ doc, ship, receiver, items, totals, ui }) {
   const zebra = (i) => (i % 2 ? ' style="background:#fafafa"' : "");
 
   return `<!doctype html>
-<html lang="it">
+<html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -152,8 +154,8 @@ table.items td.num, table.items th.num{text-align:right}
 </head>
 <body>
   <div class="printbar">
-    <button class="btn" onclick="window.open(location.href, '_blank')">Apri anteprima</button>
-    <button class="btn primary" onclick="window.print()">Stampa / Salva PDF</button>
+    <button class="btn" onclick="window.open(location.href, '_blank')">Open preview</button>
+    <button class="btn primary" onclick="window.print()">Print / Save PDF</button>
   </div>
 
   <div class="page">
@@ -161,16 +163,19 @@ table.items td.num, table.items th.num{text-align:right}
 
     <header>
       <div class="brand">
-        <div class="tag">Mittente</div>
+        <div class="tag">Sender</div>
         <div class="word">${doc.sender.name}</div>
-        <div class="meta">${doc.sender.address}<br/>${doc.sender.contacts}</div>
+        <div class="meta">
+          ${doc.sender.address}<br/>
+          ${doc.sender.contacts}
+        </div>
       </div>
       <div class="doc-meta">
-        <div class="title">${ui.headerTitle}</div>
+        <div class="title">Proforma Invoice</div>
         <div class="kv">
           <div><strong>No.:</strong> ${doc.number}</div>
-          <div><strong>Data:</strong> ${doc.date}</div>
-          <div><strong>ID Spedizione:</strong> ${ship.id}</div>
+          <div><strong>Date:</strong> ${doc.date}</div>
+          <div><strong>Shipment ID:</strong> ${ship.id}</div>
         </div>
       </div>
     </header>
@@ -179,28 +184,27 @@ table.items td.num, table.items th.num{text-align:right}
 
     <section class="grid">
       <div class="card">
-        <h3>Destinatario</h3>
-        <div class="small"><strong>${consignee.name || "—"}</strong></div>
-        ${consignee.lines.map(l => `<div class="small">${l}</div>`).join("")}
-        ${consignee.tax ? `<div class="small">Tax ID: ${consignee.tax}</div>` : ""}
-        ${consignee.email || consignee.phone ? `<div class="small">${[consignee.email, consignee.phone].filter(Boolean).join(" · ")}</div>` : ""}
+        <h3>Receiver</h3>
+        <div class="small"><strong>${receiver.name || "—"}</strong></div>
+        ${receiver.lines.map(l => `<div class="small">${l}</div>`).join("")}
+        ${receiver.tax ? `<div class="small">Tax ID: ${receiver.tax}</div>` : ""}
+        ${receiver.email || receiver.phone ? `<div class="small">${[receiver.email, receiver.phone].filter(Boolean).join(" · ")}</div>` : ""}
       </div>
       <div class="card">
-        <h3>Dettagli spedizione</h3>
-        ${ship.carrier ? `<div class="small">Corriere: ${ship.carrier}</div>` : ""}
-        <div class="small">Incoterm: ${doc.incoterm || "—"} · Valuta: ${doc.currency}</div>
-        ${ship.pickup ? `<div class="small">Pickup: ${ship.pickup}</div>` : ""}
+        <h3>Shipment details</h3>
+        ${ship.carrier ? `<div class="small">Carrier: ${ship.carrier}</div>` : ""}
+        <div class="small">Incoterm: ${doc.incoterm || "—"} · Currency: ${doc.currency}</div>
+        ${ship.pickup ? `<div class="small">Pickup date: ${ship.pickup}</div>` : ""}
       </div>
     </section>
 
-    <table class="items" aria-label="Dettaglio beni">
+    <table class="items" aria-label="Goods details">
       <thead>
         <tr>
           <th style="width:32px">#</th>
-          <th>Descrizione</th>
-          <th style="width:80px" class="num">Qtà</th>
-          <th style="width:120px" class="num">Prezzo</th>
-          <th style="width:130px" class="num">Importo</th>
+          <th>Description</th>
+          <th style="width:80px" class="num">Qty</th>
+          <th style="width:120px" class="num">Price</th>
         </tr>
       </thead>
       <tbody>
@@ -213,14 +217,12 @@ table.items td.num, table.items th.num{text-align:right}
             </td>
             <td class="num">${it.qty}</td>
             <td class="num">${it.unit}</td>
-            <td class="num">${it.amount}</td>
           </tr>
         `).join("") : `
           <tr${zebra(0)}>
             <td>1</td>
             <td><strong>—</strong></td>
             <td class="num">0</td>
-            <td class="num">${eur(0)}</td>
             <td class="num">${eur(0)}</td>
           </tr>
         `}
@@ -229,17 +231,24 @@ table.items td.num, table.items th.num{text-align:right}
 
     <div class="totals">
       <table>
-        <tr><td style="text-align:right">Totale</td><td style="text-align:right; width:140px"><strong>${totals.total}</strong></td></tr>
+        <tr><td style="text-align:right">Total</td><td style="text-align:right; width:140px"><strong>${totals.total}</strong></td></tr>
       </table>
+    </div>
+
+    <div style="margin-top:16px; font-size:12px; color:#374151">
+      If you need more informations about this shipping you can check us at:<br/>
+      <strong>info@spst.it</strong><br/>
+      <strong>+39 320 144 1789</strong><br/>
+      <strong>www.spst.it</strong>
     </div>
 
     <div class="sign">
       <div>
-        <div class="small"><strong>Luogo & data:</strong> ${doc.place}, ${doc.date}</div>
+        <div class="small"><strong>Place & date:</strong> ${doc.place}, ${doc.date}</div>
         <div class="small">${doc.sender.contacts}</div>
       </div>
       <div>
-        <div class="small" style="margin-bottom:6px">Firma</div>
+        <div class="small" style="margin-bottom:6px">Signature</div>
         <div class="box"></div>
       </div>
     </div>
@@ -255,9 +264,8 @@ export default async function handler(req, res) {
   try {
     res.setHeader("cache-control", "no-store");
 
-    // Query
     const q = req.query || {};
-    const sid = q.ship || q.sid;              // ID Spedizione (o recXXXX)
+    const sid = q.ship || q.sid;
     const type = q.type || "proforma";
     const exp  = q.exp;
     const sig  = q.sig;
@@ -274,7 +282,6 @@ export default async function handler(req, res) {
       if (!okSig) return asJSON(res, 401, { ok:false, error:"Unauthorized", details:"Bad signature" });
     }
 
-    // Checks
     if (!AIRTABLE_PAT || !AIRTABLE_BASE) {
       return asJSON(res, 500, { ok:false, error:"Airtable not configured" });
     }
@@ -287,41 +294,61 @@ export default async function handler(req, res) {
     try {
       rec = await airGetShipmentBySID(sid);
     } catch (e) {
-      // Log dettagliato (in caso di 422 su field name errato)
       console.error("[render] airtable shipment error", { message: e.message, url: e.url, body: e.body });
       return asJSON(res, 500, { ok:false, error:"Render error", details:String(e.message) });
     }
 
     if (!rec) {
-      return asJSON(res, 404, { ok:false, error:"Not found", details:`Nessuna spedizione con {${FIELD_ID_SPED}}='${sid}'` });
+      return asJSON(res, 404, { ok:false, error:"Not found", details:`No shipment with {${FIELD_ID_SPED}}='${sid}'` });
     }
 
     const f = rec.fields || {};
 
-    // Testata documento (mapping tollerante)
+    // DATE from "Ritiro - Data" (fallback now)
+    const rawDate = pick(f, ["Ritiro - Data","Data ritiro","Pickup","Pickup Date","Data Proforma","Data"]);
+    const dateObj = rawDate ? new Date(rawDate) : new Date();
+
+    // Sender (mittente) from Airtable
+    const senderName = pick(f, ["Mittente - Ragione Sociale"]);
+    const senderCountry = pick(f, ["Mittente - Paese"]);
+    const senderCity = pick(f, ["Mittente - Città"]);
+    const senderCap = pick(f, ["Mittente - CAP"]);
+    const senderAddr = pick(f, ["Mittente - Indirizzo"]);
+    const senderPhone = pick(f, ["Mittente - Telefono"]);
+    const senderVat = pick(f, ["Mittente - P.IVA/CF"]);
+
+    const senderAddressLines = [
+      [senderAddr, senderCap, senderCity].filter(Boolean).join(", "),
+      senderCountry
+    ].filter(Boolean).join(" · ");
+
+    // Testata documento
     const doc = {
       kind: type,
       number: field(rec, ["Numero Proforma","Numero Documento","Doc No","Numero"], `PF-${sid}`),
-      date:   field(rec, ["Data Proforma","Data Documento","Data"], fmtDate(new Date())),
+      date:   fmtDate(dateObj),
       currency: field(rec, ["Valuta","Currency"], "EUR"),
       incoterm: field(rec, ["Incoterm","Termini resa"], ""),
-      place:  field(rec, ["Luogo","Luogo emissione"], "Milano"),
+      place:  senderCity || "—",
       sender: {
-        name: "SPST S.r.l.",
-        address: "Via Esempio 1, 20100 Milano (MI), Italy · VAT IT12345678901",
-        contacts: "info@spst.it · +39 320 144 1789 · www.spst.it",
+        name: senderName || "SPST S.r.l.",
+        address: senderAddressLines || "Via Esempio 1, 20100 Milano (MI), Italy",
+        contacts: [
+          senderVat ? `VAT/Tax ID ${senderVat}` : "",
+          senderPhone ? `Tel: ${senderPhone}` : ""
+        ].filter(Boolean).join(" · ") || "info@spst.it · +39 320 144 1789 · www.spst.it",
       },
     };
 
-    // Destinatario
-    const consignee = {
-      name: pick(f, ["Destinatario - Nome","Destinatario","Consignee","Cliente"], ""),
+    // Receiver
+    const receiver = {
+      name: pick(f, ["Destinatario - Ragione Sociale","Destinatario - Nome","Consignee","Cliente"], ""),
       lines: [
         pick(f, ["Destinatario - Indirizzo","Indirizzo destinatario"]),
         [pick(f, ["Destinatario - CAP","CAP"]), pick(f, ["Destinatario - Città","Città"]), pick(f, ["Destinatario - Provincia","Provincia"])].filter(Boolean).join(" "),
         pick(f, ["Destinatario - Paese","Paese"])
       ].filter(Boolean),
-      tax:  pick(f, ["Destinatario - P.IVA","VAT","Tax ID"]),
+      tax:  pick(f, ["Destinatario - P.IVA","VAT","Tax ID","Destinatario - P.IVA/CF"]),
       email: pick(f, ["Destinatario - Email","Email destinatario"]),
       phone: pick(f, ["Destinatario - Telefono","Telefono destinatario"]),
     };
@@ -329,8 +356,8 @@ export default async function handler(req, res) {
     // Spedizione (meta)
     const ship = {
       id: sid,
-      carrier: pick(f, ["Corriere","Vettore"]),
-      pickup: pick(f, ["Data ritiro","Pickup"]),
+      carrier: pick(f, ["Carrier","Corriere","Vettore"]),
+      pickup: rawDate ? fmtDate(new Date(rawDate)) : pick(f, ["Pickup"], ""),
     };
 
     // Righe da tabella SPED_PL
@@ -340,26 +367,24 @@ export default async function handler(req, res) {
       items = rows.map((r) => {
         const rf = r.fields || {};
         const qty = Number(pick(rf, ["Qta","Qtà","Quantità","Qty"], 0)) || 0;
-        const up  = Number(pick(rf, ["Prezzo","Prezzo Unitario","Unit Price","Prezzo unitario"], 0)) || 0;
+        const up  = Number(pick(rf, ["Prezzo","Prezzo Unitario","Unit Price","Prezzo unitario","Price"], 0)) || 0;
         const metaParts = [];
         const hs = pick(rf, ["HS","HS Code","HS code","Codice HS"]);
-        const org = pick(rf, ["Origine","Paese origine","Origine merce"]);
-        const peso = pick(rf, ["Peso","Peso (kg)","Peso Kg"]);
+        const org = pick(rf, ["Origine","Paese origine","Origine merce","Origin"]);
+        const peso = pick(rf, ["Peso","Peso (kg)","Peso Kg","Weight"]);
         if (hs) metaParts.push(`HS: ${hs}`);
-        if (org) metaParts.push(`Origine: ${org}`);
-        if (peso) metaParts.push(`Peso: ${peso} kg`);
+        if (org) metaParts.push(`Origin: ${org}`);
+        if (peso) metaParts.push(`Weight: ${peso} kg`);
         return {
-          title: pick(rf, ["Descrizione","description","Prodotto","Articolo","Item","Item Description"], "—"),
+          title: pick(rf, ["Descrizione","Description","Prodotto","Articolo","Item","Item Description"], "—"),
           meta: metaParts.join(" · "),
           qty,
           unit: eur(up, doc.currency),
-          amount: eur(qty * up, doc.currency),
           _n: qty * up,
         };
       });
     } catch (e) {
       console.error("[render] airtable PL rows error", { message: e.message, url: e.url, body: e.body });
-      // Non bloccare il render: mostriamo comunque la testata
       items = [];
     }
 
@@ -367,8 +392,7 @@ export default async function handler(req, res) {
 
     // UI
     const ui = {
-      title: "Proforma Invoice — Anteprima",
-      headerTitle: "Proforma Invoice",
+      title: "Proforma Invoice — Preview",
       watermark: "PROFORMA",
     };
 
@@ -376,7 +400,7 @@ export default async function handler(req, res) {
     const html = renderHTML({
       doc,
       ship,
-      consignee,
+      receiver,
       items,
       totals: { total: eur(total, doc.currency) },
       ui,
