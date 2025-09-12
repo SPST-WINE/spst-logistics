@@ -1,17 +1,13 @@
 // api/docs/unified/render.js
-export const config = { runtime: 'nodejs' };
-
-import crypto from 'crypto';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
+import crypto from 'crypto';
 
-chromium.setHeadlessMode = true;   // richiesto su Vercel
-chromium.setGraphicsMode = false;  // evita GL/mesa
+export const config = { runtime: 'nodejs' }; // Node 20 è impostato a livello di progetto
 
-function jsonError(res, status, error, details) {
-  res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  res.setHeader('Cache-Control', 'no-store');
-  return res.status(status).send(JSON.stringify({ ok: false, error, details }));
+function bad(res, code, msg, extra) {
+  console.error('[render] ERR', code, msg, extra || '');
+  return res.status(code).json({ ok:false, error:msg, details: extra || undefined });
 }
 
 function hmac(params, secret) {
@@ -20,63 +16,81 @@ function hmac(params, secret) {
 }
 
 export default async function handler(req, res) {
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET');
+    return bad(res, 405, 'Method Not Allowed');
+  }
+
+  const SID   = String(req.query.sid || '').trim();
+  const TYPE  = String(req.query.type || 'proforma').trim();
+  const EXP   = Number(req.query.exp || 0);
+  const SIG   = String(req.query.sig || '').trim();
+  const SEC   = (process.env.DOCS_SIGNING_SECRET || '').trim();
+
+  // Log d’ingresso
+  console.log('[render] IN', {
+    sid: SID, type: TYPE, exp: EXP,
+    hasSig: !!SIG, hasSecret: !!SEC,
+    ua: req.headers['user-agent']
+  });
+
+  if (!SID || !SEC) return bad(res, 400, 'Missing sid or server secret');
+  if (!EXP || Date.now()/1000 > EXP) return bad(res, 401, 'Link expired');
+
+  // Verifica firma
+  const expect = hmac({ sid: SID, type: TYPE, exp: String(EXP) }, SEC);
+  if (expect !== SIG) return bad(res, 401, 'Unauthorized');
+
+  // Chromium flags consigliati in serverless
+  chromium.setHeadlessMode = true;
+  chromium.setGraphicsMode = false;
+
+  let browser;
   try {
-    const { sid, type = 'proforma', exp, sig } = req.query || {};
-    if (!sid || !exp || !sig) {
-      return jsonError(res, 400, 'Bad request', 'sid, exp e sig sono obbligatori');
-    }
-    const now = Math.floor(Date.now() / 1000);
-    if (+exp < now) return jsonError(res, 401, 'Expired', 'Il link è scaduto');
+    const exe = await chromium.executablePath();
+    console.log('[render] chromium info', {
+      headless: chromium.headless,
+      exePath: exe,
+      argsLen: chromium.args?.length,
+      defaultViewport: chromium.defaultViewport
+    });
 
-    const SECRET = (process.env.DOCS_SIGNING_SECRET || '').trim();
-    if (!SECRET) return jsonError(res, 500, 'Server misconfigured', 'DOCS_SIGNING_SECRET mancante');
-
-    const expected = hmac({ sid, type, exp }, SECRET);
-    if (sig !== expected) return jsonError(res, 401, 'Unauthorized', 'Firma non valida');
-
-    const execPath = await chromium.executablePath();
-    console.log('[render] launching chromium', { execPath, headless: chromium.headless });
-
-    const browser = await puppeteer.launch({
+    browser = await puppeteer.launch({
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath: execPath,
+      executablePath: exe,
       headless: chromium.headless,
-      ignoreHTTPSErrors: true
+      ignoreHTTPSErrors: true,
     });
 
     const page = await browser.newPage();
+    await page.setContent(
+      `<!doctype html><html><head>
+         <meta charset="utf-8">
+         <style>
+           body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:32px}
+           h1{margin:0 0 8px}
+           .muted{color:#666}
+           .box{margin-top:18px;padding:12px 14px;border:1px solid #ddd;border-radius:8px}
+         </style>
+       </head><body>
+         <h1>Documento: ${TYPE.toUpperCase()}</h1>
+         <div class="muted">Spedizione: ${SID}</div>
+         <div class="box">Questo è un PDF di prova generato in serverless per verificare Chromium su Vercel.</div>
+       </body></html>`,
+      { waitUntil: 'networkidle0' }
+    );
+    await page.emulateMediaType('screen');
 
-    // TODO: sostituisci con il template reale
-    const html = `<!doctype html>
-<html><head>
-  <meta charset="utf-8">
-  <style>
-    body{ font-family: system-ui, Inter, Arial; padding: 32px; }
-    h1{ font-size: 22px; margin: 0 0 6px; }
-    .muted{ color:#555 }
-  </style>
-</head>
-<body>
-  <h1>${type.toUpperCase()} — ${sid}</h1>
-  <p class="muted">PDF di test: se lo vedi, Chromium è OK.</p>
-</body></html>`;
-
-    await page.setContent(html, { waitUntil: ['domcontentloaded', 'networkidle0'] });
-
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '12mm', right: '12mm', bottom: '12mm', left: '12mm' }
-    });
-
-    await browser.close();
+    const pdf = await page.pdf({ format: 'A4', printBackground: true });
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).send(pdf);
+    res.setHeader('Cache-Control', 'private, max-age=0, no-store');
+    res.setHeader('Content-Disposition', `inline; filename="${SID}-${TYPE}.pdf"`);
+    return res.status(200).send(Buffer.from(pdf));
   } catch (e) {
-    console.error('[render] error', e);
-    return jsonError(res, 500, 'Render error', String(e?.message || e));
+    return bad(res, 500, 'Render error', String(e && e.message || e));
+  } finally {
+    try { await browser?.close(); } catch {}
   }
 }
