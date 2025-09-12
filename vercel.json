@@ -1,9 +1,7 @@
 {
-  "version": 2,
   "functions": {
     "api/docs/unified/render.js": {
       "runtime": "nodejs20.x",
-      "includeFiles": "node_modules/@sparticuz/chromium/**",
       "memory": 1024,
       "maxDuration": 60
     }
