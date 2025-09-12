@@ -5,6 +5,9 @@ import crypto from 'crypto';
 import chromium from '@sparticuz/chromium';
 import puppeteer from 'puppeteer-core';
 
+chromium.setHeadlessMode = true;
+chromium.setGraphicsMode = false;
+
 // ——— utils ———
 function hmac(params, secret) {
   const qs = new URLSearchParams(params).toString();
@@ -85,6 +88,9 @@ export default async function handler(req, res) {
     // 4) Avvio Chromium (Sparticuz) + Puppeteer
     console.log('[render] launching chromium…');
     const executablePath = await chromium.executablePath();
+
+    const executablePath = await chromium.executablePath();
+console.log('[render] chromium path =', executablePath);
 
     const browser = await puppeteer.launch({
       args: chromium.args,
