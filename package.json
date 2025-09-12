@@ -10,5 +10,9 @@
     "puppeteer-core": "20.8.1",
     "@vercel/blob": "latest",
     "resend": "^3.2.0"
+  },
+  "overrides": {
+    "@sparticuz/chromium": "114.0.0",
+    "puppeteer-core": "20.8.1"
   }
 }
