@@ -2,14 +2,16 @@
 export const config = { runtime: 'nodejs' };
 
 /**
- * Unified HTML renderer for Proforma / Commercial Invoice (no-headless browser).
- * - ?sid=... (or ?ship=...)
- * - ?type=proforma|commercial  (default: proforma)
- * - ?exp=unixSeconds  & ?sig=hex(hmacSha256(`${sid}.${type}.${exp}`, DOCS_SIGN_SECRET))  (optional if BYPASS_SIGNATURE=1)
+ * HTML renderer for Proforma / Commercial Invoice (no headless browser).
+ * Query:
+ *  - sid or ship: shipment identifier (business "ID Spedizione" or Airtable recId)
+ *  - type: proforma | fattura | commercial | commerciale | invoice (default: proforma)
+ *  - exp, sig: signed URL (HMAC-SHA256 over `${sid}.${type}.${exp}`) — bypassable with BYPASS_SIGNATURE=1
  *
+ * Env:
+ *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1
  * Tables:
- *   - Shipments: "SpedizioniWebApp"
- *   - Lines:     "SPED_PL"
+ *  SpedizioniWebApp (shipments), SPED_PL (lines)
  */
 
 import crypto from 'node:crypto';
@@ -29,13 +31,8 @@ if (!AIRTABLE_PAT || !AIRTABLE_BASE_ID) {
 
 // ---------- Airtable helpers ----------
 const API_ROOT = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
-
-function tableURL(tableName) {
-  return `${API_ROOT}/${encodeURIComponent(tableName)}`;
-}
-function recordURL(tableName, recId) {
-  return `${tableURL(tableName)}/${encodeURIComponent(recId)}`;
-}
+const tableURL  = (t) => `${API_ROOT}/${encodeURIComponent(t)}`;
+const recordURL = (t, id) => `${tableURL(t)}/${encodeURIComponent(id)}`;
 
 async function airFetch(url, init={}) {
   const res = await fetch(url, {
@@ -58,15 +55,8 @@ async function airFetch(url, init={}) {
 
 // ---------- Field alias fallback for "ID Spedizione" ----------
 const SID_FIELD_CANDIDATES = [
-  'ID Spedizione',
-  'Id Spedizione',
-  'ID spedizione',
-  'id spedizione',
-  'ID\u00A0Spedizione',        // NBSP
-  'IDSpedizione',
-  'Spedizione ID',
-  'Spedizione - ID',
-  'ID'
+  'ID Spedizione','Id Spedizione','ID spedizione','id spedizione',
+  'ID\u00A0Spedizione','IDSpedizione','Spedizione ID','Spedizione - ID','ID'
 ];
 
 async function findOneByFieldAliases(tableName, value) {
@@ -76,11 +66,9 @@ async function findOneByFieldAliases(tableName, value) {
     const url = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`;
     try {
       const data = await airFetch(url);
-      if (data.records && data.records.length) {
-        return { record: data.records[0], fieldUsed: field };
-      }
+      if (data.records?.length) return { record: data.records[0], fieldUsed: field };
     } catch (err) {
-      if (err?.status === 422) continue; // invalid field -> try next alias
+      if (err?.status === 422) continue; // try next alias
       throw err;
     }
   }
@@ -111,7 +99,7 @@ async function findManyByFieldAliases(tableName, value) {
 
 // ---------- Shipment + PL loaders ----------
 async function getShipmentBySid(sid) {
-  // direct record id?
+  // If it's a direct Airtable recId
   if (/^rec[0-9A-Za-z]{14}/.test(String(sid))) {
     return airFetch(recordURL(TB_SPEDIZIONI, sid));
   }
@@ -124,18 +112,32 @@ async function getPLRowsBySid(sidOrRecId) {
 }
 
 // ---------- Signature ----------
-function bad(res, code, msg, details) {
-  res.status(code).json({ ok:false, error: msg, details });
-}
-function verifySig({ sid, type, exp, sig }) {
+function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
   if (BYPASS_SIGNATURE) return true;
-  if (!sid || !type || !exp || !sig) return false;
+  if (!sid || !rawType || !exp || !sig) return false;
   const now = Math.floor(Date.now()/1000);
   if (Number(exp) < now) return false;
-  const h = crypto.createHmac('sha256', DOCS_SIGN_SECRET);
-  h.update(`${sid}.${type}.${exp}`);
-  const expected = h.digest('hex');
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(String(sig)));
+
+  const make = (t) => {
+    const h = crypto.createHmac('sha256', DOCS_SIGN_SECRET);
+    h.update(`${sid}.${t}.${exp}`);
+    return h.digest('hex');
+  };
+
+  // Accept both the raw type provided in the URL and our normalized type
+  try {
+    const cand1 = make(rawType);
+    if (crypto.timingSafeEqual(Buffer.from(cand1), Buffer.from(String(sig)))) return true;
+  } catch {}
+  try {
+    const cand2 = make(normType);
+    if (crypto.timingSafeEqual(Buffer.from(cand2), Buffer.from(String(sig)))) return true;
+  } catch {}
+  return false;
+}
+
+function bad(res, code, msg, details) {
+  res.status(code).json({ ok:false, error: msg, details });
 }
 
 // ---------- Utils ----------
@@ -146,16 +148,22 @@ const get = (obj, keys, def='') => {
   }
   return def;
 };
-const fmtDate = (d) => {
-  try { return new Date(d).toLocaleDateString('it-IT'); }
-  catch { return ''; }
-};
-const num = (x) => {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : 0;
-};
+const fmtDate = (d) => { try { return new Date(d).toLocaleDateString('it-IT'); } catch { return ''; } };
+const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
 const money = (x, ccy='€') =>
   `${ccy} ${num(x).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const escapeHTML = (x='') => String(x)
+  .replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')
+  .replaceAll('"','&quot;').replaceAll("'",'&#39;');
+
+// ---------- Type normalization ----------
+function normalizeType(t) {
+  const raw = String(t || 'proforma').toLowerCase().trim();
+  const commercialAliases = new Set([
+    'commercial', 'commerciale', 'invoice', 'fattura', 'fattura commerciale'
+  ]);
+  return commercialAliases.has(raw) ? 'commercial' : 'proforma';
+}
 
 // ---------- HTML template ----------
 function renderHTML({ type, ship, lines, total }) {
@@ -165,33 +173,33 @@ function renderHTML({ type, ship, lines, total }) {
   const ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
 
   // Sender (Mittente)
-  const senderName = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
+  const senderName    = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
   const senderCountry = get(ship.fields, ['Mittente - Paese'], '');
-  const senderCity = get(ship.fields, ['Mittente - Città'], '');
-  const senderZip = get(ship.fields, ['Mittente - CAP'], '');
-  const senderAddr = get(ship.fields, ['Mittente - Indirizzo'], '');
-  const senderPhone = get(ship.fields, ['Mittente - Telefono'], '');
-  const senderVat = get(ship.fields, ['Mittente - P.IVA/CF'], '');
+  const senderCity    = get(ship.fields, ['Mittente - Città'], '');
+  const senderZip     = get(ship.fields, ['Mittente - CAP'], '');
+  const senderAddr    = get(ship.fields, ['Mittente - Indirizzo'], '');
+  const senderPhone   = get(ship.fields, ['Mittente - Telefono'], '');
+  const senderVat     = get(ship.fields, ['Mittente - P.IVA/CF'], '');
 
   // Receiver (Destinatario)
-  const rcName = get(ship.fields, ['Destinatario - Ragione Sociale'], '—');
-  const rcAddr = get(ship.fields, ['Destinatario - Indirizzo'], '');
-  const rcCity = get(ship.fields, ['Destinatario - Città'], '');
-  const rcZip  = get(ship.fields, ['Destinatario - CAP'], '');
+  const rcName    = get(ship.fields, ['Destinatario - Ragione Sociale'], '—');
+  const rcAddr    = get(ship.fields, ['Destinatario - Indirizzo'], '');
+  const rcCity    = get(ship.fields, ['Destinatario - Città'], '');
+  const rcZip     = get(ship.fields, ['Destinatario - CAP'], '');
   const rcCountry = get(ship.fields, ['Destinatario - Paese'], '');
-  const rcPhone = get(ship.fields, ['Destinatario - Telefono'], '');
+  const rcPhone   = get(ship.fields, ['Destinatario - Telefono'], '');
 
   // Shipment meta
-  const sid = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
-  const carrier = get(ship.fields, ['Corriere', 'Carrier'], '—');
-  const incoterm = get(ship.fields, ['Incoterm'], '');
-  const pickupDate = get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
+  const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
+  const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
+  const incoterm  = get(ship.fields, ['Incoterm'], '');
+  const pickupDate= get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
   const docNo = type === 'proforma'
     ? (get(ship.fields, ['Proforma - Numero'], '') || `PF-${sid}`)
     : (get(ship.fields, ['Fattura - Numero', 'Commercial Invoice - Numero'], '') || `CI-${sid}`);
 
-  const place = senderCity || '';
-  const dateStr = fmtDate(pickupDate) || fmtDate(Date.now());
+  const place  = senderCity || '';
+  const dateStr= fmtDate(pickupDate) || fmtDate(Date.now());
 
   const proformaNote = `Goods are not for resale. Declared values are for customs purposes only.`;
 
@@ -200,7 +208,7 @@ function renderHTML({ type, ship, lines, total }) {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>${docTitle} — ${sid}</title>
+<title>${docTitle} — ${escapeHTML(sid)}</title>
 <style>
 :root{
   --brand:#111827; --accent:#0ea5e9; --text:#0b0f13; --muted:#6b7280;
@@ -218,7 +226,7 @@ header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px
 .logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:var(--brand)}
 .brand .meta{margin-top:6px; font-size:12px; color:var(--muted)}
 .doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
-.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${type==='proforma'?'#0ea5e9':'#16a34a'}; font-weight:800}
+.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'#0ea5e9':'#16a34a'}; font-weight:800}
 .doc-meta .kv{margin-top:6px}
 .kv div{margin:2px 0}
 
@@ -349,26 +357,19 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 </html>`;
 }
 
-function escapeHTML(x='') {
-  return String(x)
-    .replaceAll('&','&amp;')
-    .replaceAll('<','&lt;')
-    .replaceAll('>','&gt;')
-    .replaceAll('"','&quot;')
-    .replaceAll("'",'&#39;');
-}
-
 // ---------- Handler ----------
 export default async function handler(req, res) {
   try {
     const q = req.query || {};
-    const type = (q.type || 'proforma').toString().toLowerCase() === 'commercial' ? 'commercial' : 'proforma';
-    const sidRaw = q.sid || q.ship;
-    const sig = q.sig; const exp = q.exp;
+    const rawType = String(q.type || 'proforma').toLowerCase();
+    const type    = normalizeType(rawType); // 'proforma' or 'commercial'
+    const sidRaw  = q.sid || q.ship;
+    const sig     = q.sig;
+    const exp     = q.exp;
 
     if (!sidRaw) return bad(res, 400, 'Bad request', 'Missing sid/ship');
 
-    if (!verifySig({ sid: sidRaw, type, exp, sig })) {
+    if (!verifySigFlexible({ sid: sidRaw, rawType, normType: type, exp, sig })) {
       return bad(res, 401, 'Unauthorized', 'Invalid signature');
     }
 
@@ -376,35 +377,26 @@ export default async function handler(req, res) {
     const ship = await getShipmentBySid(sidRaw);
     if (!ship) return bad(res, 404, 'Not found', `No shipment found for ${sidRaw}`);
 
-    // Lines from SPED_PL
-    // Try both shipment recordId and business SID
+    // Load PL rows (try both recId and business SID)
     const plByRec = await getPLRowsBySid(ship.id);
     const plBySid = sidRaw ? await getPLRowsBySid(sidRaw) : [];
-    const unique = new Map();
+    const unique  = new Map();
     [...plByRec, ...plBySid].forEach(r => unique.set(r.id, r));
     const pl = [...unique.values()];
 
-    // Build line items with flexible field names
+    // Build lines
     const items = pl.length ? pl.map(r => {
       const f = r.fields || {};
-      const title = get(f, ['Descrizione', 'Description', 'Prodotto', 'Articolo', 'SKU', 'Titolo'], '');
-      const qty   = num(get(f, ['Quantità', 'Qta', 'Qtà', 'Qty', 'Pezzi'], 0));
-      const price = num(get(f, ['Prezzo', 'Price', 'Valore Unitario', 'Unit Price'], 0));
-      const hs    = get(f, ['HS', 'HS code', 'HS Code'], '');
-      const origin= get(f, ['Origine', 'Country of origin', 'Origin'], '');
-
+      const title = get(f, ['Descrizione','Description','Prodotto','Articolo','SKU','Titolo'], '');
+      const qty   = num(get(f, ['Quantità','Qta','Qtà','Qty','Pezzi'], 0));
+      const price = num(get(f, ['Prezzo','Price','Valore Unitario','Unit Price'], 0));
+      const hs    = get(f, ['HS','HS code','HS Code'], '');
+      const origin= get(f, ['Origine','Country of origin','Origin'], '');
       const metaBits = [];
       if (hs) metaBits.push(`HS: ${hs}`);
       if (origin) metaBits.push(`Origin: ${origin}`);
-      const meta = metaBits.join(' · ');
-
-      return { title, qty, price, meta };
-    }) : [{
-      title: '—',
-      qty: 0,
-      price: 0,
-      meta: ''
-    }];
+      return { title, qty, price, meta: metaBits.join(' · ') };
+    }) : [{ title:'—', qty:0, price:0, meta:'' }];
 
     const total = items.reduce((s, r) => s + num(r.qty) * num(r.price), 0);
 
