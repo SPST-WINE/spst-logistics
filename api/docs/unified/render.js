@@ -1,27 +1,30 @@
-// api/docs/unified/render.js
-const crypto = require('crypto');
+// api/docs/unified/render.js  (ESM + Node 20)
+// RUNTIME: Node.js (NOT Edge)
+export const config = { runtime: 'nodejs' };
+
+import crypto from 'node:crypto';
 
 const SECRET = process.env.DOCS_SIGNING_SECRET || process.env.ATTACH_SECRET || '';
 
-function hmacHex(s) { return crypto.createHmac('sha256', SECRET).update(s).digest('hex'); }
-function safeEq(a,b){
+const hmacHex = (s) => crypto.createHmac('sha256', SECRET).update(s).digest('hex');
+const safeEq = (a, b) => {
   try {
     const A = Buffer.from(String(a), 'utf8');
     const B = Buffer.from(String(b), 'utf8');
-    return A.length === B.length && crypto.timingSafeEqual(A,B);
+    return A.length === B.length && crypto.timingSafeEqual(A, B);
   } catch { return false; }
-}
-function bad(res, code, error, details){
+};
+const bad = (res, code, error, details) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
-  return res.status(code).send(JSON.stringify({ ok:false, error, details }));
-}
+  return res.status(code).send(JSON.stringify({ ok: false, error, details }));
+};
 
 function htmlTemplate({ docTitle, docTag, shipId, courier, generatedAt }) {
   return `<!doctype html><html lang="it"><head>
 <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${docTitle} — Anteprima</title>
 <style>
-:root{--brand:#111827;--accent:#0ea5e9;--text:#0b0f13;--muted:#6b7280;--border:#e5e7eb;--border-strong:#d1d5db;--bg:#fff;--chip:#f3f4f6;}
+:root{--brand:#111827;--accent:#0ea5e9;--text:#0b0f13;--muted:#6b7280;--border:#e5e7eb;--border-strong:#d1d5db;--bg:#fff;--chip:#f3f4f6}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
 .page{width:210mm;min-height:297mm;margin:0 auto;padding:18mm 16mm;position:relative}
 .watermark{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;pointer-events:none}
@@ -74,41 +77,42 @@ hr.sep{border:none;border-top:1px solid var(--border);margin:16px 0 18px}
 </body></html>`;
 }
 
-export default async function handler(req,res){
+export default async function handler(req, res) {
   try{
     const q = req.query || {};
     const { sid, type, exp, sig } = q;
-    if(!sid || !exp || !sig || !SECRET) return bad(res,400,'Missing params');
+    if (!sid || !exp || !sig || !SECRET) return bad(res, 400, 'Missing params');
 
     const tRaw  = type ?? '';
     const tNorm = (tRaw || 'proforma').toLowerCase();
     const bases = [`${sid}.${tNorm}.${exp}`, `${sid}.${tRaw}.${exp}`];
-    if(!tRaw) bases.push(`${sid}..${exp}`);
+    if (!tRaw) bases.push(`${sid}..${exp}`);
 
-    let ok=false;
-    for(const b of bases){ if(safeEq(sig, hmacHex(b))){ ok=true; break; } }
-    if(!ok) return bad(res,401,'Unauthorized','Invalid signature');
+    let signed = false;
+    for (const b of bases) { if (safeEq(sig, hmacHex(b))) { signed = true; break; } }
+    if (!signed) return bad(res, 401, 'Unauthorized', 'Invalid signature');
 
     const now = Math.floor(Date.now()/1000);
-    if(now > Number(exp)) return bad(res,401,'Link expired');
+    if (now > Number(exp)) return bad(res, 401, 'Link expired');
 
-    if((q.format||'').toLowerCase()==='html'){
-      const docTitle = tNorm==='fattura'||tNorm==='invoice' ? 'Fattura commerciale' : (tNorm==='dle'?'Dichiarazione libera esportazione':'Proforma Invoice');
+    if ((q.format || '').toLowerCase() === 'html') {
+      const docTitle = tNorm==='fattura'||tNorm==='invoice' ? 'Fattura commerciale' : (tNorm==='dle' ? 'Dichiarazione libera esportazione' : 'Proforma Invoice');
       const tag = tNorm==='dle' ? 'DLE' : (tNorm==='fattura'||tNorm==='invoice') ? 'INVOICE' : 'PROFORMA';
       const html = htmlTemplate({
-        docTitle, docTag: tag,
+        docTitle,
+        docTag: tag,
         shipId: q.ship || '',
         courier: q.courier || '',
-        generatedAt: new Date().toLocaleString('it-IT',{hour12:false})
+        generatedAt: new Date().toLocaleString('it-IT', { hour12:false })
       });
       res.setHeader('Content-Type','text/html; charset=utf-8');
       res.setHeader('Cache-Control','no-store');
       return res.status(200).send(html);
     }
 
-    return bad(res,400,'Unsupported','Use ?format=html (optionally &print=1)');
+    return bad(res, 400, 'Unsupported', 'Use ?format=html (optionally &print=1)');
   }catch(e){
     console.error('[render] 500', e);
-    return bad(res,500,'Render error', e?.message || String(e));
+    return bad(res, 500, 'Render error', e?.message || String(e));
   }
 }
