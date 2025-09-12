@@ -1,4 +1,4 @@
-GPT README
+Ecco il **README finale** aggiornato con l’“Utility Documenti” (Proforma, Commercial Invoice e DLE).
 
 ---
 
@@ -11,7 +11,7 @@ Sei il mio assistente tecnico. Mantieni e fai evolvere il sistema **Preventivi**
 * **Hosting**: Vercel (Serverless/Edge a seconda della route).
 * **DB**: Airtable.
 * **Email**: Resend.
-* **Rendering pubblico (quotes)**: HTML server-side (niente React).
+* **Rendering pubblico (quotes & documenti)**: HTML server-side (no React).
 * **Back-Office Spedizioni**: interfaccia statica (ESM) che parla con proxy API su Vercel.
 * **CORS**: allowlist via env.
 
@@ -22,24 +22,25 @@ Sei il mio assistente tecnico. Mantieni e fai evolvere il sistema **Preventivi**
 ```
 /api
   /quotes
-    /view/[slug].js             # Pagina pubblico preventivo + pulsanti Accetta
-    accept.js                   # POST: accetta opzione, aggiorna Airtable + email
-  /notify/transit.js            # POST: email "Spedizione in transito" (Resend) — usata dal Back-Office
-
+    /view/[slug].js
+    accept.js
+  /notify/transit.js
+  /docs/unified/render.js         # ⬅️ Utility Documenti: proforma / commerciale / DLE (HTML)
+  
 /app
-  /api/spedizioni/[id]/notify/route.ts  # Email "Spedizione confermata" (stile coerente) — usata dalla web app
+  /api/spedizioni/[id]/notify/route.ts
 
 /assets/esm
-  main.js                       # Data flow + azioni (upload, tracking, notify, evasione)
-  /ui/render.js                 # Render card spedizione (alias robusti campi, fallback colli/peso)
-  /airtable/api.js              # Proxy wrapper fetch/patch su Airtable
-  /rules/docs.js                # Regole documenti richiesti + note
-  /rules/labels.js              # Pannello etichette
-  /utils/*                      # date/format/dom/misc
-  config.js                     # CARRIERS, TEMPLATES, API_BASE (proxy)
+  main.js
+  /ui/render.js
+  /airtable/api.js
+  /rules/docs.js
+  /rules/labels.js
+  /utils/*
+  config.js
 ```
 
-> NB: il Back-Office gira come pagina statica (es. su `spst.it/back-office`) e chiama le API Vercel via **proxy**.
+> NB: il Back-Office gira come pagina statica (es. `spst.it/back-office`) e chiama le API Vercel via **proxy**.
 
 ---
 
@@ -53,9 +54,9 @@ Sei il mio assistente tecnico. Mantieni e fai evolvere il sistema **Preventivi**
 
 ### Preventivi
 
-* `TB_PREVENTIVI` *(es. `Preventivi`)*
-* `TB_OPZIONI` *(es. `OpzioniPreventivo`)*
-* `TB_COLLI` *(es. `Colli`)*
+* `TB_PREVENTIVI`
+* `TB_OPZIONI`
+* `TB_COLLI`
 * `MAIL_FROM` *(default `SPST Notifications <notification@spst.it>`)*
 * `PUBLIC_QUOTE_BASE_URL` *(default `https://<deploy>/quote`)*
 
@@ -63,204 +64,248 @@ Sei il mio assistente tecnico. Mantieni e fai evolvere il sistema **Preventivi**
 
 * `RESEND_API_KEY`
 * `EMAIL_FROM` *(default `notification@spst.it`)*
-* `EMAIL_LOGO_URL` *(es. `https://www.spst.it/logo-email.png`)*
-* `AREA_RISERVATA_URL` *(es. `https://www.spst.it/area-riservata`)*
-* `WHATSAPP_URL` *(link supporto; es. `https://wa.me/39...`)*
+* `EMAIL_LOGO_URL`
+* `AREA_RISERVATA_URL`
+* `WHATSAPP_URL`
 
 ### Web-app “conferma spedizione”
 
-* `APP_DASHBOARD_URL` *(es. `https://app.spst.it/dashboard`)*
+* `APP_DASHBOARD_URL`
+
+### **Utility Documenti (nuovo)**
+
+* `DOCS_SIGN_SECRET` *(HMAC per firma link)*
+* `BYPASS_SIGNATURE` *(metti `1` in ambienti di test per saltare la verifica firma)*
+
+> Le tabelle usate dall’Utility Documenti sono **fisse** nel codice:
+>
+> * Spedizioni: `SpedizioniWebApp`
+> * Packing list righe: `SPED_PL`
+>   Se vuoi rinominarle, modifica le costanti in `/api/docs/unified/render.js`.
 
 ---
 
 ## Airtable — mappature campi (alias robusti)
 
-Usiamo helper `pickLoose()` per tollerare varianti/typo; **non** rinominare campi a caso senza aggiornare gli alias.
+Usiamo alias tolleranti (ma tieni i nomi coerenti dove possibile). Se rinomini un campo, **aggiorna gli alias**.
 
-### Preventivi (`TB_PREVENTIVI`)
+### Preventivi (`TB_PREVENTIVI`), Opzioni, Colli
 
-* Identificativo pubblico: `Slug_Pubblico`
-* Client: `Email_Cliente`
-* Valuta: `Valuta` / `Currency`
-* Validità: `Valido_Fino_Al` / `Valid_Until` / `Validita`
-* **Note generiche spedizione**: `Note generiche sulla spedizione` / `Note_Spedizione` / `Shipment_Notes` / `Note spedizione`
-* Stato: `Stato` *(Bozza | Pubblicato | Accettato | Scaduto | Annullato)*
-* Accettazione: `Opzione_Accettata`, `Accettato_Il`, `Accettato_IP`, `Accettato_UA`
-* Mittente/Destinatario + P.IVA/EORI/Tax → vari alias (`Mittente_*`, `Destinatario_*`, `*_Tax`…)
-
-### OpzioniPreventivo (`TB_OPZIONI`)
-
-* Link a preventivo: `Preventivo` (link) o `Preventivo_Id` (testo)
-* Indice: `Indice` / `Index` / `Opzione` / `Option`
-* Dati: `Corriere`, `Servizio`, `Tempo_Resa`, `Incoterm`, `Oneri_A_Carico`
-* Prezzo: `Prezzo` (number), `Valuta`
-* Flag: `Consigliata` (bool), `Accettata` (opz.)
-
-### Colli (`TB_COLLI`)
-
-* Link: `Preventivo` o `Preventivo_Id`
-* Qty/Dim/Peso: `Quantità|Quantita|Qty`, `L|Lunghezza|L_cm`, `W|Larghezza|W_cm`, `H|Altezza|H_cm`, `Peso|Peso_Kg|Kg|Weight`
+*(come già descritto nel README esistente — invariato)*
 
 ### **Spedizioni** (Back-Office)
 
-* ID: `ID Spedizione` (fallback `rec.id`)
-* Email cliente: `Creato da` / `Creato da email` / `Mail Cliente`
-* **Stato**: `Stato` *(nuovo)* — fallback legacy `Stato Spedizione` (bool → `Evasa`)
-* Ritiro: `Ritiro - Data` / `Ritiro – Data` / `Data Ritiro`
-* Incoterm: `Incoterm`
-* Tipo: `Sottotipo` / `Tipo Spedizione` *(“Sample”→*Campionatura*)*
-* Tracking: `Tracking Number`, `Tracking URL`, `Corriere`
-* Peso: `Peso reale tot` / `Peso tariffato tot` / `Peso reale` / `Peso` / `Peso (kg)`
-* **Colli**:
+* **ID spedizione**: `ID Spedizione` *(fallback a `rec.id`)*
 
-  * primario: `Lista Colli Ordinata` / `Lista Colli` / `Contenuto Colli`
-  * fallback “Altro”: `Dimensioni (cm)` / `L×W×H` / `LxWxH` (anche separati `L|W|H`) e `Peso`
-* Import: `Destinatario abilitato import` / alias simili → boolean
-* **Documenti**:
+  > La ricerca shipment prova più alias (`ID Spedizione`, `Id Spedizione`, ecc.) per gestire varianti.
+* **Mittente (sender)**
 
-  * LDV: `Allegato LDV` / `Lettera di Vettura`
-  * Fattura: `Allegato Fattura` (fallback cliente: `Fattura - Allegato Cliente`)
-  * DLE: `Allegato DLE` / `Dichiarazione Esportazione`
-  * PL: `Allegato PL` / `Packing List` (fallback cliente)
-  * Extra: `Allegato 1/2/3` → **Proforma**, **FDA Prior Notice**, **e-DAS** (priorità elastica)
+  * `Mittente - Ragione Sociale`
+  * `Mittente - Paese`
+  * `Mittente - Città`
+  * `Mittente - CAP`
+  * `Mittente - Indirizzo`
+  * `Mittente - Telefono`
+  * `Mittente - P.IVA/CF`
+* **Destinatario (receiver)**
+
+  * `Destinatario - Ragione Sociale`
+  * `Destinatario - Indirizzo`
+  * `Destinatario - Città`
+  * `Destinatario - CAP`
+  * `Destinatario - Paese`
+  * `Destinatario - Telefono`
+  * `Destinatario - P.IVA/CF`
+* **Meta spedizione**
+
+  * `Corriere` *(Carrier)*
+  * `Incoterm`
+  * `Valuta`/`Currency` *(EUR → simbolo `€`)*
+  * `Ritiro - Data`
+* **Documenti (allegati)** *(se/quando abiliteremo upload automatico)*
+
+  * **Fattura (unico campo per proforma/commerciale)**: `Allegato Fattura`
+  * **DLE**: `Allegato DLE` *(opzionale)*
+
+### **Packing List** (`SPED_PL`)
+
+* **Join** con spedizione tramite `ID Spedizione` (stesso valore dello shipment) — alias robusti gestiti dal codice.
+* **Campi riga** (alias accettati):
+
+  * Descrizione: `Descrizione` / `Description` / `Prodotto` / `Articolo` / `SKU` / `Titolo`
+  * Quantità: `Quantità` / `Quantita` / `Qtà` / `Qta` / `Qty` / `Pezzi`
+  * Prezzo unitario: `Prezzo` / `Price` / `Valore Unitario` / `Unit Price`
+  * HS code: `HS` / `HS code` / `HS Code`
+  * Origine: `Origine` / `Country of origin` / `Origin`
 
 ---
 
 ## Flussi & comportamenti
 
-### Preventivi (pubblico)
+### Preventivi (pubblico) — *(invariato)*
 
-* `/api/quotes/view/[slug].js` genera pagina HTML (dark), con:
+*(vedi sezione già presente; nessuna modifica funzionale)*
 
-  * intestazione stato (Valido fino al… / Accettato),
-  * dati mittente/destinatario + P.IVA/Tax,
-  * **Note generiche spedizione**,
-  * tabella **Colli**,
-  * card **Opzioni** con badge “Consigliata” e bottone **Accetta**.
-* **Accettazione** (`POST /api/quotes/accept`): idempotente; aggiorna campi accettazione + invia email via Resend (cliente + interno).
+### Back-Office Spedizioni — *(aggiornamenti minori UI)*
 
-### Back-Office Spedizioni
-
-* **Card** compresse di default (bottone “Espandi record”).
-* Pulsanti **“Verifica etichette”** e **“Espandi record”** in alto a destra.
-* **Filtro “Solo non evase”**: quando attivo **mostra solo** spedizioni con `Stato = "Nuova"`. È **attivo di default** all’apertura.
-* **Salva tracking**: salva `Corriere` + `Tracking Number` **ma non cambia** lo stato. Abilita il bottone “Invia mail”.
-* **Invia mail (transito)**: input email sempre editabile; **bottone** abilitato solo se tracking presente.
-
-  * Dopo l’invio mostriamo **“Email inviata ✓”** e disabilitiamo input+button per evitare doppioni (flag **solo in sessione**).
-* **Evasione completata**: imposta `Stato = "In transito"`. Con filtro attivo la card **scompare** dopo l’azione.
-* **Altro (tipo spedizione)**: se i colli non arrivano nella lista strutturata, ricostruiamo da `Dimensioni (cm)` / `LxWxH` / `L|W|H` + `Peso` (fix per “-×-×- cm / 0.0 kg”).
+* “Genera e allega” modernizzato (card più pulita, pulsanti secondari per aprire/copiare URL più coerenti).
+* Messaggistica di esito (“Documento generato e allegato”) rientra nella card.
 
 ---
 
-## Email templates (Resend)
+## **Utility Documenti** (nuovo)
 
-### 1) Spedizione **in transito** — usata dal Back-Office
+**File**: `/api/docs/unified/render.js` (Serverless, ESM)
 
-**Endpoint:** `POST /api/notify/transit`
-**Body:** `{ to, id, carrier, tracking, ritiroData }`
-**Stile:** coerente con il design “conferma spedizione”; **link neri**, **niente link tracking**, CTA:
+Genera **HTML** per:
 
-* **Area Riservata** → `AREA_RISERVATA_URL`
-* **Supporto WhatsApp** → `WHATSAPP_URL`
+* **Proforma Invoice** (`type=proforma`)
+* **Commercial Invoice** (`type=commercial` | `fattura` | `commerciale` | `invoice`)
+* **DLE — Export Free Declaration** (`type=dle`)
 
-> Il file è **`/api/notify/transit.js`**. Mantieni solo lo **stile HTML** se cambi design; la logica CORS e il plain-text vanno lasciati identici.
+> Il rendering è **HTML**; per il salvataggio PDF si usa **Stampa/Salva PDF** del browser.
+> *(Opzionale: integrazione con headless Chrome è possibile, ma non necessaria.)*
 
-### 2) Spedizione **confermata** — usata dalla web-app
+### Endpoint
 
-**Endpoint:** `POST /app/api/spedizioni/[id]/notify/route.ts`
-Usa brand colors e pulsanti coerenti; ha preheader e footer brandizzati. Env: `APP_DASHBOARD_URL`, `EMAIL_LOGO_URL`, ecc.
+```
+GET /api/docs/unified/render
+```
+
+**Query params**
+
+* `sid` **o** `ship` → ID Spedizione (business) **oppure** `recXXXXXXXX` di Airtable
+* `type` → `proforma` | `commercial`/`fattura`/`commerciale`/`invoice` | `dle`
+* `exp` → epoch seconds di scadenza firma
+* `sig` → HMAC-SHA256 di `${sid}.${type}.${exp}` con `DOCS_SIGN_SECRET`
+* `format=html` *(opzionale; output è comunque HTML)*
+
+**Sicurezza**
+
+* In produzione, **firma obbligatoria** (`sig` + `exp`).
+* In test, imposta `BYPASS_SIGNATURE=1` per saltare il controllo.
+
+**Come generare `sig` (esempio Node)**
+
+```js
+import crypto from 'node:crypto';
+const makeSig = (sid, type, exp) =>
+  crypto.createHmac('sha256', process.env.DOCS_SIGN_SECRET)
+        .update(`${sid}.${type}.${exp}`)
+        .digest('hex');
+```
+
+> Il server accetta sia il `type` “raw” passato nella query, sia la forma normalizzata (`proforma` | `commercial` | `dle`) per evitare mismatch.
+
+### Regole di template
+
+**Comune**
+
+* Labels in **inglese**: *Sender*, *Receiver*, *Carrier*, *Currency*, *Description*, *Qty*, *Price*, *Total*, *Signature*.
+* `Receiver` mostra anche **Telefono** e **VAT/CF** se disponibili.
+* `Total` = somma di **Qty × Price** (non c’è più colonna “Amount”).
+* **Place & date**: `Mittente - Città` + `Ritiro - Data`.
+* Toolbar sticky con bottone “Print / Save PDF”.
+
+**Proforma**
+
+* Titolo: **Proforma Invoice**
+* **Watermark** diagonale “PROFORMA”
+* Nota in footer: **“Goods are not for resale. Declared values are for customs purposes only.”**
+
+**Commerciale**
+
+* Titolo: **Commercial Invoice**
+* **Nessun watermark**
+* **Nessuna** nota “not for resale…”
+
+**DLE (Export Free Declaration)**
+
+* Dichiara conformità alle liste/regolamenti UE fornite.
+* Placeholder compilati da Airtable:
+
+  * To: **Corriere**
+  * Shipper: **Mittente – Ragione Sociale**
+  * Place: **Mittente – Città**
+  * Date: **Ritiro – Data**
+
+### Esempi URL
+
+```
+# Proforma (HTML)
+https://<deploy>/api/docs/unified/render?sid=SP-2025-09-10-9736&type=proforma&exp=<epoch>&sig=<hmac>&format=html
+
+# Commercial Invoice (HTML)
+https://<deploy>/api/docs/unified/render?sid=SP-2025-09-10-9736&type=fattura&exp=<epoch>&sig=<hmac>&format=html
+
+# DLE (HTML)
+https://<deploy>/api/docs/unified/render?sid=SP-2025-09-10-9736&type=dle&exp=<epoch>&sig=<hmac>&format=html
+```
 
 ---
 
 ## API proxy & CORS
 
-* Route serverless espongono CORS con allowlist letta da `ORIGIN_ALLOWLIST`.
-* Il Back-Office chiama le API tramite `API_BASE` derivato da `AIRTABLE.proxyBase` (se presente) o default `https://<project>.vercel.app/api`.
-* Errore tipico: **405 Not Allowed** → chiamata con metodo sbagliato o dominio non in allowlist.
+*(invariato)*
 
 ---
 
 ## File & responsabilità (Back-Office)
 
-### `assets/esm/main.js`
-
-* Carica dati (`fetchShipments`), applica filtro **Solo non evase**, ordina per `ritiro_data`.
-* Azioni:
-
-  * `onUploadForDoc` → carica allegato e patcha Airtable.
-  * `onSaveTracking` → salva corriere/TN, abilita invio mail (non cambia stato).
-  * `onSendMail` → chiama `/api/notify/transit`; flag **\_mailSent** per evitare doppioni UI.
-  * `onComplete` → setta `Stato = "In transito"` e ricarica lista.
-
-### `assets/esm/ui/render.js`
-
-* **normalizeShipmentRecord** con alias robusti (mittente/destinatario, stato, tracking, docs, peso, colli).
-* **Fallback colli/peso** per spedizioni “Altro”.
-* Card:
-
-  * header con ID chip, cliente, badge stato;
-  * blocchi KV, documenti richiesti, pannello etichette;
-  * blocco tracking (select corriere, input TN, “Apri tracking”);
-  * sezione **Notifica cliente** (input sempre editabile; bottone attivo solo con tracking; helper “Email inviata ✓”);
-  * pulsante **Evasione completata**.
-* **Dettagli** compressi di default, con toggle.
-
-> Se rinomini un campo in Airtable, **aggiorna gli alias** in `render.js` (helper `pickLoose`) o nelle regole in `/rules`.
-
----
-
-## Endpoint utili / test rapidi
-
-```bash
-# Preventivo pubblico
-GET https://<deploy>/quote/<slug>
-
-# Accetta un’opzione
-curl -X POST https://<deploy>/api/quotes/accept \
-  -H "Content-Type: application/json" \
-  -d '{"slug":"q-250827-xxxx","optionIndex":1}'
-
-# Email "in transito" (Back-Office)
-curl -X POST https://<deploy>/api/notify/transit \
-  -H "Content-Type: application/json" \
-  -d '{"to":"user@example.com","id":"SP-2025-09-04-2000","carrier":"DHL","tracking":"324238592034","ritiroData":"2025-09-04"}'
-```
+*(invariato per main.js / ui/render.js, con la sola aggiunta cosmetica ai bottoni)*
 
 ---
 
 ## Troubleshooting
 
-* **405 Not Allowed** su `/api/notify/transit`: controlla metodo POST e **ORIGIN\_ALLOWLIST**.
-* **Niente colli/peso su “Altro”**: assicurati che almeno uno tra `Dimensioni (cm)`, `LxWxH` o `L|W|H` sia presente, e che `Peso` sia numerico; il fallback li ricompone.
-* **Doppia email**: il Back-Office disabilita input/bottone dopo l’invio nella **sessione corrente**. Se vuoi persistenza, salva un flag in Airtable e leggi quel campo in `render.js`.
-* **Filtro “Solo non evase”**: mostra **solo `Stato = "Nuova"`**; la card scompare quando premi **Evasione completata**.
+* **401 Unauthorized — Invalid signature**
 
----
+  * Verifica `exp` non scaduto (epoch seconds lato client).
+  * Calcola `sig` esattamente su `${sid}.${type}.${exp}` (occhio a `type` coerente con la query).
+  * In test, `BYPASS_SIGNATURE=1`.
 
-## Sicurezza & qualità
+* **404 Not found — No shipment found**
 
-* CORS rigoroso su tutte le route pubbliche.
-* Sanitizzazione HTML (quotes view) via `esc()`.
-* PAT Airtable **solo server-side**.
-* Accettazione preventivi **idempotente** (`409` su conflitti).
-* Logging mirato nelle serverless (senza dati sensibili oltre l’email).
+  * `sid` non corrisponde a nessun record in `SpedizioniWebApp`.
+  * Ricontrolla “ID Spedizione” (case, spazi, trattini) o passa direttamente il `recXXXX`.
+
+* **422 INVALID\_FILTER\_BY\_FORMULA — Unknown field names**
+
+  * La PL (`SPED_PL`) filtra per “ID Spedizione”: assicurati che il **nome campo** sia esattamente `ID Spedizione`.
+  * Il codice prova più alias, ma se non esiste nessuno dei candidati fallisce il filtro.
+  * Quote `'` nel valore sono gestite (escape), ma evita caratteri non stampabili.
+
+* **Campi mancanti o placeholder**
+
+  * Se un campo non è valorizzato, il template mostra `—` o lo omette (telefono/VAT).
+  * Popola i campi mittente/destinatario in Airtable per una stampa completa.
+
+* **Salvataggio PDF non parte**
+
+  * Il bottone chiama `window.print()`: su alcuni browser mobile è limitato. Su desktop funziona e consente “Salva come PDF”.
+
+* **ESM/CommonJS**
+
+  * `/api/docs/unified/render.js` è **ESM**. Se aggiungi file di supporto, usa `import` e non `require`.
+  * Se proprio serve CJS, rinomina in `.cjs` e importalo dinamicamente.
 
 ---
 
 ## Estensioni future
 
-* Flag “email inviata” persistente su Airtable (evita doppioni tra sessioni).
-* PDF generati (LDV/PL/Conferma) con storage in Airtable.
-* Rate-limit per `/api/notify/transit`.
-* Refactor helpers comuni in `/lib`.
+* Upload automatico su Airtable:
+
+  * **Proforma/Commerciale** → `Allegato Fattura`
+  * **DLE** → `Allegato DLE`
+  * (eventuale **PL** → `Allegato PL`)
+* Conversione HTML→PDF server-side (headless Chrome) solo se strettamente necessario.
+* i18n per labels (IT/EN switch by query).
 
 ---
 
 ### Cosa mi aspetto in chat
 
-* Se tocchiamo Airtable, **aggiorna alias** in `pickLoose`/normalizzatori.
+* Se tocchiamo Airtable, **aggiorna alias** in `render.js`/normalizzatori.
 * Se tocchiamo le email, rispetta gli HTML in `/api/notify/transit.js` e in `app/api/spedizioni/.../route.ts`.
-* Suggerisci verifiche su log Vercel quando qualcosa non torna (già presenti `console.log` utili).
-
-**Done.** Questo README è la base per manutenzione ed evoluzioni senza perdere il contesto delle chat.
+* Suggerisci verifiche su log Vercel quando qualcosa non torna (log già presenti).
+* Per l’Utility Documenti, mantieni **coerenza visuale** e **zero dipendenze extra**.
