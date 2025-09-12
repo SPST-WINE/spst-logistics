@@ -1,5 +1,4 @@
 // api/docs/unified/generate.js  (ESM + Node 20)
-// RUNTIME: Node.js (NOT Edge)
 export const config = { runtime: 'nodejs' };
 
 import crypto from 'node:crypto';
@@ -11,7 +10,7 @@ const AIRTABLE_BASE   = process.env.AIRTABLE_BASE || '';
 const TB_SPEDIZIONI   = process.env.TB_SPEDIZIONI || 'SpedizioniWebApp';
 
 const FIELD_BY_TYPE = {
-  proforma: 'Allegato Fattura',          // campo unico per proforma/fattura
+  proforma: 'Allegato Fattura',
   fattura : 'Allegato Fattura',
   invoice : 'Allegato Fattura',
   dle     : 'Allegato DLE',
@@ -75,12 +74,12 @@ export default async function handler(req, res){
     if (!SECRET) return bad(res,500,'Server misconfigured','Missing DOCS_SIGNING_SECRET');
     if (!idSpedizione) return bad(res,400,'Missing parameter','idSpedizione');
 
-    // ricava recId da Airtable (se non passato)
+    // recId serve solo per allegare su Airtable (non per la firma URL)
     let recId = (body.recId || '').startsWith('rec') ? body.recId : null;
     if (!recId) { try { recId = await airtableLookupRecId(idSpedizione); } catch {} }
 
-    // firma URL con sid coerente a render
-    const sid = recId || idSpedizione;
+    // FIRMA SEMPRE CON idSpedizione
+    const sid = idSpedizione;
     const exp = Math.floor(Date.now()/1000) + 60*15;
     const sig = hmacHex(`${sid}.${type}.${exp}`);
 
