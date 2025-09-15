@@ -12,6 +12,10 @@ import { toast } from './utils/dom.js';
 import { dateTs } from './utils/misc.js';
 import './back-office-tabs.js';
 
+const log  = (...a)=>{ if (DEBUG) console.log('[BO]', ...a); };
+const warn = (...a)=>{ if (DEBUG) console.warn('[BO]', ...a); };
+const err  = (...a)=> console.error('[BO]', ...a);
+
 const elSearch   = document.getElementById('search');
 const elOnlyOpen = document.getElementById('only-open');
 
@@ -35,17 +39,19 @@ async function loadData(){
     const onlyOpen = !!elOnlyOpen?.checked;
     const status = 'all';
 
+    log('loadData', { q, onlyOpen, status, proxy: AIRTABLE?.proxyBase });
     const items = await fetchShipments({ q, status, onlyOpen });
     DATA = items || [];
     applyFilters();
-  }catch(err){
-    console.error('[loadData] errore', err);
+  }catch(e){
+    err('[loadData] errore', e);
     toast('Errore nel caricamento dati');
   }
 }
 
 function applyFilters(){
   const out = [...DATA].sort((a,b)=> dateTs(b.ritiro_data) - dateTs(a.ritiro_data));
+  log('applyFilters → renderList', { count: out.length });
   renderList(out, {
     onUploadForDoc,
     onSaveTracking,
@@ -64,20 +70,33 @@ async function onUploadForDoc(e, rec, docKey){
     const recId = rec._recId || rec.id;
     if (!recId){ toast('Errore: id record mancante'); return; }
 
+    const mapped = docFieldFor(docKey);
+    log('onUploadForDoc:start', {
+      recId,
+      docKey,
+      mapped,
+      file: { name: file.name, type: file.type, size: file.size }
+    });
+
     toast('Upload in corso…');
 
     // 1) upload al proxy → url/attachments
     const { url, attachments } = await uploadAttachment(recId, docKey, file);
     const attArray = Array.isArray(attachments) && attachments.length ? attachments : [{ url }];
 
+    // debug probe
+    try { window.__LAST_UPLOAD__ = { recId, docKey, mapped, attArray }; } catch {}
+
     // 2) patch sicura (mappa docKey → campo giusto, e-DAS → Allegato 3)
     const rawFields = rec.fields || {};
+    log('onUploadForDoc:patch', { recId, docKey, mapped, rawFieldsKeys: Object.keys(rawFields || {}) });
     await patchDocAttachment(recId, docKey, attArray, rawFields);
 
-    toast(`${(docFieldFor(docKey) || docKey).replaceAll('_',' ')} caricato`);
+    toast(`${(mapped || docKey).replaceAll('_',' ')} caricato`);
+    log('onUploadForDoc:done');
     await loadData();
-  }catch(err){
-    console.error('[onUploadForDoc] errore upload', err);
+  }catch(e){
+    err('[onUploadForDoc] errore upload', e);
     toast('Errore caricamento documento');
   }finally{
     if (e?.target) e.target.value = '';
@@ -94,17 +113,19 @@ async function onSaveTracking(rec, carrier, tn){
   if (!recId){ toast('Errore: id record mancante'); return; }
 
   try{
+    log('onSaveTracking', { recId, carrier, tn });
     await patchShipmentTracking(recId, { carrier, tracking: tn });
     rec.tracking_carrier = carrier;
     rec.tracking_number  = tn;
+
     const card = document.getElementById(`card-${rec.id}`);
     const btn = card?.querySelector('.send-mail');
     const inp = card?.querySelector('.notify-email');
     if (btn && inp){ btn.disabled = false; inp.disabled = false; btn.title = ''; inp.title = ''; }
 
     toast(`${rec.id}: tracking salvato`);
-  }catch(err){
-    console.error('Errore salvataggio tracking', err);
+  }catch(e){
+    err('Errore salvataggio tracking', e);
     toast('Errore salvataggio tracking');
   }
 }
@@ -118,7 +139,7 @@ async function onGenerateDoc(rec, type = 'proforma'){
     const url = `${API_BASE}/docs/unified/generate`;
     const body = { shipmentId: recId, type };
 
-    if (DEBUG) console.log('[generateDoc] POST', url, body);
+    log('[generateDoc] POST', url, body);
     toast(`Generazione ${type.toUpperCase()}…`);
 
     const r = await fetch(url, {
@@ -128,14 +149,15 @@ async function onGenerateDoc(rec, type = 'proforma'){
     });
     const j = await r.json().catch(()=> ({}));
     if (!r.ok || !j.ok){
+      err('[generateDoc] error', { status: r.status, j });
       throw new Error(j?.error || `HTTP ${r.status}`);
     }
 
     toast(`${type.toUpperCase()} generata e allegata ✓`);
     await loadData();
     return j;
-  }catch(err){
-    console.error('[onGenerateDoc] error', err);
+  }catch(e){
+    err('[onGenerateDoc] error', e);
     toast(`Errore generazione ${type}`);
   }
 }
@@ -168,7 +190,7 @@ async function onSendMail(rec, typedEmail, opts = {}){
     };
 
     const url = `${API_BASE}/notify/transit`;
-    if (DEBUG) console.log('[notify] POST', url, body);
+    log('[notify] POST', url, body);
 
     const r = await fetch(url, {
       method: 'POST',
@@ -177,6 +199,7 @@ async function onSendMail(rec, typedEmail, opts = {}){
     });
     if (!r.ok){
       const t = await r.text().catch(()=> '');
+      err('[notify] HTTP error', r.status, t.slice(0,180));
       throw new Error(`HTTP ${r.status}: ${t}`);
     }
 
@@ -184,8 +207,8 @@ async function onSendMail(rec, typedEmail, opts = {}){
     opts.onSuccess && opts.onSuccess();
 
     toast('Mail inviata al cliente');
-  }catch(err){
-    console.error('[sendMail] error', err);
+  }catch(e){
+    err('[sendMail] error', e);
     toast('Errore invio mail');
   }
 }
@@ -199,11 +222,12 @@ async function onComplete(rec){
     return applyFilters();
   }
   try{
+    log('onComplete', { recId });
     await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
     toast(`${rec.id}: evasione completata`);
     await loadData();
-  }catch(err){
-    console.error('Errore evasione', err);
+  }catch(e){
+    err('Errore evasione', e);
     toast('Errore evasione');
   }
 }
@@ -213,6 +237,6 @@ if (elSearch)   elSearch.addEventListener('input', debounce(()=>loadData(), 250)
 if (elOnlyOpen) elOnlyOpen.addEventListener('change', ()=>loadData());
 
 /* ───────── bootstrap ───────── */
-loadData().catch(e=>console.warn('init loadData failed', e));
+loadData().catch(e=>warn('init loadData failed', e));
 
 export { onSendMail, onGenerateDoc };
