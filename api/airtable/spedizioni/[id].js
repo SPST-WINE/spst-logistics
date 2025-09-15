@@ -1,9 +1,4 @@
-// /api/airtable/spedizioni/[id].js
 // PATCH /api/airtable/spedizioni/:id
-// Body accettati:
-//   { fields:{...} }
-//   { carrier, tracking, stato, statoEvasa, docs:{ chiaveUI:url } }
-
 export default async function handler(req, res) {
   if (req.method === 'OPTIONS') return sendCORS(req, res);
   sendCORS(req, res);
@@ -18,34 +13,36 @@ export default async function handler(req, res) {
     assertEnv({ pat, baseId });
 
     const bodyRaw = await readJson(req);
-    const fields = { ...(bodyRaw.fields || {}) };
+    const fieldsIn = { ...(bodyRaw.fields || {}) };
 
     // ---- Tracking number ----
     if (typeof bodyRaw.tracking === 'string' && bodyRaw.tracking.trim()) {
-      fields['Tracking Number'] = bodyRaw.tracking.trim();
+      fieldsIn['Tracking Number'] = bodyRaw.tracking.trim();
     }
 
     // ---- Corriere ----
     const rawCarrier = (typeof bodyRaw.carrier !== 'undefined') ? bodyRaw.carrier : undefined;
     if (typeof rawCarrier !== 'undefined') {
       const norm = normalizeCarrier(rawCarrier);
-      if (norm) fields['Corriere'] = norm;
+      if (norm) fieldsIn['Corriere'] = norm;
     }
 
     // ---- Stato spedizione ----
     if (typeof bodyRaw.stato === 'string' && bodyRaw.stato.trim()) {
-      fields['Stato'] = bodyRaw.stato.trim();
-      delete fields['Stato Spedizione'];
+      fieldsIn['Stato'] = bodyRaw.stato.trim();
+      delete fieldsIn['Stato Spedizione'];
     } else if (typeof bodyRaw.statoEvasa === 'boolean') {
-      fields['Stato'] = bodyRaw.statoEvasa ? 'Evasa' : 'Nuova';
-      delete fields['Stato Spedizione'];
+      fieldsIn['Stato'] = bodyRaw.statoEvasa ? 'Evasa' : 'Nuova';
+      delete fieldsIn['Stato Spedizione'];
     }
 
-    // ---- Documenti ----
+    // ---- Documenti (mappa chiavi docs → campi Airtable) ----
     if (bodyRaw.docs && typeof bodyRaw.docs === 'object') {
-      Object.assign(fields, mapDocsToAirtable(bodyRaw.docs));
+      Object.assign(fieldsIn, mapDocsToAirtable(bodyRaw.docs));
     }
 
+    // 🔧 NORMALIZZAZIONE ALIAS CAMPI (incluso "e-DAS" → "Allegato 3")
+    const fields = normalizeFieldAliases(fieldsIn);
     if (!Object.keys(fields).length) {
       return res.status(400).json({ error: 'No fields to update' });
     }
@@ -57,21 +54,16 @@ export default async function handler(req, res) {
     for (const table of candidates) {
       const attempt = await airtablePatch({ baseId, table, id, pat, fields });
       if (attempt.ok) {
-        // risposta OK
         return res.status(attempt.status).json({ ...attempt.data, _table: table });
       }
-      // errori "model not found/permissions" → prova la prossima tabella
       const errMsg = JSON.stringify(attempt.data || {});
       const retriable =
         attempt.status === 403 || attempt.status === 404 ||
         /MODEL_NOT_FOUND|NOT_FOUND|TABLE_NOT_FOUND|INVALID_PERMISSIONS/i.test(errMsg);
-
       console.warn('[PATCH spedizione] Airtable error', { table, status: attempt.status, id, err: attempt.data });
       last = attempt;
       if (!retriable) break;
     }
-
-    // esci con l’ultimo errore
     return res.status(last.status).json(last.data);
   } catch (e) {
     console.error('[PATCH spedizione] unexpected error', e);
@@ -83,16 +75,8 @@ export default async function handler(req, res) {
 
 function sendCORS(req, res) {
   const origin = req.headers.origin || '';
-  const list = (process.env.ORIGIN_ALLOWLIST || '*')
-    .split(',')
-    .map(s => s.trim())
-    .filter(Boolean);
-
-  const allowed =
-    list.includes('*') ||
-    (!origin) ||
-    list.some(p => safeWildcardMatch(origin, p));
-
+  const list = (process.env.ORIGIN_ALLOWLIST || '*').split(',').map(s => s.trim()).filter(Boolean);
+  const allowed = list.includes('*') || (!origin) || list.some(p => safeWildcardMatch(origin, p));
   if (allowed && origin) res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET, PATCH, OPTIONS');
@@ -113,16 +97,15 @@ function assertEnv({ pat, baseId }) {
   if (!baseId) throw new Error('AIRTABLE_BASE_ID missing');
 }
 
-/** Ordine tabelle: preferisci sempre la nuova; poi legacy; poi fallback sicuri */
 function resolveTablesInOrder() {
   const uniq = (a) => [...new Set(a.filter(Boolean))];
   return uniq([
-    process.env.TB_SPEDIZIONI_WEBAPP,            // es. "SpedizioniWebApp"
-    process.env.TB_SPEDIZIONI,                   // eventuale legacy esplicita
-    process.env.AIRTABLE_TABLE,                  // eventuale var generica
+    process.env.TB_SPEDIZIONI_WEBAPP,            // "SpedizioniWebApp"
+    process.env.TB_SPEDIZIONI,                   // legacy esplicita
+    process.env.AIRTABLE_TABLE,                  // var generica
     process.env.USE_NEW_SHIPMENTS_TABLE ? 'SpedizioniWebApp' : null,
-    'SpedizioniWebApp',                          // fallback di default
-    'SPEDIZIONI'                                 // ultimo tentativo legacy
+    'SpedizioniWebApp',
+    'SPEDIZIONI'
   ]);
 }
 
@@ -143,8 +126,7 @@ function normalizeCarrier(input) {
     fedex: 'FedEx', fedexexpress: 'FedEx', fx: 'FedEx', fedexground: 'FedEx',
     ups: 'UPS', unitedparcelservice: 'UPS',
     tnt: 'TNT', tntexpress: 'TNT',
-    gls: 'GLS',
-    dpd: 'DPD',
+    gls: 'GLS', dpd: 'DPD',
     poste: 'Poste', posteitaliane: 'Poste',
     altro: 'Altro', other: 'Altro'
   };
@@ -162,6 +144,34 @@ async function airtablePatch({ baseId, table, id, pat, fields }) {
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { data = { error: text }; }
   return { status: r.status, ok: r.ok, data };
+}
+
+/** Mappa alias “liberi” → nomi campo reali Airtable */
+function normalizeFieldAliases(input) {
+  const out = {};
+  const map = {
+    // Documenti principali
+    'Lettera di Vettura': 'Allegato LDV',
+    'LDV': 'Allegato LDV',
+    'Fattura': 'Allegato Fattura',
+    'DLE': 'Allegato DLE',
+    'PL': 'Allegato PL',
+    // e-DAS (tutte le varianti) → Allegato 3
+    'e-DAS': 'Allegato 3',
+    'e_DAS': 'Allegato 3',
+    'eDAS': 'Allegato 3',
+    'EDAS': 'Allegato 3',
+    // altri alias prudenziali
+    'Allegato1': 'Allegato 1',
+    'Allegato2': 'Allegato 2',
+    'Allegato3': 'Allegato 3',
+  };
+
+  for (const [k, v] of Object.entries(input || {})) {
+    const key = map[k] || k;
+    out[key] = v;
+  }
+  return out;
 }
 
 function mapDocsToAirtable(docs) {
@@ -201,6 +211,8 @@ function mapDocsToAirtable(docs) {
     else if (NEW_CLIENT[k]) out[NEW_CLIENT[k]] = [{ url: String(url) }];
     else if (LEGACY_ATT[k]) out[LEGACY_ATT[k]] = [{ url: String(url) }];
     else if (LEGACY_LINKS[k]) out[LEGACY_LINKS[k]] = String(url);
+    // varianti e-DAS che arrivassero in docs
+    else if (['e-DAS','e_DAS','eDAS','EDAS'].includes(k)) out['Allegato 3'] = [{ url: String(url) }];
   }
   return out;
 }
