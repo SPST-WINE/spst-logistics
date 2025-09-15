@@ -150,7 +150,17 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
   if (unknownKeys.length) {
     base.fields = base.fields || {};
-    for (const k of unknownKeys) base.fields[k] = rest[k];
+   // alias tolleranti (e-DAS → Allegato 3)
++   const ALIAS = {
++     'e-DAS': 'Allegato 3',
++     'e_DAS': 'Allegato 3',
++     'eDAS': 'Allegato 3',
++     'EDAS':  'Allegato 3',
++   };
++   for (const k of unknownKeys) {
++     const mapped = ALIAS[k] || k;
++     base.fields[mapped] = rest[k];
++   }
   }
 
   if (!('tracking' in base) && !('statoEvasa' in base) && !('docs' in base) && !('fields' in base)) {
