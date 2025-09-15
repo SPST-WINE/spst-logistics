@@ -1,4 +1,9 @@
 // assets/esm/airtable/api.js
+
+// Top of file
+const __BUILD__ = '2025-09-15T15:xx v3'; // cambia testo a piacere
+console.log('[BO] Loaded', import.meta.url, __BUILD__);
+
 import { AIRTABLE, USE_PROXY, FETCH_OPTS, DEBUG } from '../config.js';
 import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
