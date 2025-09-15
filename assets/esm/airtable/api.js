@@ -1,51 +1,44 @@
 // assets/esm/airtable/api.js
-
-// Top of file
-const __BUILD__ = '2025-09-15T15:xx v3'; // cambia testo a piacere
-console.log('[BO] Loaded', import.meta.url, __BUILD__);
-
-import { AIRTABLE, USE_PROXY, FETCH_OPTS, DEBUG } from '../config.js';
+import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
 import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
-/* ───────── utils log ───────── */
-const dlog  = (...a) => { if (DEBUG) console.log('[API]', ...a); };
-const dwarn = (...a) => { if (DEBUG) console.warn('[API]', ...a); };
-const derr  = (...a) => console.error('[API]', ...a);
-const setDebugProbe = (k, v) => {
-  try { if (typeof window !== 'undefined') { window[k] = v; } } catch {}
-};
+/* ───────────────────────── MAPPING DOCUMENTI ─────────────────────────
+   Campi attachment in “SpedizioniWebApp”:
 
-/* ───────── Normalizzazione robusta chiavi documento ───────── */
-function normalizeDocKey(raw) {
-  const s = String(raw || '')
-    .normalize('NFKD')
-    .replace(/[\u2010-\u2015\-_\s]+/g, '') // unifica dash/underscore/spazi
-    .replace(/[^a-zA-Z0-9]/g, '')          // rimuovi simboli
-    .toLowerCase();
-  return s; // "e-DAS" → "edas", "Fattura_Commerciale" → "fatturacommerciale"
-}
+   - Fattura - Allegato Cliente
+   - Packing List - Allegato Cliente
+   - Allegato LDV
+   - Allegato Fattura
+   - Allegato DLE
+   - Allegato PL
+   - Allegato 1
+   - Allegato 2
+   - Allegato 3
+*/
+export const DOC_FIELD_MAP = {
+  // principali (campo dedicato)
+  Lettera_di_Vettura: 'Allegato LDV',
+  Fattura_Commerciale: 'Allegato Fattura',
+  Dichiarazione_Esportazione: 'Allegato DLE',
+  Packing_List: 'Allegato PL',
 
-/* Mappa normalizzata → campo Airtable */
-const DOC_FIELD_MAP_NORM = {
-  letteradivettura: 'Allegato LDV',
-  fatturacommerciale: 'Allegato Fattura',
-  dichiarazioneesportazione: 'Allegato DLE',
-  packinglist: 'Allegato PL',
-  fatturaclient: 'Fattura - Allegato Cliente',
-  packingclient: 'Packing List - Allegato Cliente',
-  // e-DAS (tutte le varianti) → Allegato 3
-  edas: 'Allegato 3',
+  // caricati dal cliente (valgono come “ok” per la checklist)
+  Fattura_Client: 'Fattura - Allegato Cliente',
+  Packing_Client: 'Packing List - Allegato Cliente',
+
+  // alias tolleranti per e-DAS → Allegato 3
+  'e-DAS': 'Allegato 3',
+  e_DAS: 'Allegato 3',
+  eDAS: 'Allegato 3',
+  EDAS: 'Allegato 3',
 };
 
 export function docFieldFor(docKey) {
-  const norm = normalizeDocKey(docKey);
-  const mapped = DOC_FIELD_MAP_NORM[norm] || String(docKey || '').replaceAll('_', ' ');
-  if (DEBUG) dlog('docFieldFor:', { docKey, norm, mapped });
-  return mapped;
+  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
 }
 
-/* ───────── Query & Fetch ───────── */
+/* ───────────────────────── Query & Fetch ───────────────────────── */
 
 export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
   const u = new URLSearchParams();
@@ -56,10 +49,9 @@ export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
 }
 
 export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
-  if (!USE_PROXY) { dwarn('USE_PROXY=false – uso MOCK'); return []; }
+  if (!USE_PROXY) { console.warn('USE_PROXY=false – uso MOCK'); return []; }
   const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({ q: q.trim(), onlyOpen })}`;
   try {
-    dlog('GET', url);
     const res = await fetch(url, FETCH_OPTS);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -68,23 +60,25 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    return records;
+    return records; // normalizzazione lato render.js
   } catch (err) {
-    derr('[fetchShipments] failed', { url, err });
+    console.error('[fetchShipments] failed', { url, err });
     showBanner(`Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). <span class="small">Dettagli: ${String(err.message||err)}</span>`);
     return [];
   }
 }
 
-/* ───────── Fetch singolo record (robusto) ───────── */
+/* ───────────────────── Fetch singolo record ─────────────────────
+   1) prova /spedizioni/:id
+   2) fallback /spedizioni?search=:id e prendi rec.id===id
+*/
 export async function fetchShipmentById(recordId) {
   if (!USE_PROXY || !recordId) return null;
   const base = AIRTABLE.proxyBase;
 
+  // Tentativo 1: diretto
   try {
-    const url = `${base}/spedizioni/${encodeURIComponent(recordId)}`;
-    dlog('GET', url);
-    const res = await fetch(url, FETCH_OPTS);
+    const res = await fetch(`${base}/spedizioni/${encodeURIComponent(recordId)}`, FETCH_OPTS);
     if (res.ok) {
       const json = await res.json().catch(() => ({}));
       if (json && (json.id || json.fields)) return json;
@@ -94,31 +88,31 @@ export async function fetchShipmentById(recordId) {
       }
     } else if (res.status !== 405 && res.status !== 404) {
       const t = await res.text().catch(() => '');
-      dwarn('[fetchShipmentById] direct failed', res.status, t.slice(0, 180));
+      console.warn('[fetchShipmentById] direct failed', res.status, t.slice(0, 180));
     }
   } catch (e) {
-    dwarn('[fetchShipmentById] direct threw', e);
+    console.warn('[fetchShipmentById] direct threw', e);
   }
 
+  // Tentativo 2: search
   try {
     const url = `${base}/spedizioni?${new URLSearchParams({ search: recordId, pageSize: '5' })}`;
-    dlog('GET', url);
     const res = await fetch(url, FETCH_OPTS);
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      dwarn('[fetchShipmentById] search failed', res.status, t.slice(0, 180));
+      console.warn('[fetchShipmentById] search failed', res.status, t.slice(0, 180));
       return null;
     }
     const json = await res.json().catch(() => ({}));
     const records = Array.isArray(json.records) ? json.records : [];
     return records.find(r => r.id === recordId) || records[0] || null;
   } catch (e) {
-    dwarn('[fetchShipmentById] search threw', e);
+    console.warn('[fetchShipmentById] search threw', e);
     return null;
   }
 }
 
-/* ───────── PATCH “tollerante” ─────────
+/* ───────────────────────────── PATCH ─────────────────────────────
    Accetta:
    - { carrier, tracking }
    - { statoEvasa: true }
@@ -139,49 +133,23 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   if (tracking) base.tracking = String(tracking).trim();
   if (typeof statoEvasa === 'boolean') base.statoEvasa = statoEvasa;
   if (docs && typeof docs === 'object') base.docs = docs;
-  if (fields && typeof fields === 'object') base.fields = { ...fields };
+  if (fields && typeof fields === 'object') base.fields = fields;
 
   // Se arriva un tracking e NON stiamo già settando lo Stato, forza "In transito"
   if (base.tracking && !(base.fields && ('Stato' in base.fields))) {
     base.fields = { ...(base.fields || {}), 'Stato': 'In transito' };
   }
 
-  // Porta eventuali chiavi top-level sconosciute in fields
+  // porta eventuali chiavi top-level sconosciute in fields (es. "e-DAS", "Allegato Fattura")
   const KNOWN = new Set(['carrier','tracking','statoEvasa','docs','fields']);
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
   if (unknownKeys.length) {
     base.fields = base.fields || {};
     for (const k of unknownKeys) {
-      base.fields[k] = rest[k];
+      const mapped = docFieldFor(k); // usa normalizzazione robusta (e-DAS → Allegato 3)
+      base.fields[mapped] = rest[k];
     }
   }
-
-  // NORMALIZZAZIONE FINALE DELLE CHIAVI PRIMA DELL’INVIO
-  // - Qualsiasi variante di e-DAS → "Allegato 3"
-  // - Alias tipici (LDV/Fattura/DLE/PL, Allegato1/2/3 → con spazio)
-  const outFields = {};
-  const edasRx = /^e[\s_\-]*d[\s_\-]*a[\s_\-]*s$/i;
-  for (const [k, v] of Object.entries(base.fields || {})) {
-    let key = String(k || '').trim();
-
-    if (edasRx.test(key)) {
-      key = 'Allegato 3';
-    } else if (key === 'LDV' || /Lettera\s*di\s*Vettura/i.test(key)) {
-      key = 'Allegato LDV';
-    } else if (/^Fattura$/i.test(key) || /Fattura\s*Commerciale/i.test(key)) {
-      key = 'Allegato Fattura';
-    } else if (/^DLE$/i.test(key) || /Dichiarazione\s*Esportazione/i.test(key)) {
-      key = 'Allegato DLE';
-    } else if (/^PL$/i.test(key) || /Packing\s*List/i.test(key)) {
-      key = 'Allegato PL';
-    } else {
-      const m = key.replace(/\s+/g,'').match(/^Allegato([123])$/i);
-      if (m) key = `Allegato ${m[1]}`;
-    }
-
-    outFields[key] = v;
-  }
-  if (Object.keys(outFields).length) base.fields = outFields;
 
   if (!('tracking' in base) && !('statoEvasa' in base) && !('docs' in base) && !('fields' in base)) {
     throw new Error('PATCH failed (client): no fields to update');
@@ -216,8 +184,7 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   throw new Error('PATCH failed (tentativi esauriti): ' + lastErrTxt);
 }
 
-
-/* ───────── Upload → Vercel Blob (CORS lato server) ───────── */
+/* ─────────────────────── Upload → Vercel Blob ─────────────────────── */
 export async function uploadAttachment(recordId, docKey, file) {
   if (!USE_PROXY) {
     const url = `https://files.dev/mock/${recordId}-${docKey}-${Date.now()}-${file?.name||'file'}`;
@@ -228,21 +195,18 @@ export async function uploadAttachment(recordId, docKey, file) {
   const filename = `${safe(recordId)}__${safe(docKey)}__${Date.now()}__${safe(file?.name || 'file')}`;
   const url = `${AIRTABLE.proxyBase}/upload?filename=${encodeURIComponent(filename)}&contentType=${encodeURIComponent(file?.type || 'application/octet-stream')}`;
 
-  dlog('UPLOAD →', { url, filename, type: file?.type, size: file?.size });
   const res = await fetch(url, { method: 'POST', headers: { 'Accept': 'application/json' }, body: file });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
-    derr('Upload proxy error', res.status, t.slice(0,180));
     throw new Error(`Upload proxy ${res.status}: ${t.slice(0,180)}`);
   }
   const json = await res.json().catch(() => ({}));
   if (!json || !json.url) throw new Error('Upload: URL non ricevuta dal proxy');
   const attachments = Array.isArray(json.attachments) && json.attachments.length ? json.attachments : [{ url: json.url }];
-  dlog('UPLOAD OK', { url: json.url, n: attachments.length });
   return { url: json.url, attachments };
 }
 
-/* ───────── Colli ───────── */
+/* ───────────────────────────── Colli ───────────────────────────── */
 export async function fetchColliFor(recordId) {
   try {
     if (!recordId) return [];
@@ -250,7 +214,6 @@ export async function fetchColliFor(recordId) {
     if (!base) return [];
     const url = `${base}/spedizioni/${encodeURIComponent(recordId)}/colli`;
 
-    dlog('GET colli', url);
     const res = await fetch(url, FETCH_OPTS);
     if (!res.ok) { return []; }
 
@@ -269,35 +232,36 @@ export async function fetchColliFor(recordId) {
     }
     return out;
   } catch (e) {
-    dwarn('[fetchColliFor] errore', e);
+    console.warn('[fetchColliFor] errore', e);
     return [];
   }
 }
 
-/* ───────── Logica documenti “extra” → Allegato 1/2/3 ───────── */
+/* ───────── Logica documenti extra → Allegato 1/2/3 ─────────
+   - I principali (LDV/Fattura/DLE/PL) vanno sempre nei loro campi.
+   - “e-DAS” viene forzato su Allegato 3 (via mapping).
+   - Altri documenti extra riempiono il primo slot libero tra A1→A2→A3; se pieni, append su A3.
+*/
 const PRIMARY_FIELDS = new Set(['Allegato LDV', 'Allegato Fattura', 'Allegato DLE', 'Allegato PL']);
 const EXTRA_SLOTS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
 
 export async function patchDocAttachment(recordId, docKey, attachments, rawFields = null) {
   if (!recordId) throw new Error('Missing record id');
   const mapped = docFieldFor(docKey);
-  dlog('patchDocAttachment:', { recordId, docKey, mapped, rawFieldsPresent: !!rawFields });
 
-  // Se il mapping forza uno slot extra esplicito → patch diretto su quello
+  // Caso 0: se il mapping forza uno slot extra esplicito → patch diretto su quello
   if (EXTRA_SLOTS.includes(mapped)) {
     const existing = Array.isArray(rawFields?.[mapped]) ? rawFields[mapped] : [];
     const next = [...existing, ...attachments];
-    dlog('→ direct slot', { slot: mapped, existing: existing.length, add: attachments.length, total: next.length });
     return patchShipmentTracking(recordId, { fields: { [mapped]: next } });
   }
 
-  // Documenti principali → campo dedicato
+  // Caso 1: documenti principali → campo dedicato
   if (PRIMARY_FIELDS.has(mapped)) {
-    dlog('→ primary field', { field: mapped, add: attachments.length });
     return patchShipmentTracking(recordId, { fields: { [mapped]: attachments } });
   }
 
-  // Documenti “extra” non mappati → scegli A1/A2/A3
+  // Caso 2: documenti “extra” non mappati → scegli A1/A2/A3
   let chosen = null;
   let existing = [];
 
@@ -307,20 +271,21 @@ export async function patchDocAttachment(recordId, docKey, attachments, rawField
       if (!cur.length) { chosen = slot; existing = []; break; }
     }
     if (!chosen) {
-      chosen = 'Allegato 3'; // fallback append
+      // tutti pieni → append su Allegato 3
+      chosen = 'Allegato 3';
       existing = Array.isArray(rawFields[chosen]) ? rawFields[chosen] : [];
     }
   } else {
+    // fallback conservativo
     chosen = 'Allegato 1';
     existing = [];
   }
 
   const next = [...existing, ...attachments];
-  dlog('→ chosen slot', { slot: chosen, prev: existing.length, add: attachments.length, total: next.length });
   return patchShipmentTracking(recordId, { fields: { [chosen]: next } });
 }
 
-/* ───────── notify ───────── */
+/* ──────────────────────── Notify (Resend) ─────────────────────── */
 function notifyBaseFromAirtableBase() {
   const b = (typeof AIRTABLE?.proxyBase === 'string') ? AIRTABLE.proxyBase : '';
   return b.replace('/api/airtable', '/api/notify');
@@ -329,7 +294,6 @@ function notifyBaseFromAirtableBase() {
 export async function sendTransitEmail(recordId, to){
   const base = notifyBaseFromAirtableBase() || '';
   const url  = `${base}/transit`;
-  dlog('POST notify', { url, recordId, to });
   const res = await fetch(url, {
     method:'POST',
     headers:{ 'Content-Type':'application/json','Accept':'application/json' },
@@ -337,10 +301,7 @@ export async function sendTransitEmail(recordId, to){
   });
   if (!res.ok) {
     const t = await res.text().catch(()=> '');
-    derr('Notify error', res.status, t.slice(0,180));
     throw new Error(`Notify ${res.status}: ${t.slice(0,180)}`);
   }
-  const j = await res.json().catch(()=> ({}));
-  dlog('Notify OK', j);
-  return j;
+  return res.json();
 }
