@@ -1,18 +1,24 @@
 // assets/esm/airtable/api.js
-import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
+import { AIRTABLE, USE_PROXY, FETCH_OPTS, DEBUG } from '../config.js';
 import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
+
+/* ───────── utils log ───────── */
+const dlog  = (...a) => { if (DEBUG) console.log('[API]', ...a); };
+const dwarn = (...a) => { if (DEBUG) console.warn('[API]', ...a); };
+const derr  = (...a) => console.error('[API]', ...a);
+const setDebugProbe = (k, v) => {
+  try { if (typeof window !== 'undefined') { window[k] = v; } } catch {}
+};
 
 /* ───────── Normalizzazione robusta chiavi documento ───────── */
 function normalizeDocKey(raw) {
   const s = String(raw || '')
     .normalize('NFKD')
-    // unifica qualsiasi tipo di dash/underscore/spazio
-    .replace(/[\u2010-\u2015\-_\s]+/g, '')
-    // rimuovi simboli residui
-    .replace(/[^a-zA-Z0-9]/g, '')
+    .replace(/[\u2010-\u2015\-_\s]+/g, '') // unifica dash/underscore/spazi
+    .replace(/[^a-zA-Z0-9]/g, '')          // rimuovi simboli
     .toLowerCase();
-  return s; // es.: "e-DAS" → "edas", "Fattura_Commerciale" → "fatturacommerciale"
+  return s; // "e-DAS" → "edas", "Fattura_Commerciale" → "fatturacommerciale"
 }
 
 /* Mappa normalizzata → campo Airtable */
@@ -29,7 +35,9 @@ const DOC_FIELD_MAP_NORM = {
 
 export function docFieldFor(docKey) {
   const norm = normalizeDocKey(docKey);
-  return DOC_FIELD_MAP_NORM[norm] || String(docKey || '').replaceAll('_', ' ');
+  const mapped = DOC_FIELD_MAP_NORM[norm] || String(docKey || '').replaceAll('_', ' ');
+  if (DEBUG) dlog('docFieldFor:', { docKey, norm, mapped });
+  return mapped;
 }
 
 /* ───────── Query & Fetch ───────── */
@@ -43,9 +51,10 @@ export function buildFilterQuery({ q = '', onlyOpen = false } = {}) {
 }
 
 export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
-  if (!USE_PROXY) { console.warn('USE_PROXY=false – uso MOCK'); return []; }
+  if (!USE_PROXY) { dwarn('USE_PROXY=false – uso MOCK'); return []; }
   const url = `${AIRTABLE.proxyBase}/spedizioni?${buildFilterQuery({ q: q.trim(), onlyOpen })}`;
   try {
+    dlog('GET', url);
     const res = await fetch(url, FETCH_OPTS);
     if (!res.ok) {
       const text = await res.text().catch(() => '');
@@ -56,7 +65,7 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     showBanner('');
     return records;
   } catch (err) {
-    console.error('[fetchShipments] failed', { url, err });
+    derr('[fetchShipments] failed', { url, err });
     showBanner(`Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). <span class="small">Dettagli: ${String(err.message||err)}</span>`);
     return [];
   }
@@ -68,7 +77,9 @@ export async function fetchShipmentById(recordId) {
   const base = AIRTABLE.proxyBase;
 
   try {
-    const res = await fetch(`${base}/spedizioni/${encodeURIComponent(recordId)}`, FETCH_OPTS);
+    const url = `${base}/spedizioni/${encodeURIComponent(recordId)}`;
+    dlog('GET', url);
+    const res = await fetch(url, FETCH_OPTS);
     if (res.ok) {
       const json = await res.json().catch(() => ({}));
       if (json && (json.id || json.fields)) return json;
@@ -78,36 +89,46 @@ export async function fetchShipmentById(recordId) {
       }
     } else if (res.status !== 405 && res.status !== 404) {
       const t = await res.text().catch(() => '');
-      console.warn('[fetchShipmentById] direct failed', res.status, t.slice(0, 180));
+      dwarn('[fetchShipmentById] direct failed', res.status, t.slice(0, 180));
     }
   } catch (e) {
-    console.warn('[fetchShipmentById] direct threw', e);
+    dwarn('[fetchShipmentById] direct threw', e);
   }
 
   try {
     const url = `${base}/spedizioni?${new URLSearchParams({ search: recordId, pageSize: '5' })}`;
+    dlog('GET', url);
     const res = await fetch(url, FETCH_OPTS);
     if (!res.ok) {
       const t = await res.text().catch(() => '');
-      console.warn('[fetchShipmentById] search failed', res.status, t.slice(0, 180));
+      dwarn('[fetchShipmentById] search failed', res.status, t.slice(0, 180));
       return null;
     }
     const json = await res.json().catch(() => ({}));
     const records = Array.isArray(json.records) ? json.records : [];
     return records.find(r => r.id === recordId) || records[0] || null;
   } catch (e) {
-    console.warn('[fetchShipmentById] search threw', e);
+    dwarn('[fetchShipmentById] search threw', e);
     return null;
   }
 }
 
-/* ───────── PATCH “tollerante” ───────── */
+/* ───────── PATCH “tollerante” ─────────
+   Accetta:
+   - { carrier, tracking }
+   - { statoEvasa: true }
+   - { fields: { "Allegato Fattura": [{url}] } }
+   - { "Allegato Fattura": [{url}] }  ← le chiavi “sconosciute” vanno in fields
+*/
 export async function patchShipmentTracking(recOrId, payload = {}) {
   const id = (typeof recOrId === 'string') ? recOrId :
              (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
   if (!id) throw new Error('Missing record id');
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
+
+  // snapshot originale per debug
+  const originalPayload = JSON.parse(JSON.stringify(payload || {}));
 
   const { carrier, tracking, statoEvasa, docs, fields, ...rest } = payload || {};
   const normCarrier = normalizeCarrier(carrier || '');
@@ -126,11 +147,14 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   // porta eventuali chiavi top-level sconosciute in fields (es. "e-DAS", "Allegato Fattura")
   const KNOWN = new Set(['carrier','tracking','statoEvasa','docs','fields']);
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
+
+  const aliasApplied = [];
   if (unknownKeys.length) {
     base.fields = base.fields || {};
     for (const k of unknownKeys) {
-      const mapped = docFieldFor(k); // usa normalizzazione robusta
+      const mapped = docFieldFor(k); // usa normalizzazione robusta (e-DAS → Allegato 3)
       base.fields[mapped] = rest[k];
+      aliasApplied.push({ from: k, to: mapped });
     }
   }
 
@@ -144,27 +168,50 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   attempts.push({}); // anche senza carrier
 
   let lastErrTxt = '';
+  let lastStatus = 0;
+
   for (const extra of attempts) {
     const body = { ...base, ...extra };
+    // probe per debug in console
+    setDebugProbe('__LAST_PATCH_ATTEMPT__', { url, id, originalPayload, aliasApplied, attemptBody: body });
+
     try {
+      if (DEBUG) dlog('PATCH', url, { id, aliasApplied, body });
       const res = await fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify(body),
       });
-      if (res.ok) return await res.json();
+      lastStatus = res.status;
+
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        setDebugProbe('__LAST_PATCH_RESULT__', { ok: true, status: res.status, json });
+        if (DEBUG) dlog('PATCH OK', { status: res.status, json });
+        return json;
+      }
 
       const txt = await res.text();
       lastErrTxt = txt;
+      setDebugProbe('__LAST_PATCH_RESULT__', { ok: false, status: res.status, text: txt });
+      dwarn('PATCH not ok', { status: res.status, text: txt.slice(0, 300) });
+
       if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(txt)) {
         throw new Error('PATCH failed ' + res.status + ': ' + txt);
       }
     } catch (e) {
       lastErrTxt = String(e?.message || e || '');
-      if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(lastErrTxt)) throw e;
+      setDebugProbe('__LAST_PATCH_RESULT__', { ok: false, status: lastStatus || 'n/a', error: lastErrTxt });
+      if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(lastErrTxt)) {
+        derr('PATCH exception', lastErrTxt);
+        throw e;
+      }
     }
   }
-  throw new Error('PATCH failed (tentativi esauriti): ' + lastErrTxt);
+
+  const errMsg = 'PATCH failed (tentativi esauriti): ' + lastErrTxt;
+  derr(errMsg);
+  throw new Error(errMsg);
 }
 
 /* ───────── Upload → Vercel Blob (CORS lato server) ───────── */
@@ -178,14 +225,17 @@ export async function uploadAttachment(recordId, docKey, file) {
   const filename = `${safe(recordId)}__${safe(docKey)}__${Date.now()}__${safe(file?.name || 'file')}`;
   const url = `${AIRTABLE.proxyBase}/upload?filename=${encodeURIComponent(filename)}&contentType=${encodeURIComponent(file?.type || 'application/octet-stream')}`;
 
+  dlog('UPLOAD →', { url, filename, type: file?.type, size: file?.size });
   const res = await fetch(url, { method: 'POST', headers: { 'Accept': 'application/json' }, body: file });
   if (!res.ok) {
     const t = await res.text().catch(() => '');
+    derr('Upload proxy error', res.status, t.slice(0,180));
     throw new Error(`Upload proxy ${res.status}: ${t.slice(0,180)}`);
   }
   const json = await res.json().catch(() => ({}));
   if (!json || !json.url) throw new Error('Upload: URL non ricevuta dal proxy');
   const attachments = Array.isArray(json.attachments) && json.attachments.length ? json.attachments : [{ url: json.url }];
+  dlog('UPLOAD OK', { url: json.url, n: attachments.length });
   return { url: json.url, attachments };
 }
 
@@ -197,6 +247,7 @@ export async function fetchColliFor(recordId) {
     if (!base) return [];
     const url = `${base}/spedizioni/${encodeURIComponent(recordId)}/colli`;
 
+    dlog('GET colli', url);
     const res = await fetch(url, FETCH_OPTS);
     if (!res.ok) { return []; }
 
@@ -215,7 +266,7 @@ export async function fetchColliFor(recordId) {
     }
     return out;
   } catch (e) {
-    console.warn('[fetchColliFor] errore', e);
+    dwarn('[fetchColliFor] errore', e);
     return [];
   }
 }
@@ -227,16 +278,19 @@ const EXTRA_SLOTS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
 export async function patchDocAttachment(recordId, docKey, attachments, rawFields = null) {
   if (!recordId) throw new Error('Missing record id');
   const mapped = docFieldFor(docKey);
+  dlog('patchDocAttachment:', { recordId, docKey, mapped, rawFieldsPresent: !!rawFields });
 
   // Se il mapping forza uno slot extra esplicito → patch diretto su quello
   if (EXTRA_SLOTS.includes(mapped)) {
     const existing = Array.isArray(rawFields?.[mapped]) ? rawFields[mapped] : [];
     const next = [...existing, ...attachments];
+    dlog('→ direct slot', { slot: mapped, existing: existing.length, add: attachments.length, total: next.length });
     return patchShipmentTracking(recordId, { fields: { [mapped]: next } });
   }
 
   // Documenti principali → campo dedicato
   if (PRIMARY_FIELDS.has(mapped)) {
+    dlog('→ primary field', { field: mapped, add: attachments.length });
     return patchShipmentTracking(recordId, { fields: { [mapped]: attachments } });
   }
 
@@ -259,6 +313,7 @@ export async function patchDocAttachment(recordId, docKey, attachments, rawField
   }
 
   const next = [...existing, ...attachments];
+  dlog('→ chosen slot', { slot: chosen, prev: existing.length, add: attachments.length, total: next.length });
   return patchShipmentTracking(recordId, { fields: { [chosen]: next } });
 }
 
@@ -271,6 +326,7 @@ function notifyBaseFromAirtableBase() {
 export async function sendTransitEmail(recordId, to){
   const base = notifyBaseFromAirtableBase() || '';
   const url  = `${base}/transit`;
+  dlog('POST notify', { url, recordId, to });
   const res = await fetch(url, {
     method:'POST',
     headers:{ 'Content-Type':'application/json','Accept':'application/json' },
@@ -278,7 +334,10 @@ export async function sendTransitEmail(recordId, to){
   });
   if (!res.ok) {
     const t = await res.text().catch(()=> '');
+    derr('Notify error', res.status, t.slice(0,180));
     throw new Error(`Notify ${res.status}: ${t.slice(0,180)}`);
   }
-  return res.json();
+  const j = await res.json().catch(()=> ({}));
+  dlog('Notify OK', j);
+  return j;
 }
