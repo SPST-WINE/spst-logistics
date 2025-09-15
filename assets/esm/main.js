@@ -5,6 +5,7 @@ import {
   patchShipmentTracking,
   uploadAttachment,
   docFieldFor,
+  patchDocAttachment,
 } from './airtable/api.js';
 import { renderList } from './ui/render.js';
 import { toast } from './utils/dom.js';
@@ -50,7 +51,7 @@ function applyFilters(){
     onSaveTracking,
     onComplete,
     onSendMail,
-    onGenerateDoc,   // ← nuovo
+    onGenerateDoc,
   });
 }
 
@@ -86,13 +87,15 @@ async function onUploadForDoc(e, rec, docKey){
 
     toast('Upload in corso…');
 
+    // 1) upload al proxy → url/attachments
     const { url, attachments } = await uploadAttachment(recId, docKey, file);
     const attArray = Array.isArray(attachments) && attachments.length ? attachments : [{ url }];
 
-    const fieldName = docFieldFor(docKey);
-    await patchShipmentTracking(recId, { [fieldName]: attArray });
+    // 2) patch sicura (mappa docKey → campo giusto, e-DAS → Allegato 3)
+    const rawFields = rec.fields || {};
+    await patchDocAttachment(recId, docKey, attArray, rawFields);
 
-    toast(`${docKey.replaceAll('_',' ')} caricato`);
+    toast(`${(docFieldFor(docKey) || docKey).replaceAll('_',' ')} caricato`);
     await loadData();
   }catch(err){
     console.error('[onUploadForDoc] errore upload', err);
@@ -112,7 +115,7 @@ async function onSaveTracking(rec, carrier, tn){
   if (!recId){ toast('Errore: id record mancante'); return; }
 
   try{
-    await patchShipmentTracking(recId, { carrier, tracking: tn }); // ← non cambiamo lo Stato qui
+    await patchShipmentTracking(recId, { carrier, tracking: tn }); // non cambiamo lo Stato qui
     // aggiorna UI locale
     rec.tracking_carrier = carrier;
     rec.tracking_number  = tn;
@@ -148,7 +151,6 @@ async function onGenerateDoc(rec, type = 'proforma'){
     }
 
     toast(`${type.toUpperCase()} generata e allegata ✓`);
-    // opzionale: refresh per vedere l'allegato nella card
     await loadData();
     return j;
   }catch(err){
@@ -198,7 +200,6 @@ async function onSendMail(rec, typedEmail, opts = {}){
       throw new Error(`HTTP ${r.status}: ${t}`);
     }
 
-    // flag locale anti-doppione nella sessione
     rec._mailSent = true;
     opts.onSuccess && opts.onSuccess();
 
@@ -221,7 +222,7 @@ async function onComplete(rec){
   try{
     await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
     toast(`${rec.id}: evasione completata`);
-    await loadData(); // con "Solo non evase" attivo scompare perché non è più "Nuova"
+    await loadData();
   }catch(err){
     console.error('Errore evasione', err);
     toast('Errore evasione');
