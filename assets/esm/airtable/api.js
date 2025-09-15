@@ -127,9 +127,6 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
 
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
 
-  // snapshot originale per debug
-  const originalPayload = JSON.parse(JSON.stringify(payload || {}));
-
   const { carrier, tracking, statoEvasa, docs, fields, ...rest } = payload || {};
   const normCarrier = normalizeCarrier(carrier || '');
 
@@ -137,26 +134,49 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   if (tracking) base.tracking = String(tracking).trim();
   if (typeof statoEvasa === 'boolean') base.statoEvasa = statoEvasa;
   if (docs && typeof docs === 'object') base.docs = docs;
-  if (fields && typeof fields === 'object') base.fields = fields;
+  if (fields && typeof fields === 'object') base.fields = { ...fields };
 
   // Se arriva un tracking e NON stiamo già settando lo Stato, forza "In transito"
   if (base.tracking && !(base.fields && ('Stato' in base.fields))) {
     base.fields = { ...(base.fields || {}), 'Stato': 'In transito' };
   }
 
-  // porta eventuali chiavi top-level sconosciute in fields (es. "e-DAS", "Allegato Fattura")
+  // Porta eventuali chiavi top-level sconosciute in fields
   const KNOWN = new Set(['carrier','tracking','statoEvasa','docs','fields']);
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
-
-  const aliasApplied = [];
   if (unknownKeys.length) {
     base.fields = base.fields || {};
     for (const k of unknownKeys) {
-      const mapped = docFieldFor(k); // usa normalizzazione robusta (e-DAS → Allegato 3)
-      base.fields[mapped] = rest[k];
-      aliasApplied.push({ from: k, to: mapped });
+      base.fields[k] = rest[k];
     }
   }
+
+  // NORMALIZZAZIONE FINALE DELLE CHIAVI PRIMA DELL’INVIO
+  // - Qualsiasi variante di e-DAS → "Allegato 3"
+  // - Alias tipici (LDV/Fattura/DLE/PL, Allegato1/2/3 → con spazio)
+  const outFields = {};
+  const edasRx = /^e[\s_\-]*d[\s_\-]*a[\s_\-]*s$/i;
+  for (const [k, v] of Object.entries(base.fields || {})) {
+    let key = String(k || '').trim();
+
+    if (edasRx.test(key)) {
+      key = 'Allegato 3';
+    } else if (key === 'LDV' || /Lettera\s*di\s*Vettura/i.test(key)) {
+      key = 'Allegato LDV';
+    } else if (/^Fattura$/i.test(key) || /Fattura\s*Commerciale/i.test(key)) {
+      key = 'Allegato Fattura';
+    } else if (/^DLE$/i.test(key) || /Dichiarazione\s*Esportazione/i.test(key)) {
+      key = 'Allegato DLE';
+    } else if (/^PL$/i.test(key) || /Packing\s*List/i.test(key)) {
+      key = 'Allegato PL';
+    } else {
+      const m = key.replace(/\s+/g,'').match(/^Allegato([123])$/i);
+      if (m) key = `Allegato ${m[1]}`;
+    }
+
+    outFields[key] = v;
+  }
+  if (Object.keys(outFields).length) base.fields = outFields;
 
   if (!('tracking' in base) && !('statoEvasa' in base) && !('docs' in base) && !('fields' in base)) {
     throw new Error('PATCH failed (client): no fields to update');
@@ -168,51 +188,29 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   attempts.push({}); // anche senza carrier
 
   let lastErrTxt = '';
-  let lastStatus = 0;
-
   for (const extra of attempts) {
     const body = { ...base, ...extra };
-    // probe per debug in console
-    setDebugProbe('__LAST_PATCH_ATTEMPT__', { url, id, originalPayload, aliasApplied, attemptBody: body });
-
     try {
-      if (DEBUG) dlog('PATCH', url, { id, aliasApplied, body });
       const res = await fetch(url, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify(body),
       });
-      lastStatus = res.status;
-
-      if (res.ok) {
-        const json = await res.json().catch(() => ({}));
-        setDebugProbe('__LAST_PATCH_RESULT__', { ok: true, status: res.status, json });
-        if (DEBUG) dlog('PATCH OK', { status: res.status, json });
-        return json;
-      }
+      if (res.ok) return await res.json();
 
       const txt = await res.text();
       lastErrTxt = txt;
-      setDebugProbe('__LAST_PATCH_RESULT__', { ok: false, status: res.status, text: txt });
-      dwarn('PATCH not ok', { status: res.status, text: txt.slice(0, 300) });
-
       if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(txt)) {
         throw new Error('PATCH failed ' + res.status + ': ' + txt);
       }
     } catch (e) {
       lastErrTxt = String(e?.message || e || '');
-      setDebugProbe('__LAST_PATCH_RESULT__', { ok: false, status: lastStatus || 'n/a', error: lastErrTxt });
-      if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(lastErrTxt)) {
-        derr('PATCH exception', lastErrTxt);
-        throw e;
-      }
+      if (!/INVALID_VALUE_FOR_COLUMN|Cannot parse value for field Corriere/i.test(lastErrTxt)) throw e;
     }
   }
-
-  const errMsg = 'PATCH failed (tentativi esauriti): ' + lastErrTxt;
-  derr(errMsg);
-  throw new Error(errMsg);
+  throw new Error('PATCH failed (tentativi esauriti): ' + lastErrTxt);
 }
+
 
 /* ───────── Upload → Vercel Blob (CORS lato server) ───────── */
 export async function uploadAttachment(recordId, docKey, file) {
