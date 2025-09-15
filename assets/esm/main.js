@@ -89,9 +89,9 @@ async function onUploadForDoc(e, rec, docKey){
     const { url, attachments } = await uploadAttachment(recId, docKey, file);
     const attArray = Array.isArray(attachments) && attachments.length ? attachments : [{ url }];
 
-    // mappa la chiave UI al campo Airtable (e-DAS → Allegato 3)
+    // Mappa la chiave UI (es. "e-DAS") al vero campo Airtable e PATCHA SEMPRE dentro fields
     const fieldName = docFieldFor(docKey);
-    await patchShipmentTracking(recId, { [fieldName]: attArray });
+    await patchShipmentTracking(recId, { fields: { [fieldName]: attArray } });
 
     toast(`${docKey.replaceAll('_',' ')} caricato`);
     await loadData();
@@ -114,11 +114,9 @@ async function onSaveTracking(rec, carrier, tn){
 
   try{
     await patchShipmentTracking(recId, { carrier, tracking: tn }); // NON cambiamo lo Stato qui
-    // aggiorna UI locale
     rec.tracking_carrier = carrier;
     rec.tracking_number  = tn;
-    enableNotify(rec.id); // abilita invio mail ora che c'è il tracking
-
+    enableNotify(rec.id);
     toast(`${rec.id}: tracking salvato`);
   }catch(err){
     console.error('Errore salvataggio tracking', err);
@@ -126,7 +124,7 @@ async function onSaveTracking(rec, carrier, tn){
   }
 }
 
-/* ───────── actions: genera PDF e allega (server wrapper) ───────── */
+/* ───────── actions: genera PDF e allega ───────── */
 async function onGenerateDoc(rec, type = 'proforma'){
   try{
     const recId = rec._recId || rec.id;
@@ -157,7 +155,7 @@ async function onGenerateDoc(rec, type = 'proforma'){
   }
 }
 
-/* ───────── notify mail (Resend) ───────── */
+/* ───────── notify mail ───────── */
 async function onSendMail(rec, typedEmail, opts = {}){
   try{
     const to = String(typedEmail || '').trim();
@@ -171,7 +169,6 @@ async function onSendMail(rec, typedEmail, opts = {}){
       toast('L’email digitata non coincide con quella del record');
       return;
     }
-    // regola: si può inviare quando è presente il tracking
     if (!(rec.tracking_carrier && rec.tracking_number)){
       toast('Salva prima corriere e numero tracking');
       return;
@@ -198,10 +195,8 @@ async function onSendMail(rec, typedEmail, opts = {}){
       throw new Error(`HTTP ${r.status}: ${t}`);
     }
 
-    // flag locale anti-doppione nella sessione
     rec._mailSent = true;
     opts.onSuccess && opts.onSuccess();
-
     toast('Mail inviata al cliente');
   }catch(err){
     console.error('[sendMail] error', err);
@@ -221,7 +216,7 @@ async function onComplete(rec){
   try{
     await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
     toast(`${rec.id}: evasione completata`);
-    await loadData(); // con "Solo non evase" attivo scompare perché non è più "Nuova"
+    await loadData();
   }catch(err){
     console.error('Errore evasione', err);
     toast('Errore evasione');
