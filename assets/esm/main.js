@@ -55,27 +55,6 @@ function applyFilters(){
   });
 }
 
-/* ───────── helpers DOM ───────── */
-function setBadge(recId, text, cls){
-  const card = document.getElementById(`card-${recId}`);
-  const badge = card?.querySelector('.badge');
-  if (badge){
-    badge.textContent = text;
-    badge.className = `badge ${cls||'green'}`;
-  }
-}
-function enableNotify(recId){
-  const card = document.getElementById(`card-${recId}`);
-  const btn = card?.querySelector('.send-mail');
-  const inp = card?.querySelector('.notify-email');
-  if (btn && inp){
-    btn.disabled = false;
-    inp.disabled = false;
-    btn.title = '';
-    inp.title = '';
-  }
-}
-
 /* ───────── actions: upload allegati ───────── */
 async function onUploadForDoc(e, rec, docKey){
   try{
@@ -115,11 +94,13 @@ async function onSaveTracking(rec, carrier, tn){
   if (!recId){ toast('Errore: id record mancante'); return; }
 
   try{
-    await patchShipmentTracking(recId, { carrier, tracking: tn }); // non cambiamo lo Stato qui
-    // aggiorna UI locale
+    await patchShipmentTracking(recId, { carrier, tracking: tn });
     rec.tracking_carrier = carrier;
     rec.tracking_number  = tn;
-    enableNotify(rec.id); // abilita invio mail ora che c'è il tracking
+    const card = document.getElementById(`card-${rec.id}`);
+    const btn = card?.querySelector('.send-mail');
+    const inp = card?.querySelector('.notify-email');
+    if (btn && inp){ btn.disabled = false; inp.disabled = false; btn.title = ''; inp.title = ''; }
 
     toast(`${rec.id}: tracking salvato`);
   }catch(err){
@@ -173,7 +154,6 @@ async function onSendMail(rec, typedEmail, opts = {}){
       toast('L’email digitata non coincide con quella del record');
       return;
     }
-    // regola: si può inviare quando è presente il tracking
     if (!(rec.tracking_carrier && rec.tracking_number)){
       toast('Salva prima corriere e numero tracking');
       return;
@@ -216,8 +196,7 @@ async function onComplete(rec){
   if (!recId){
     rec.stato = 'In transito';
     toast(`${rec.id}: evasione completata (locale)`);
-    applyFilters();
-    return;
+    return applyFilters();
   }
   try{
     await patchShipmentTracking(recId, { fields: { 'Stato': 'In transito' } });
