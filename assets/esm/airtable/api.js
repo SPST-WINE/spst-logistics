@@ -26,7 +26,18 @@ export const DOC_FIELD_MAP = {
   // caricati dal cliente (valgono come “ok” per la checklist)
   Fattura_Client: 'Fattura - Allegato Cliente',
   Packing_Client: 'Packing List - Allegato Cliente',
+
+  // e-DAS → nel tuo schema su "Allegato 3" (varianti tolleranti)
+  'e-DAS': 'Allegato 3',
+  e_DAS: 'Allegato 3',
+  eDAS: 'Allegato 3',
+  EDAS: 'Allegato 3',
 };
+
+export function docFieldFor(docKey) {
+  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
+}
+
 
 export function docFieldFor(docKey) {
   return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
@@ -231,8 +242,8 @@ export async function fetchColliFor(recordId) {
 
 /* ───────── Logica documenti “extra” → Allegato 1/2/3 ─────────
    - I principali (LDV/Fattura/DLE/PL) vanno sempre nei loro campi.
-   - Tutti gli altri riempiono il primo slot libero tra A1→A2→A3.
-   - Se sono tutti pieni, appende su “Allegato 3”.
+   - “e-DAS” viene forzato su Allegato 3.
+   - Altri documenti extra riempiono il primo slot libero tra A1→A2→A3; se pieni, append su A3.
 */
 const PRIMARY_FIELDS = new Set(['Allegato LDV', 'Allegato Fattura', 'Allegato DLE', 'Allegato PL']);
 const EXTRA_SLOTS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
@@ -241,28 +252,34 @@ export async function patchDocAttachment(recordId, docKey, attachments, rawField
   if (!recordId) throw new Error('Missing record id');
   const mapped = docFieldFor(docKey);
 
-  // Caso 1: documenti principali → campo dedicato (sovrascrivi/gestisci array)
+  // Caso 0: se il mapping forza uno slot extra esplicito → patch diretto su quello
+  if (EXTRA_SLOTS.includes(mapped)) {
+    const existing = Array.isArray(rawFields?.[mapped]) ? rawFields[mapped] : [];
+    const next = [...existing, ...attachments];
+    return patchShipmentTracking(recordId, { fields: { [mapped]: next } });
+  }
+
+  // Caso 1: documenti principali → campo dedicato
   if (PRIMARY_FIELDS.has(mapped)) {
     return patchShipmentTracking(recordId, { fields: { [mapped]: attachments } });
   }
 
-  // Caso 2: documenti “extra” → scegli A1/A2/A3 usando i campi già presenti in pagina
-  let fields = rawFields;
+  // Caso 2: documenti “extra” non mappati → scegli A1/A2/A3
   let chosen = null;
   let existing = [];
 
-  if (fields) {
+  if (rawFields) {
     for (const slot of EXTRA_SLOTS) {
-      const cur = Array.isArray(fields[slot]) ? fields[slot] : [];
+      const cur = Array.isArray(rawFields[slot]) ? rawFields[slot] : [];
       if (!cur.length) { chosen = slot; existing = []; break; }
     }
     if (!chosen) {
       // tutti pieni → append su Allegato 3
       chosen = 'Allegato 3';
-      existing = Array.isArray(fields[chosen]) ? fields[chosen] : [];
+      existing = Array.isArray(rawFields[chosen]) ? rawFields[chosen] : [];
     }
   } else {
-    // fallback ultra-conservativo se non abbiamo i campi (evita GET al proxy)
+    // fallback conservativo
     chosen = 'Allegato 1';
     existing = [];
   }
