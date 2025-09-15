@@ -30,8 +30,8 @@ export const DOC_FIELD_MAP = {
   // alias tolleranti per e-DAS → Allegato 3
   'e-DAS': 'Allegato 3',
   e_DAS: 'Allegato 3',
-  eDAS: 'Allegato 3',
-  EDAS: 'Allegato 3',
+  eDAS:  'Allegato 3',
+  EDAS:  'Allegato 3',
 };
 
 export function docFieldFor(docKey) {
@@ -60,7 +60,7 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    return records; // normalizzazione lato render.js
+    return records;
   } catch (err) {
     console.error('[fetchShipments] failed', { url, err });
     showBanner(`Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). <span class="small">Dettagli: ${String(err.message||err)}</span>`);
@@ -68,10 +68,7 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
   }
 }
 
-/* ───────────────────── Fetch singolo record ─────────────────────
-   1) prova /spedizioni/:id
-   2) fallback /spedizioni?search=:id e prendi rec.id===id
-*/
+/* ───────────────────── Fetch singolo record ───────────────────── */
 export async function fetchShipmentById(recordId) {
   if (!USE_PROXY || !recordId) return null;
   const base = AIRTABLE.proxyBase;
@@ -117,7 +114,6 @@ export async function fetchShipmentById(recordId) {
    - { carrier, tracking }
    - { statoEvasa: true }
    - { fields: { "Allegato Fattura": [{url}] } }
-   - { "Allegato Fattura": [{url}] }  ← le chiavi “sconosciute” vanno in fields
 */
 export async function patchShipmentTracking(recOrId, payload = {}) {
   const id = (typeof recOrId === 'string') ? recOrId :
@@ -140,13 +136,13 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
     base.fields = { ...(base.fields || {}), 'Stato': 'In transito' };
   }
 
-  // porta eventuali chiavi top-level sconosciute in fields (es. "e-DAS", "Allegato Fattura")
+  // porta eventuali chiavi top-level sconosciute in fields (es. "e-DAS")
   const KNOWN = new Set(['carrier','tracking','statoEvasa','docs','fields']);
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
   if (unknownKeys.length) {
     base.fields = base.fields || {};
     for (const k of unknownKeys) {
-      const mapped = docFieldFor(k); // usa normalizzazione robusta (e-DAS → Allegato 3)
+      const mapped = docFieldFor(k); // e-DAS → Allegato 3, ecc.
       base.fields[mapped] = rest[k];
     }
   }
@@ -237,11 +233,7 @@ export async function fetchColliFor(recordId) {
   }
 }
 
-/* ───────── Logica documenti extra → Allegato 1/2/3 ─────────
-   - I principali (LDV/Fattura/DLE/PL) vanno sempre nei loro campi.
-   - “e-DAS” viene forzato su Allegato 3 (via mapping).
-   - Altri documenti extra riempiono il primo slot libero tra A1→A2→A3; se pieni, append su A3.
-*/
+/* ───────── Logica documenti extra → Allegato 1/2/3 ───────── */
 const PRIMARY_FIELDS = new Set(['Allegato LDV', 'Allegato Fattura', 'Allegato DLE', 'Allegato PL']);
 const EXTRA_SLOTS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
 
@@ -271,12 +263,10 @@ export async function patchDocAttachment(recordId, docKey, attachments, rawField
       if (!cur.length) { chosen = slot; existing = []; break; }
     }
     if (!chosen) {
-      // tutti pieni → append su Allegato 3
       chosen = 'Allegato 3';
       existing = Array.isArray(rawFields[chosen]) ? rawFields[chosen] : [];
     }
   } else {
-    // fallback conservativo
     chosen = 'Allegato 1';
     existing = [];
   }
