@@ -14,6 +14,7 @@ const areaOf = c => isEU(c) ? 'UE' : 'ExtraUE';
 const RULES = [
   { when: {country:'USA', tipo:'Campionatura'}, require: ['Lettera_di_Vettura','Fattura_Proforma','FDA_Prior_Notice','Dichiarazione_Esportazione'], note: 'Etichette conformi FDA. COLA Waiver talvolta richiesto per campioni.' },
   { when: {country:'USA', tipo:'B2B'},         require: ['Lettera_di_Vettura','Fattura_Commerciale','FDA_Prior_Notice','Dichiarazione_Esportazione'] },
+  { when: {country:'USA', tipo:'B2C'},         require: ['Lettera_di_Vettura','Fattura_Proforma','Dichiarazione_Esportazione'] },
   { when: {country:'Canada', tipo:'Campionatura'}, require: ['Lettera_di_Vettura','Fattura_Proforma','Dichiarazione_Esportazione'] },
   { when: {country:'Canada', tipo:'B2B'},          require: ['Lettera_di_Vettura','Fattura_Commerciale','Dichiarazione_Esportazione'] },
   { when: {country:'UK', tipo:'Campionatura'},     require: ['Lettera_di_Vettura','Fattura_Proforma','Dichiarazione_Esportazione'] },
@@ -31,6 +32,7 @@ const RULES = [
   { when: {country:'Corea del Sud', tipo:'Campionatura'}, require: ['Lettera_di_Vettura','Fattura_Proforma','Certificato_Sanitario','Dichiarazione_Esportazione'] },
   { when: {country:'Corea del Sud', tipo:'B2B'},          require: ['Lettera_di_Vettura','Fattura_Commerciale','Certificato_Sanitario','Certificato_di_Origine','Dichiarazione_Esportazione'] },
   { when: {area:'UE', tipo:'B2B'},   require: ['Lettera_di_Vettura','Fattura_Commerciale','e-DAS'] },
+  { when: {area:'UE', tipo:'B2C'},   require: ['Lettera_di_Vettura','Fattura_Proforma'] },
   { when: {area:'UE', tipo:'Campionatura'}, require: ['Lettera_di_Vettura'] },
   { when: {area:'ExtraUE', tipo:'B2B'},   require: ['Lettera_di_Vettura','Fattura_Commerciale','Dichiarazione_Esportazione'] },
   { when: {area:'ExtraUE', tipo:'Campionatura'}, require: ['Lettera_di_Vettura','Fattura_Proforma','Dichiarazione_Esportazione'] },
