@@ -1,16 +1,17 @@
 // assets/esm/main.js
-import { DEBUG, AIRTABLE } from './config.js';
+import { DEBUG, AIRTABLE } from './config.js?v=3';
 import {
   fetchShipments,
   patchShipmentTracking,
   uploadAttachment,
   docFieldFor,
   patchDocAttachment,
-} from './airtable/api.js';
-import { renderList } from './ui/render.js';
-import { toast } from './utils/dom.js';
-import { dateTs } from './utils/misc.js';
-import './back-office-tabs.js';
+} from './airtable/api.js?v=3';
+import { renderList } from './ui/render.js?v=3';
+import { toast } from './utils/dom.js?v=3';
+import { dateTs } from './utils/misc.js?v=3';
+import './back-office-tabs.js?v=3';
+
 
 const log  = (...a)=>{ if (DEBUG) console.log('[BO]', ...a); };
 const warn = (...a)=>{ if (DEBUG) console.warn('[BO]', ...a); };
