@@ -3,39 +3,33 @@ import { AIRTABLE, USE_PROXY, FETCH_OPTS } from '../config.js';
 import { showBanner } from '../utils/dom.js';
 import { normalizeCarrier } from '../utils/misc.js';
 
-/* ───────── Mappa doc UI → nomi campi Airtable ─────────
-   Campi attachment in “SpedizioniWebApp”:
+/* ───────── Normalizzazione robusta chiavi documento ───────── */
+function normalizeDocKey(raw) {
+  const s = String(raw || '')
+    .normalize('NFKD')
+    // unifica qualsiasi tipo di dash/underscore/spazio
+    .replace(/[\u2010-\u2015\-_\s]+/g, '')
+    // rimuovi simboli residui
+    .replace(/[^a-zA-Z0-9]/g, '')
+    .toLowerCase();
+  return s; // es.: "e-DAS" → "edas", "Fattura_Commerciale" → "fatturacommerciale"
+}
 
-   - Fattura - Allegato Cliente
-   - Packing List - Allegato Cliente
-   - Allegato LDV
-   - Allegato Fattura
-   - Allegato DLE
-   - Allegato PL
-   - Allegato 1
-   - Allegato 2
-   - Allegato 3
-*/
-export const DOC_FIELD_MAP = {
-  // principali (sempre su campo dedicato)
-  Lettera_di_Vettura: 'Allegato LDV',
-  Fattura_Commerciale: 'Allegato Fattura',
-  Dichiarazione_Esportazione: 'Allegato DLE',
-  Packing_List: 'Allegato PL',
-
-  // caricati dal cliente (valgono come “ok” per la checklist)
-  Fattura_Client: 'Fattura - Allegato Cliente',
-  Packing_Client: 'Packing List - Allegato Cliente',
-
-  // e-DAS → nel tuo schema su "Allegato 3" (varianti tolleranti)
-  'e-DAS': 'Allegato 3',
-  e_DAS: 'Allegato 3',
-  eDAS: 'Allegato 3',
-  EDAS: 'Allegato 3',
+/* Mappa normalizzata → campo Airtable */
+const DOC_FIELD_MAP_NORM = {
+  letteradivettura: 'Allegato LDV',
+  fatturacommerciale: 'Allegato Fattura',
+  dichiarazioneesportazione: 'Allegato DLE',
+  packinglist: 'Allegato PL',
+  fatturaclient: 'Fattura - Allegato Cliente',
+  packingclient: 'Packing List - Allegato Cliente',
+  // e-DAS (tutte le varianti) → Allegato 3
+  edas: 'Allegato 3',
 };
 
 export function docFieldFor(docKey) {
-  return DOC_FIELD_MAP[docKey] || String(docKey || '').replaceAll('_', ' ');
+  const norm = normalizeDocKey(docKey);
+  return DOC_FIELD_MAP_NORM[norm] || String(docKey || '').replaceAll('_', ' ');
 }
 
 /* ───────── Query & Fetch ───────── */
@@ -60,7 +54,7 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
     const json = await res.json();
     const records = Array.isArray(json.records) ? json.records : [];
     showBanner('');
-    return records; // normalizzazione lato render.js
+    return records;
   } catch (err) {
     console.error('[fetchShipments] failed', { url, err });
     showBanner(`Impossibile raggiungere il proxy API (<code>${AIRTABLE.proxyBase}</code>). <span class="small">Dettagli: ${String(err.message||err)}</span>`);
@@ -68,15 +62,11 @@ export async function fetchShipments({ q = '', onlyOpen = false } = {}) {
   }
 }
 
-/* ───────── Fetch singolo record (robusto) ─────────
-   1) prova /spedizioni/:id
-   2) fallback /spedizioni?search=:id e prendi rec.id===id
-*/
+/* ───────── Fetch singolo record (robusto) ───────── */
 export async function fetchShipmentById(recordId) {
   if (!USE_PROXY || !recordId) return null;
   const base = AIRTABLE.proxyBase;
 
-  // Tentativo 1: diretto
   try {
     const res = await fetch(`${base}/spedizioni/${encodeURIComponent(recordId)}`, FETCH_OPTS);
     if (res.ok) {
@@ -94,7 +84,6 @@ export async function fetchShipmentById(recordId) {
     console.warn('[fetchShipmentById] direct threw', e);
   }
 
-  // Tentativo 2: search
   try {
     const url = `${base}/spedizioni?${new URLSearchParams({ search: recordId, pageSize: '5' })}`;
     const res = await fetch(url, FETCH_OPTS);
@@ -112,13 +101,7 @@ export async function fetchShipmentById(recordId) {
   }
 }
 
-/* ───────── PATCH “tollerante” ─────────
-   Accetta:
-   - { carrier, tracking }
-   - { statoEvasa: true }
-   - { fields: { "Allegato Fattura": [{url}] } }
-   - { "Allegato Fattura": [{url}] }  ← le chiavi “sconosciute” vanno in fields
-*/
+/* ───────── PATCH “tollerante” ───────── */
 export async function patchShipmentTracking(recOrId, payload = {}) {
   const id = (typeof recOrId === 'string') ? recOrId :
              (recOrId ? (recOrId._airId || recOrId._recId || recOrId.recordId || recOrId.id) : '');
@@ -127,7 +110,7 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   const url = `${AIRTABLE.proxyBase}/spedizioni/${encodeURIComponent(id)}`;
 
   const { carrier, tracking, statoEvasa, docs, fields, ...rest } = payload || {};
-  const norm = normalizeCarrier(carrier || '');
+  const normCarrier = normalizeCarrier(carrier || '');
 
   const base = {};
   if (tracking) base.tracking = String(tracking).trim();
@@ -135,25 +118,18 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   if (docs && typeof docs === 'object') base.docs = docs;
   if (fields && typeof fields === 'object') base.fields = fields;
 
-  // 🔒 Se arriva un tracking e NON stiamo già settando lo Stato, forza "In transito"
+  // Se arriva un tracking e NON stiamo già settando lo Stato, forza "In transito"
   if (base.tracking && !(base.fields && ('Stato' in base.fields))) {
     base.fields = { ...(base.fields || {}), 'Stato': 'In transito' };
   }
 
-  // porta eventuali chiavi top-level sconosciute in fields (es. "Allegato Fattura")
+  // porta eventuali chiavi top-level sconosciute in fields (es. "e-DAS", "Allegato Fattura")
   const KNOWN = new Set(['carrier','tracking','statoEvasa','docs','fields']);
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
   if (unknownKeys.length) {
     base.fields = base.fields || {};
-    // alias tolleranti (e-DAS → Allegato 3)
-    const ALIAS = {
-      'e-DAS': 'Allegato 3',
-      'e_DAS': 'Allegato 3',
-      'eDAS': 'Allegato 3',
-      'EDAS':  'Allegato 3',
-    };
     for (const k of unknownKeys) {
-      const mapped = ALIAS[k] || k;
+      const mapped = docFieldFor(k); // usa normalizzazione robusta
       base.fields[mapped] = rest[k];
     }
   }
@@ -163,8 +139,8 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   }
 
   const attempts = [];
-  if (norm) attempts.push({ carrier: norm });
-  if (norm) attempts.push({ carrier: { name: norm } });
+  if (normCarrier) attempts.push({ carrier: normCarrier });
+  if (normCarrier) attempts.push({ carrier: { name: normCarrier } });
   attempts.push({}); // anche senza carrier
 
   let lastErrTxt = '';
@@ -190,7 +166,6 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   }
   throw new Error('PATCH failed (tentativi esauriti): ' + lastErrTxt);
 }
-
 
 /* ───────── Upload → Vercel Blob (CORS lato server) ───────── */
 export async function uploadAttachment(recordId, docKey, file) {
@@ -245,11 +220,7 @@ export async function fetchColliFor(recordId) {
   }
 }
 
-/* ───────── Logica documenti “extra” → Allegato 1/2/3 ─────────
-   - I principali (LDV/Fattura/DLE/PL) vanno sempre nei loro campi.
-   - “e-DAS” viene forzato su Allegato 3.
-   - Altri documenti extra riempiono il primo slot libero tra A1→A2→A3; se pieni, append su A3.
-*/
+/* ───────── Logica documenti “extra” → Allegato 1/2/3 ───────── */
 const PRIMARY_FIELDS = new Set(['Allegato LDV', 'Allegato Fattura', 'Allegato DLE', 'Allegato PL']);
 const EXTRA_SLOTS = ['Allegato 1', 'Allegato 2', 'Allegato 3'];
 
@@ -257,19 +228,19 @@ export async function patchDocAttachment(recordId, docKey, attachments, rawField
   if (!recordId) throw new Error('Missing record id');
   const mapped = docFieldFor(docKey);
 
-  // Caso 0: se il mapping forza uno slot extra esplicito → patch diretto su quello
+  // Se il mapping forza uno slot extra esplicito → patch diretto su quello
   if (EXTRA_SLOTS.includes(mapped)) {
     const existing = Array.isArray(rawFields?.[mapped]) ? rawFields[mapped] : [];
     const next = [...existing, ...attachments];
     return patchShipmentTracking(recordId, { fields: { [mapped]: next } });
   }
 
-  // Caso 1: documenti principali → campo dedicato
+  // Documenti principali → campo dedicato
   if (PRIMARY_FIELDS.has(mapped)) {
     return patchShipmentTracking(recordId, { fields: { [mapped]: attachments } });
   }
 
-  // Caso 2: documenti “extra” non mappati → scegli A1/A2/A3
+  // Documenti “extra” non mappati → scegli A1/A2/A3
   let chosen = null;
   let existing = [];
 
@@ -279,12 +250,10 @@ export async function patchDocAttachment(recordId, docKey, attachments, rawField
       if (!cur.length) { chosen = slot; existing = []; break; }
     }
     if (!chosen) {
-      // tutti pieni → append su Allegato 3
-      chosen = 'Allegato 3';
+      chosen = 'Allegato 3'; // fallback append
       existing = Array.isArray(rawFields[chosen]) ? rawFields[chosen] : [];
     }
   } else {
-    // fallback conservativo
     chosen = 'Allegato 1';
     existing = [];
   }
@@ -293,8 +262,7 @@ export async function patchDocAttachment(recordId, docKey, attachments, rawField
   return patchShipmentTracking(recordId, { fields: { [chosen]: next } });
 }
 
-// ...resto del file...
-
+/* ───────── notify ───────── */
 function notifyBaseFromAirtableBase() {
   const b = (typeof AIRTABLE?.proxyBase === 'string') ? AIRTABLE.proxyBase : '';
   return b.replace('/api/airtable', '/api/notify');
