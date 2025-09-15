@@ -35,12 +35,7 @@ export const DOC_FIELD_MAP = {
 };
 
 export function docFieldFor(docKey) {
-  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
-}
-
-
-export function docFieldFor(docKey) {
-  return DOC_FIELD_MAP[docKey] || docKey.replaceAll('_', ' ');
+  return DOC_FIELD_MAP[docKey] || String(docKey || '').replaceAll('_', ' ');
 }
 
 /* ───────── Query & Fetch ───────── */
@@ -150,17 +145,17 @@ export async function patchShipmentTracking(recOrId, payload = {}) {
   const unknownKeys = Object.keys(rest || {}).filter(k => !KNOWN.has(k));
   if (unknownKeys.length) {
     base.fields = base.fields || {};
-   // alias tolleranti (e-DAS → Allegato 3)
-+   const ALIAS = {
-+     'e-DAS': 'Allegato 3',
-+     'e_DAS': 'Allegato 3',
-+     'eDAS': 'Allegato 3',
-+     'EDAS':  'Allegato 3',
-+   };
-+   for (const k of unknownKeys) {
-+     const mapped = ALIAS[k] || k;
-+     base.fields[mapped] = rest[k];
-+   }
+    // alias tolleranti (e-DAS → Allegato 3)
+    const ALIAS = {
+      'e-DAS': 'Allegato 3',
+      'e_DAS': 'Allegato 3',
+      'eDAS': 'Allegato 3',
+      'EDAS':  'Allegato 3',
+    };
+    for (const k of unknownKeys) {
+      const mapped = ALIAS[k] || k;
+      base.fields[mapped] = rest[k];
+    }
   }
 
   if (!('tracking' in base) && !('statoEvasa' in base) && !('docs' in base) && !('fields' in base)) {
@@ -319,5 +314,3 @@ export async function sendTransitEmail(recordId, to){
   }
   return res.json();
 }
-
-
