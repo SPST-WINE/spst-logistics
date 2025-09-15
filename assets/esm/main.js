@@ -1,4 +1,9 @@
 // assets/esm/main.js
+
+// Top of file
+const __BUILD__ = '2025-09-15T15:xx v3'; // cambia testo a piacere
+console.log('[BO] Loaded', import.meta.url, __BUILD__);
+
 import { DEBUG, AIRTABLE } from './config.js?v=3';
 import {
   fetchShipments,
