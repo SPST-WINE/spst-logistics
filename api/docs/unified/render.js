@@ -13,7 +13,7 @@ export const config = { runtime: 'nodejs' };
  *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
  *
  * Env:
- *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1
+ *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
  * Tables:
  *  SpedizioniWebApp (shipments), SPED_PL (lines)
  */
@@ -25,6 +25,11 @@ const AIRTABLE_PAT      = process.env.AIRTABLE_PAT;
 const AIRTABLE_BASE_ID  = process.env.AIRTABLE_BASE_ID;
 const DOCS_SIGN_SECRET  = process.env.DOCS_SIGN_SECRET || '';
 const BYPASS_SIGNATURE  = process.env.BYPASS_SIGNATURE === '1';
+const DEBUG_DOCS        = process.env.DEBUG_DOCS === '1';
+
+// ---------- LOG HELPERS ----------
+const dlog = (...args) => { if (DEBUG_DOCS) console.log('[docs]', ...args); };
+const derr = (...args) => { console.error('[docs:ERR]', ...args); };
 
 const TB_SPEDIZIONI = 'SpedizioniWebApp';
 const TB_PL         = 'SPED_PL';
@@ -39,6 +44,7 @@ const tableURL  = (t) => `${API_ROOT}/${encodeURIComponent(t)}`;
 const recordURL = (t, id) => `${tableURL(t)}/${encodeURIComponent(id)}`;
 
 async function airFetch(url, init = {}) {
+  const start = Date.now();
   const res = await fetch(url, {
     ...init,
     headers: {
@@ -47,8 +53,14 @@ async function airFetch(url, init = {}) {
       ...(init.headers || {}),
     },
   });
+  const ms = Date.now() - start;
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  const data = text ? safeJSON(text) : null;
+
+  if (DEBUG_DOCS) {
+    dlog('HTTP', init.method || 'GET', res.status, `${ms}ms`, url);
+    if (!res.ok) dlog('HTTP body (error)', truncate(text, 1000));
+  }
   if (!res.ok) {
     const err = new Error(`Airtable ${res.status}: ${text}`);
     err.status = res.status;
@@ -57,47 +69,68 @@ async function airFetch(url, init = {}) {
   return data;
 }
 
+function safeJSON(t) { try { return JSON.parse(t); } catch { return null; } }
+function truncate(s, n=500){ s = String(s||''); return s.length>n ? s.slice(0,n)+'…' : s; }
+
 async function airFetchAll(formula, tableName) {
   const rows = [];
   let next = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100`;
+  let pages = 0;
   while (next) {
     const data = await airFetch(next);
-    rows.push(...(data.records || []));
-    next = data.offset
+    pages++;
+    rows.push(...(data?.records || []));
+    next = data?.offset
       ? `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100&offset=${data.offset}`
       : null;
   }
+  dlog('airFetchAll', tableName, 'formula:', formula, 'pages:', pages, 'rows:', rows.length);
   return rows;
 }
 
-// ---------- Shipment loader ----------
+// ---------- Shipment loader (verbose) ----------
 async function getShipmentBySid(sid) {
+  dlog('getShipmentBySid()', 'sid=', sid);
   if (/^rec[0-9A-Za-z]{14}/.test(String(sid))) {
-    return airFetch(recordURL(TB_SPEDIZIONI, sid));
+    dlog(' → treat as recId');
+    try {
+      const rec = await airFetch(recordURL(TB_SPEDIZIONI, sid));
+      dlog(' → found by recId:', !!rec, 'id:', rec?.id);
+      return rec;
+    } catch (e) {
+      derr('airFetch(record) failed', e?.status || '', e?.message || e);
+      return null;
+    }
   }
-  // prova su campo "ID Spedizione" (alias principali)
+
   const candidates = [
     'ID Spedizione','Id Spedizione','ID spedizione','id spedizione',
     'ID\u00A0Spedizione','IDSpedizione','Spedizione - ID','Shipment ID','ID'
   ];
   const safe = String(sid).replace(/'/g, "\\'");
   for (const field of candidates) {
+    const formula = `{${field}}='${safe}'`;
+    dlog('find shipment by field:', field, 'formula:', formula);
     try {
-      const rows = await airFetch(`${tableURL(TB_SPEDIZIONI)}?filterByFormula=${encodeURIComponent(`{${field}}='${safe}'`)}&maxRecords=1`);
-      if (rows.records?.length) return rows.records[0];
+      const data = await airFetch(`${tableURL(TB_SPEDIZIONI)}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`);
+      const rec = data?.records?.[0];
+      if (rec) { dlog(' → match on', field, 'rec:', rec.id); return rec; }
     } catch (err) {
-      if (err?.status !== 422) throw err;
+      if (err?.status === 422) { dlog(' → field not found (422), skip:', field); continue; }
+      derr('find shipment failed', field, err?.status || '', err?.message || err);
+      throw err;
     }
   }
+  dlog(' → NO shipment match for', sid);
   return null;
 }
 
-// ---------- PL loader (forza i campi richiesti dall'utente) ----------
+// ---------- PL loader (force fields + full logs) ----------
 /**
- * Regole di join:
- *  1) {Spedizione} = recId (se è un linked record)
- *  2) {ID Spedizione} = business SID (se è un campo testuale)
- *  3) {Spedizione} = business SID (se è stato salvato testuale)
+ * Join order:
+ *  1) {Spedizione} = recId (linked record)
+ *  2) {ID Spedizione} = business SID (text)
+ *  3) {Spedizione} = business SID (text)
  */
 async function getPLRows({ ship, sidRaw }) {
   const recId = ship.id;
@@ -114,42 +147,48 @@ async function getPLRows({ ship, sidRaw }) {
 
   for (const f of formulas) {
     try {
+      dlog('PL query formula:', f);
       const rows = await airFetchAll(f, TB_PL);
-      if (rows.length) return rows;
+      if (rows.length) {
+        dlog('PL rows found:', rows.length, 'using formula:', f);
+        return rows;
+      } else {
+        dlog('PL zero rows with formula:', f);
+      }
     } catch (err) {
-      // 422 = campo inesistente → prova formula successiva
-      if (err?.status !== 422) throw err;
+      if (err?.status === 422) { dlog('PL formula skipped (422 unknown field):', f); continue; }
+      derr('PL fetch error', err?.status || '', err?.message || err);
+      throw err;
     }
   }
+  dlog('PL: no rows matched for', { recId, businessSid, sidRaw });
   return [];
 }
 
-// ---------- Signature ----------
+// ---------- Signature (with logs) ----------
 function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
-  if (BYPASS_SIGNATURE) return true;
-  if (!sid || !rawType || !exp || !sig) return false;
+  if (BYPASS_SIGNATURE) { dlog('SIGNATURE BYPASSED'); return true; }
+  if (!sid || !rawType || !exp || !sig) { dlog('SIG missing pieces', { sid:!!sid, rawType, exp, sig:!!sig }); return false; }
   const now = Math.floor(Date.now() / 1000);
-  if (Number(exp) < now) return false;
+  if (Number(exp) < now) { dlog('SIG expired', { exp, now }); return false; }
 
-  const make = (t) => {
-    const h = crypto.createHmac('sha256', DOCS_SIGN_SECRET);
-    h.update(`${sid}.${t}.${exp}`);
-    return h.digest('hex');
-  };
-  const makeCanonical = () => {
-    const q = `sid=${encodeURIComponent(String(sid))}&type=${encodeURIComponent(String(rawType))}&exp=${encodeURIComponent(String(exp))}`;
-    const h = crypto.createHmac('sha256', DOCS_SIGN_SECRET);
-    h.update(q);
-    return h.digest('hex');
-  };
+  const h1 = crypto.createHmac('sha256', DOCS_SIGN_SECRET).update(`${sid}.${rawType}.${exp}`).digest('hex');
+  const h2 = crypto.createHmac('sha256', DOCS_SIGN_SECRET).update(`${sid}.${normType}.${exp}`).digest('hex');
+  const q  = `sid=${encodeURIComponent(String(sid))}&type=${encodeURIComponent(String(rawType))}&exp=${encodeURIComponent(String(exp))}`;
+  const h3 = crypto.createHmac('sha256', DOCS_SIGN_SECRET).update(q).digest('hex');
 
-  try { if (crypto.timingSafeEqual(Buffer.from(make(rawType)), Buffer.from(String(sig)))) return true; } catch {}
-  try { if (crypto.timingSafeEqual(Buffer.from(make(normType)), Buffer.from(String(sig)))) return true; } catch {}
-  try { if (crypto.timingSafeEqual(Buffer.from(makeCanonical()), Buffer.from(String(sig)))) return true; } catch {}
-  return false;
+  const ok =
+    safeEqual(h1, String(sig)) ||
+    safeEqual(h2, String(sig)) ||
+    safeEqual(h3, String(sig));
+
+  dlog('SIG verify', { rawType, normType, match: ok ? 'OK' : 'FAIL' });
+  return ok;
 }
+function safeEqual(a,b){ try{ return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)); }catch{ return false; } }
 
 function bad(res, code, msg, details) {
+  dlog('RESP', code, msg, details || '');
   res.status(code).json({ ok: false, error: msg, details });
 }
 
@@ -473,6 +512,7 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 
 // ---------- Handler ----------
 export default async function handler(req, res) {
+  const t0 = Date.now();
   try {
     const q = req.query || {};
     const rawType = String(q.type || 'proforma').toLowerCase();
@@ -481,8 +521,9 @@ export default async function handler(req, res) {
     const sig     = q.sig;
     const exp     = q.exp;
 
-    if (!sidRaw) return bad(res, 400, 'Bad request', 'Missing sid/ship');
+    dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp });
 
+    if (!sidRaw) return bad(res, 400, 'Bad request', 'Missing sid/ship');
     if (!verifySigFlexible({ sid: sidRaw, rawType, normType: type, exp, sig })) {
       return bad(res, 401, 'Unauthorized', 'Invalid signature');
     }
@@ -490,38 +531,42 @@ export default async function handler(req, res) {
     // Load shipment
     const ship = await getShipmentBySid(sidRaw);
     if (!ship) return bad(res, 404, 'Not found', `No shipment found for ${sidRaw}`);
+    dlog('SHIPMENT OK', { recId: ship.id, fieldsKeys: Object.keys(ship.fields || {}).slice(0,40) });
 
     let html;
 
     if (type === 'dle') {
-      // DLE does not need PL rows
       html = renderDLEHTML({ ship });
+      dlog('RENDER DLE OK');
     } else {
-      // Invoices: load PL (join robusto su recId o business SID)
+      // Invoices: load PL
       const pl = await getPLRows({ ship, sidRaw });
+      dlog('PL SUMMARY', { count: pl.length });
 
-      // COSTRUZIONE RIGHE come richiesto dall'utente:
-      //  Description  <- Etichetta (single line text)
-      //  Qty          <- Bottiglie (number)
-      //  Price        <- Prezzo (number)
-      //  Total        <- somma di tutti i "Prezzo" riga
-      const items = pl.length ? pl.map(r => {
+      // Build items (hard-mapped)
+      const items = pl.length ? pl.map((r, i) => {
         const f = r.fields || {};
         const title = String(f['Etichetta'] ?? '').trim();
         const qty   = Number(f['Bottiglie'] ?? 0) || 0;
         const price = Number(f['Prezzo'] ?? 0) || 0;
+        dlog('PL ROW', i+1, { title, qty, price, id: r.id });
         return { title: title || '—', qty, price, meta: '' };
       }) : [{ title:'—', qty:0, price:0, meta:'' }];
 
       const total = items.reduce((s, r) => s + (Number.isFinite(r.price) ? r.price : 0), 0);
+      dlog('INVOICE ITEMS', { count: items.length, total });
+
       html = renderInvoiceHTML({ type, ship, lines: items, total });
+      dlog('RENDER INVOICE OK');
     }
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.status(200).send(html);
+    dlog('DONE', { ms: Date.now() - t0 });
   } catch (err) {
-    console.error('[render] error', err);
-    return bad(res, 500, 'Render error', String(err?.message || err));
+    derr('render error', err?.status || '', err?.message || err);
+    try { return bad(res, 500, 'Render error', String(err?.message || err)); }
+    catch { /* noop */ }
   }
 }
