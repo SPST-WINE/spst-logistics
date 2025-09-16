@@ -1,5 +1,59 @@
 /// spst-logistics/public/assets/esm/render.js
 
+/* ===== Env & assets (URL assoluti) ===== */
+const DEFAULT_ORIGIN = 'https://spst-logistics.vercel.app';
+function __detectOrigin() {
+  try {
+    // prova a dedurre l'origine dall'URL dello script caricato
+    const fromCurrent = document.currentScript?.src;
+    if (fromCurrent) return new URL(fromCurrent).origin;
+    const s = Array.from(document.scripts).map(x => x.src).find(u => u && u.includes('/assets/esm/render'));
+    if (s) return new URL(s).origin;
+  } catch {}
+  return DEFAULT_ORIGIN;
+}
+export const BO_ORIGIN = __detectOrigin();
+export const BO_ASSETS = `${BO_ORIGIN}/assets/esm`;
+const CSS_URLS = [`${BO_ASSETS}/base.css?v=1`, `${BO_ASSETS}/quotes-admin.css?v=1`];
+const STANDALONE_TPL_URL = `${BO_ASSETS}/back-office-standalone.html?v=4`;
+
+/* ===== Iniezione CSS (una sola volta) ===== */
+export function ensureBoAssets() {
+  if (window.__BO_CSS_INJECTED__) return;
+  window.__BO_CSS_INJECTED__ = true;
+  CSS_URLS.forEach(href => {
+    if ([...document.querySelectorAll('link[rel="stylesheet"]')].some(l => l.href === href)) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+  });
+}
+
+/* ===== Mount opzionale del template standalone (nessun 404 automatico) ===== */
+export async function mountStandalone(containerId = 'view-spedizioni') {
+  ensureBoAssets();
+  let host = document.getElementById(containerId);
+  if (!host) {
+    host = document.createElement('div');
+    host.id = containerId;
+    document.body.appendChild(host);
+  }
+  try {
+    const res = await fetch(STANDALONE_TPL_URL, { cache: 'no-store' });
+    if (!res.ok) {
+      console.warn('[BO] template non trovato', res.status);
+      return host;
+    }
+    const html = await res.text();
+    host.innerHTML = html;
+  } catch (e) {
+    console.warn('[BO] errore fetch template', e);
+  }
+  return host;
+}
+
+/* ===== IMPORTS originali ===== */
 import { TEMPLATES, CARRIERS } from '../config.js';
 import { toKg, trackingUrl } from '../utils/misc.js';
 import { totalPesoKg } from '../utils/weights.js';
@@ -7,7 +61,7 @@ import { labelInfoFor } from '../rules/labels.js';
 import { computeRequiredDocs } from '../rules/docs.js';
 import { fetchColliFor } from '../airtable/api.js';
 
-/* Helpers (normKey, pickLoose, toNum, mapDocs, colli fallback, badgeFor) */
+/* ===== Helpers (normKey, pickLoose, toNum, mapDocs, colli fallback, badgeFor) ===== */
 function normKey(s){return String(s||'').replace(/[–—]/g,'-').replace(/\s+/g,' ').trim().toLowerCase();}
 function pickLoose(fields,...names){if(!fields)return;const m=new Map(Object.keys(fields).map(k=>[normKey(k),k]));for(const n of names){const real=m.get(normKey(n));if(real!=null){const v=fields[real];if(v!==''&&v!=null)return v;}}for(const n of names){if(n in fields&&fields[n]!==''&&fields[n]!=null)return fields[n];}return;}
 function toNum(v){if(v==null||v==='')return NaN;const n=Number(String(v).replace(',', '.').replace(/[^0-9.]+/g,''));return isFinite(n)?n:NaN;}
@@ -75,7 +129,7 @@ function badgeFor(stato){
   return'yellow';
 }
 
-/* Normalizzazione record */
+/* ===== Normalizzazione record ===== */
 export function normalizeShipmentRecord(rec){
   const f = rec.fields || {};
   const idSped = pickLoose(f,'ID Spedizione') || rec.id;
@@ -189,7 +243,7 @@ export function normalizeShipmentRecord(rec){
   };
 }
 
-/* UI blocks */
+/* ===== UI blocks ===== */
 function renderLabelPanel(rec){
   const info = labelInfoFor(rec);
   return `
@@ -254,11 +308,20 @@ function renderPrintGrid(rec){
   return html;
 }
 
-/* Render list */
+/* ===== Render list ===== */
+
+/**
+ * Garantisce che esista #list e inietta i CSS.
+ * Non fa fetch del template: quello è opzionale (mountStandalone()).
+ */
 function ensureListContainer() {
+  ensureBoAssets(); // CSS assoluti verso spst-logistics
   let el = document.getElementById('list');
   if (el) return el;
+
   const host = document.getElementById('view-spedizioni') || document.body;
+  // Se non è la pagina giusta, non faccio nulla "in anticipo":
+  // creo il contenitore solo quando effettivamente chiami renderList.
   el = document.createElement('div'); el.id = 'list'; host.appendChild(el);
   console.warn('[BO] #list non trovato: creato dinamicamente dentro #view-spedizioni');
   return el;
@@ -361,7 +424,6 @@ export function renderList(
           const openLink = ok ? `<a href="${rec.docs[name]}" target="_blank">apri</a>` : '';
           const inputId = `${rec.id}-${name}-input`;
 
-          // Bottoni di generazione solo per Proforma/Commerciale
           const genBtn = (()=>{
             if (name === 'Fattura_Proforma') {
               return `<button class="mini-btn generate-doc" data-type="proforma" ${ok?'disabled':''}>Genera Proforma</button>`;
@@ -463,7 +525,7 @@ export function renderList(
       saveBtn.addEventListener('click', ()=>onSaveTracking(rec, carrierSel?.value || '', tnInput?.value || ''));
     }
 
-    // Invia mail: input SEMPRE abilitato; bottone abilitato solo se ho tracking
+    // Invia mail
     const sendBtn   = card.querySelector('.send-mail');
     const emailInput= card.querySelector('.notify-email');
     const sentFlag  = card.querySelector('.notify-sent');
@@ -479,7 +541,7 @@ export function renderList(
       sentFlag?.classList.remove('hidden');
     }
 
-    sendBtn.addEventListener('click', async ()=>{
+    sendBtn?.addEventListener('click', async ()=>{
       const to = (emailInput.value || '').trim();
       await onSendMail(rec, to, { onSuccess: ()=>{
         sendBtn.disabled = true;
@@ -511,6 +573,8 @@ export function renderList(
           const holder = card.querySelector('.bo-colli-holder');
           if (holder) holder.innerHTML = '<span class="small">Carico colli…</span>';
           const rows = await fetchColliFor(rec._recId || rec.id);
+          if (!document.body.contains(card)) return; // evita update se l'utente ha cambiato vista
+
           if (Array.isArray(rows) && rows.length){
             const html = `
               <table class="colli">
