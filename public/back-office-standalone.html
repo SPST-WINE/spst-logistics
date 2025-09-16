@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SPST • Back Office</title>
+
+  <!-- CSS serviti da /public -->
+  <link rel="stylesheet" href="/assets/esm/base.css">
+  <link rel="stylesheet" href="/assets/esm/quotes-admin.css">
+
+  <style>
+    /* micro-fix visivi utili in standalone */
+    body{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale }
+    .wrap{ padding-top: 10px }
+  </style>
+
+  <!-- (opzionale) override runtime da pagina -->
+  <script>
+    window.BACK_OFFICE_CONFIG = {
+      DEBUG: true,
+      // se vuoi forzare un proxy diverso:
+      // PROXY_BASE: "https://spst-logistics.vercel.app/api/airtable",
+      // elenco corrieri e incoterms per i select in Preventivi:
+      CARRIERS: ["DHL","UPS","FedEx","TNT","Privato"],
+      INCOTERMS: ["EXW","DAP","DDP"]
+    };
+  </script>
+</head>
+<body>
+
+  <!-- Brand bar (altezza calcolata da back-office-tabs.js) -->
+  <div class="brandbar">
+    <div class="wrap">
+      <div class="brand-left">
+        <img class="logo" src="https://cdn.prod.website-files.com/6800cc3b5f399f3e2b7f2ffa/68079e968300482f70a36a4a_output-onlinepngtools%20(1).png" alt="SPST" />
+        <div class="divider"></div>
+        <div class="title">Back Office</div>
+      </div>
+      <div class="brand-right small">Standalone</div>
+    </div>
+  </div>
+
+  <!-- Header con tabbar e tool row -->
+  <header class="bo-header">
+    <div class="wrap">
+      <!-- tabbar 50/50 -->
+      <nav class="tabbar" aria-label="Sezioni Back Office">
+        <a href="#tab-spedizioni" data-tab="spedizioni" aria-current="page">Spedizioni</a>
+        <a href="#tab-preventivi" data-tab="preventivi">Preventivi</a>
+      </nav>
+
+      <!-- riga strumenti (usata da main.js) -->
+      <div class="bo-tools">
+        <label class="chip" title="Mostra solo spedizioni non evase">
+          <input id="only-open" type="checkbox" />
+          <span>Mostra solo aperte</span>
+        </label>
+        <input id="search" class="nice-input" type="text" placeholder="Cerca per ID cliente, Paese, città…" />
+      </div>
+    </div>
+  </header>
+
+  <!-- Router views -->
+  <main class="wrap">
+    <span id="tab-spedizioni" class="anchor" aria-hidden="true"></span>
+    <section id="view-spedizioni" class="view" aria-labelledby="h-sped">
+      <h2 id="h-sped" class="small" style="margin:0 0 8px 0;opacity:.85">Elenco spedizioni</h2>
+      <!-- renderList() creerà/riempirà #list se non esiste -->
+      <div id="list"></div>
+    </section>
+
+    <span id="tab-preventivi" class="anchor" aria-hidden="true"></span>
+    <section id="view-preventivi" class="view" aria-labelledby="h-prev">
+      <h2 id="h-prev" class="small" style="margin:0 0 8px 0;opacity:.85">Preventivi</h2>
+
+      <!-- ===================== QUOTES ADMIN ===================== -->
+      <div id="quotes-admin">
+
+        <!-- Riepilogo live -->
+        <div class="card">
+          <h3 style="margin:0 0 6px 0">Riepilogo</h3>
+          <div class="kv">
+            <div class="k">Cliente</div><div id="sum-customer">—</div>
+            <div class="k">Validità</div><div id="sum-validity">—</div>
+            <div class="k">Valuta</div><div id="sum-currency">EUR</div>
+            <div class="k">Colli</div><div id="sum-packages">—</div>
+            <div class="k">Opzione consigliata</div><div id="sum-best">—</div>
+          </div>
+        </div>
+
+        <!-- Dati testata preventivo -->
+        <div class="grid">
+          <div class="card">
+            <h3>Dati cliente</h3>
+            <div class="kv">
+              <div class="k">Email cliente</div>
+              <div><input id="customer-email" type="email" class="nice-input" placeholder="cliente@azienda.com" /></div>
+
+              <div class="k">Valido fino al</div>
+              <div><input id="quote-validity" type="date" class="nice-input" /></div>
+
+              <div class="k">Valuta</div>
+              <div>
+                <select id="quote-currency" class="nice-input">
+                  <option value="EUR">EUR</option>
+                  <option value="USD">USD</option>
+                  <option value="GBP">GBP</option>
+                </select>
+              </div>
+
+              <div class="k">Note al cliente</div>
+              <div><textarea id="quote-notes" rows="3" class="nice-input" placeholder="Note che compariranno nell’anteprima…"></textarea></div>
+
+              <div class="k">Note spedizione</div>
+              <div><textarea id="shipment-notes" rows="3" class="nice-input" placeholder="Note operative generiche sulla spedizione…"></textarea></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Termini & Link</h3>
+            <div class="kv">
+              <div class="k">Versione termini</div>
+              <div><input id="terms-version" class="nice-input" value="v1.0" /></div>
+
+              <div class="k">Visibilità link</div>
+              <div>
+                <select id="link-visibility" class="nice-input">
+                  <option value="Immediata">Immediata</option>
+                  <option value="Su richiesta">Su richiesta</option>
+                </select>
+              </div>
+
+              <div class="k">Scadenza link (giorni)</div>
+              <div><input id="link-expiry" type="number" min="1" step="1" class="nice-input" placeholder="es. 15" /></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mittente / Destinatario -->
+        <div class="grid">
+          <div class="card">
+            <h3>Mittente</h3>
+            <div class="kv">
+              <div class="k">Ragione sociale</div><div><input class="nice-input" data-field="sender_name" /></div>
+              <div class="k">Paese</div><div><input class="nice-input" data-field="sender_country" /></div>
+              <div class="k">Città</div><div><input class="nice-input" data-field="sender_city" /></div>
+              <div class="k">CAP</div><div><input class="nice-input" data-field="sender_zip" /></div>
+              <div class="k">Indirizzo</div><div><input class="nice-input" data-field="sender_address" /></div>
+              <div class="k">Telefono</div><div><input class="nice-input" data-field="sender_phone" /></div>
+              <div class="k">P.IVA / EORI</div><div><input class="nice-input" data-field="sender_tax" /></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Destinatario</h3>
+            <div class="kv">
+              <div class="k">Ragione sociale</div><div><input class="nice-input" data-field="rcpt_name" /></div>
+              <div class="k">Paese</div><div><input class="nice-input" data-field="rcpt_country" /></div>
+              <div class="k">Città</div><div><input class="nice-input" data-field="rcpt_city" /></div>
+              <div class="k">CAP</div><div><input class="nice-input" data-field="rcpt_zip" /></div>
+              <div class="k">Indirizzo</div><div><input class="nice-input" data-field="rcpt_address" /></div>
+              <div class="k">Telefono</div><div><input class="nice-input" data-field="rcpt_phone" /></div>
+              <div class="k">Tax ID / EORI</div><div><input class="nice-input" data-field="rcpt_tax" /></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Colli -->
+        <div class="card">
+          <h3>Colli</h3>
+          <div id="qa-pkg-rows"></div>
+          <div class="row" style="margin-top:8px">
+            <button id="qa-pkg-add" class="mini-btn">+ Aggiungi collo</button>
+            <span id="qa-pkg-totals" class="small"></span>
+          </div>
+        </div>
+
+        <!-- Opzioni di spedizione (3 blocchi pronti) -->
+        <div class="grid">
+          <!-- Opzione 1 -->
+          <div class="card qa-option" data-option="1">
+            <div class="row spaced">
+              <strong>Opzione 1</strong>
+              <label class="small"><input type="radio" name="bestOption" value="1" /> Consigliata</label>
+            </div>
+            <div class="kv">
+              <div class="k">Corriere</div><div><select class="nice-input qa-carrier"></select></div>
+              <div class="k">Servizio</div><div><input class="nice-input qa-service" placeholder="es. Express Saver" /></div>
+              <div class="k">Tempo di resa</div><div><input class="nice-input qa-transit" placeholder="es. 3–5 gg" /></div>
+              <div class="k">Incoterm</div><div><select class="nice-input qa-incoterm"></select></div>
+              <div class="k">Oneri a carico di</div>
+              <div>
+                <select class="nice-input qa-payer">
+                  <option value="">Seleziona…</option>
+                  <option value="Mittente">Mittente</option>
+                  <option value="Destinatario">Destinatario</option>
+                </select>
+              </div>
+              <div class="k">Prezzo</div><div><input type="number" step="0.01" min="0" class="nice-input qa-price" placeholder="0.00" /></div>
+              <div class="k">Valuta</div>
+              <div>
+                <select class="nice-input qa-currency">
+                  <option value="EUR">EUR</option><option value="USD">USD</option><option value="GBP">GBP</option>
+                </select>
+              </div>
+              <div class="k">Note operative</div><div><textarea rows="2" class="nice-input qa-notes" placeholder="eventuali vincoli/caveat…"></textarea></div>
+              <div class="k">Flag</div><div class="qa-recommend"><label class="small"><input type="checkbox" /> Evidenzia nelle note</label></div>
+            </div>
+          </div>
+
+          <!-- Opzione 2 -->
+          <div class="card qa-option" data-option="2">
+            <div class="row spaced">
+              <strong>Opzione 2</strong>
+              <label class="small"><input type="radio" name="bestOption" value="2" /> Consigliata</label>
+            </div>
+            <div class="kv">
+              <div class="k">Corriere</div><div><select class="nice-input qa-carrier"></select></div>
+              <div class="k">Servizio</div><div><input class="nice-input qa-service" /></div>
+              <div class="k">Tempo di resa</div><div><input class="nice-input qa-transit" /></div>
+              <div class="k">Incoterm</div><div><select class="nice-input qa-incoterm"></select></div>
+              <div class="k">Oneri a carico di</div><div><select class="nice-input qa-payer"><option value="">Seleziona…</option><option value="Mittente">Mittente</option><option value="Destinatario">Destinatario</option></select></div>
+              <div class="k">Prezzo</div><div><input type="number" step="0.01" min="0" class="nice-input qa-price" /></div>
+              <div class="k">Valuta</div><div><select class="nice-input qa-currency"><option>EUR</option><option>USD</option><option>GBP</option></select></div>
+              <div class="k">Note operative</div><div><textarea rows="2" class="nice-input qa-notes"></textarea></div>
+              <div class="k">Flag</div><div class="qa-recommend"><label class="small"><input type="checkbox" /> Evidenzia nelle note</label></div>
+            </div>
+          </div>
+
+          <!-- Opzione 3 -->
+          <div class="card qa-option" data-option="3">
+            <div class="row spaced">
+              <strong>Opzione 3</strong>
+              <label class="small"><input type="radio" name="bestOption" value="3" /> Consigliata</label>
+            </div>
+            <div class="kv">
+              <div class="k">Corriere</div><div><select class="nice-input qa-carrier"></select></div>
+              <div class="k">Servizio</div><div><input class="nice-input qa-service" /></div>
+              <div class="k">Tempo di resa</div><div><input class="nice-input qa-transit" /></div>
+              <div class="k">Incoterm</div><div><select class="nice-input qa-incoterm"></select></div>
+              <div class="k">Oneri a carico di</div><div><select class="nice-input qa-payer"><option value="">Seleziona…</option><option value="Mittente">Mittente</option><option value="Destinatario">Destinatario</option></select></div>
+              <div class="k">Prezzo</div><div><input type="number" step="0.01" min="0" class="nice-input qa-price" /></div>
+              <div class="k">Valuta</div><div><select class="nice-input qa-currency"><option>EUR</option><option>USD</option><option>GBP</option></select></div>
+              <div class="k">Note operative</div><div><textarea rows="2" class="nice-input qa-notes"></textarea></div>
+              <div class="k">Flag</div><div class="qa-recommend"><label class="small"><input type="checkbox" /> Evidenzia nelle note</label></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Azioni -->
+        <div class="row" style="margin-top:8px">
+          <button id="btn-preview" class="mini-btn">Anteprima</button>
+          <button id="btn-create"  class="mini-btn primary" disabled>Crea preventivo</button>
+        </div>
+      </div>
+      <!-- =================== /QUOTES ADMIN =================== -->
+    </section>
+  </main>
+
+  <!-- toast host (usato da utils/dom.js) -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <noscript><div style="padding:12px;margin:12px;border-radius:8px;background:#300;color:#fff">Abilita JavaScript per usare il Back Office.</div></noscript>
+
+  <!-- Moduli ESM (serviti da /public/assets/esm/...) -->
+  <script type="module" src="/assets/esm/main.js"></script>
+  <script type="module" src="/assets/esm/quotes-admin.js"></script>
+</body>
+</html>
