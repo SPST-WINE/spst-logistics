@@ -4,17 +4,17 @@ import crypto from 'node:crypto';
 
 const SECRET = process.env.DOCS_SIGN_SECRET || '';
 
+function makeSig(sid, type, exp) {
+  return crypto.createHmac('sha256', SECRET).update(`${sid}.${type}.${exp}`).digest('hex');
+}
+
 function canonical(params) {
-  // Firma STABILE (ordine fisso delle chiavi che usiamo)
+  // Query ordinata (NON usata per la firma, solo per leggibilità)
   const keys = ['sid', 'type', 'exp', 'ship'];
   return keys
     .filter((k) => params[k] !== undefined && params[k] !== null)
     .map((k) => `${k}=${encodeURIComponent(String(params[k]))}`)
     .join('&');
-}
-
-function sign(params) {
-  return crypto.createHmac('sha256', SECRET).update(canonical(params)).digest('hex');
 }
 
 export default async function handler(req, res) {
@@ -35,14 +35,13 @@ export default async function handler(req, res) {
       return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
     }
 
-    // Per ora usiamo l’ID spedizione “umano” come valore firmato.
-    // (In futuro potrai passare il recId Airtable, basta valorizzarlo qui dentro.)
-    const sid = idSpedizione;     // valore firmato
-    const ship = idSpedizione;    // mostrato nel template
+    // Valori
+    const sid = idSpedizione;  // firmato
+    const ship = idSpedizione; // mostrato nel template
 
     const exp = Math.floor(Date.now() / 1000) + 15 * 60; // 15 minuti
     const payload = { sid, type, exp, ship };
-    const sig = sign(payload);
+    const sig = makeSig(sid, type, exp);
 
     const proto = (req.headers['x-forwarded-proto'] || 'https');
     const host = req.headers['x-forwarded-host'] || req.headers.host;
@@ -53,8 +52,6 @@ export default async function handler(req, res) {
 
     console.log('[generate] OK', { time: now, type, sid, ship, exp });
 
-    // NB: mappatura campi per “allegato” (quando la userai):
-    // proforma -> Allegato Fattura, fattura -> Allegato Fattura, dle -> Allegato DLE
     const fieldMap = { proforma: 'Allegato Fattura', fattura: 'Allegato Fattura', dle: 'Allegato DLE' };
 
     return res.status(200).json({
@@ -69,3 +66,5 @@ export default async function handler(req, res) {
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 }
+
+export const config = { runtime: "nodejs" };
