@@ -242,7 +242,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const docTitle  = type === 'proforma' ? 'Proforma Invoice' : 'Commercial Invoice';
   const ccy = get(ship.fields, ['Valuta', 'Currency'], 'EUR');
   let ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
-  if (type === 'proforma') ccySym = '€'; // proforma sempre €2 unit price visualizzato in euro
+  if (type === 'proforma') ccySym = '€'; // proforma: unit price for customs in €
 
   // Sender (Mittente)
   const senderName    = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
@@ -295,7 +295,7 @@ header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px
 .tag{display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#374151; background:var(--chip); border:1px solid var(--border); padding:2px 6px; border-radius:6px; margin-bottom:6px}
 .logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:#111827}
 .brand .meta{margin-top:6px; font-size:12px; color:${watermark?'#475569':'#6b7280'}}
-.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:280px}
+.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:300px}
 .doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'var(--accent)':'var(--ok)'}; font-weight:800}
 .doc-meta .kv{margin-top:6px}
 .kv div{margin:2px 0}
@@ -313,7 +313,7 @@ table.items td.num, table.items th.num{text-align:right}
 table.items tbody tr:nth-child(odd){background:var(--zebra)}
 table.items tbody tr:last-child td{border-bottom:1px solid var(--border-strong)}
 .totals{margin-top:10px; display:flex; justify-content:flex-end}
-.totals table{font-size:12px; border-collapse:collapse; min-width:260px}
+.totals table{font-size:12px; border-collapse:collapse; min-width:300px}
 .totals td{padding:8px 10px; border-bottom:1px solid var(--border)}
 .totals tr:last-child td{border-top:1px solid var(--border-strong); border-bottom:none; font-weight:700}
 .note{margin-top:10px; font-size:11px; color:#374151}
@@ -375,11 +375,12 @@ footer{margin-top:22px; font-size:11px; color:#374151}
     <table class="items" aria-label="Goods details">
       <thead>
         <tr>
-          <th style="width:32px">#</th>
+          <th style="width:28px">#</th>
           <th>Description</th>
-          <th style="width:120px">HS Code</th>
-          <th style="width:90px" class="num">Qty</th>
-          <th style="width:120px" class="num">Price</th>
+          <th style="width:110px">HS Code</th>
+          <th style="width:70px" class="num">Qty</th>
+          <th style="width:110px" class="num">Price / unit</th>
+          <th style="width:120px" class="num">Amount</th>
         </tr>
       </thead>
       <tbody>
@@ -393,6 +394,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
             <td>${escapeHTML(r.hs || '')}</td>
             <td class="num mono">${num(r.qty)}</td>
             <td class="num mono">${money(r.price, ccySym)}</td>
+            <td class="num mono">${money(r.amount, ccySym)}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -592,6 +594,7 @@ export default async function handler(req, res) {
 
         // Price: commercial → field Prezzo; proforma → always 2
         const price   = (type === 'proforma') ? 2 : (Number(f['Prezzo'] ?? 0) || 0);
+        const amount  = qty * price;
 
         const metaBits = [];
         if (abv) metaBits.push(`ABV: ${abv}% vol`);
@@ -599,12 +602,13 @@ export default async function handler(req, res) {
         metaBits.push(`Gross: ${grsLine.toFixed(1)} kg`);
         const meta = metaBits.join(' · ');
 
-        dlog('PL ROW', i+1, { id: r.id, tipologia, hs, title, qty, price, abv, netPerB, grsPerB, netLine, grsLine });
-        return { title: title || '—', qty, price, meta, netLine, grsLine, hs };
-      }) : [{ title:'—', qty:0, price:(type==='proforma'?2:0), meta:'', netLine:0, grsLine:0, hs:'' }];
+        dlog('PL ROW', i+1, { id: r.id, tipologia, hs, title, qty, price, amount, abv, netPerB, grsPerB, netLine, grsLine });
+        return { title: title || '—', qty, price, amount, meta, netLine, grsLine, hs };
+      }) : [{ title:'—', qty:0, price:(type==='proforma'?2:0), amount:0, meta:'', netLine:0, grsLine:0, hs:'' }];
 
       // Totals
-      const totalMoney = items.reduce((s, r) => s + (Number.isFinite(r.price) ? r.price : 0), 0);
+      // TOTAL must be sum of (qty × unit price) across lines
+      const totalMoney = items.reduce((s, r) => s + num(r.amount), 0);
       const totalNet   = items.reduce((s, r) => s + num(r.netLine), 0);
       const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
       dlog('INVOICE TOTALS', { totalMoney, totalNet, totalGross });
