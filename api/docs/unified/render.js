@@ -57,93 +57,71 @@ async function airFetch(url, init = {}) {
   return data;
 }
 
-// ---------- Field alias fallback for "ID Spedizione" ----------
-const SID_FIELD_CANDIDATES = [
-  // ID testuale
-  'ID Spedizione', 'Id Spedizione', 'ID spedizione', 'id spedizione',
-  'ID\u00A0Spedizione', 'IDSpedizione', 'Spedizione - ID', 'Shipment ID', 'ID',
-  // Linked record / join generico
-  'Spedizione', 'Shipment'
-];
-
-async function findOneByFieldAliases(tableName, value) {
-  const safe = String(value).replace(/'/g, "\\'");
-  for (const field of SID_FIELD_CANDIDATES) {
-    // 1) uguaglianza (campi testuali)
-    const formulaEq = `{${field}}='${safe}'`;
-    const urlEq = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formulaEq)}&maxRecords=1`;
-    try {
-      const dataEq = await airFetch(urlEq);
-      if (dataEq.records?.length) return { record: dataEq.records[0], fieldUsed: field, mode: 'eq' };
-    } catch (err) {
-      if (err?.status !== 422) throw err;
-    }
-    // 2) ARRAYJOIN (linked record)
-    const formulaArr = `FIND('${safe}', ARRAYJOIN({${field}}))`;
-    const urlArr = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formulaArr)}&maxRecords=1`;
-    try {
-      const dataArr = await airFetch(urlArr);
-      if (dataArr.records?.length) return { record: dataArr.records[0], fieldUsed: field, mode: 'arrayjoin' };
-    } catch (err) {
-      if (err?.status !== 422) throw err;
-    }
+async function airFetchAll(formula, tableName) {
+  const rows = [];
+  let next = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100`;
+  while (next) {
+    const data = await airFetch(next);
+    rows.push(...(data.records || []));
+    next = data.offset
+      ? `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100&offset=${data.offset}`
+      : null;
   }
-  return { record: null, fieldUsed: null, mode: null };
+  return rows;
 }
 
-async function findManyByFieldAliases(tableName, value) {
-  const safe = String(value).replace(/'/g, "\\'");
-  for (const field of SID_FIELD_CANDIDATES) {
-    const rows = [];
-
-    // Tentativo 1: uguaglianza (campo testo)
-    try {
-      let next = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`{${field}}='${safe}'`)}&pageSize=100`;
-      let used = false;
-      while (next) {
-        const data = await airFetch(next);
-        used = true;
-        rows.push(...(data.records || []));
-        next = data.offset
-          ? `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`{${field}}='${safe}'`)}&pageSize=100&offset=${data.offset}`
-          : null;
-      }
-      if (used && rows.length) return { rows, fieldUsed: field, mode: 'eq' };
-    } catch (err) {
-      if (err?.status !== 422) throw err;
-    }
-
-    // Tentativo 2: ARRAYJOIN (linked record)
-    try {
-      let next = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`FIND('${safe}', ARRAYJOIN({${field}}))`)}&pageSize=100`;
-      let used = false;
-      while (next) {
-        const data = await airFetch(next);
-        used = true;
-        rows.push(...(data.records || []));
-        next = data.offset
-          ? `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`FIND('${safe}', ARRAYJOIN({${field}}))`)}&pageSize=100&offset=${data.offset}`
-          : null;
-      }
-      if (used && rows.length) return { rows, fieldUsed: field, mode: 'arrayjoin' };
-    } catch (err) {
-      if (err?.status !== 422) throw err;
-    }
-  }
-  return { rows: [], fieldUsed: null, mode: null };
-}
-
-// ---------- Shipment + PL loaders ----------
+// ---------- Shipment loader ----------
 async function getShipmentBySid(sid) {
   if (/^rec[0-9A-Za-z]{14}/.test(String(sid))) {
     return airFetch(recordURL(TB_SPEDIZIONI, sid));
   }
-  const { record } = await findOneByFieldAliases(TB_SPEDIZIONI, sid);
-  return record;
+  // prova su campo "ID Spedizione" (alias principali)
+  const candidates = [
+    'ID Spedizione','Id Spedizione','ID spedizione','id spedizione',
+    'ID\u00A0Spedizione','IDSpedizione','Spedizione - ID','Shipment ID','ID'
+  ];
+  const safe = String(sid).replace(/'/g, "\\'");
+  for (const field of candidates) {
+    try {
+      const rows = await airFetch(`${tableURL(TB_SPEDIZIONI)}?filterByFormula=${encodeURIComponent(`{${field}}='${safe}'`)}&maxRecords=1`);
+      if (rows.records?.length) return rows.records[0];
+    } catch (err) {
+      if (err?.status !== 422) throw err;
+    }
+  }
+  return null;
 }
-async function getPLRowsBySid(sidOrRecId) {
-  const { rows } = await findManyByFieldAliases(TB_PL, sidOrRecId);
-  return rows;
+
+// ---------- PL loader (forza i campi richiesti dall'utente) ----------
+/**
+ * Regole di join:
+ *  1) {Spedizione} = recId (se è un linked record)
+ *  2) {ID Spedizione} = business SID (se è un campo testuale)
+ *  3) {Spedizione} = business SID (se è stato salvato testuale)
+ */
+async function getPLRows({ ship, sidRaw }) {
+  const recId = ship.id;
+  const businessSid = ship?.fields?.['ID Spedizione']
+    || ship?.fields?.['Id Spedizione']
+    || ship?.fields?.['ID spedizione']
+    || String(sidRaw || '');
+
+  const formulas = [
+    `{Spedizione}='${recId}'`,
+    `{ID Spedizione}='${String(businessSid).replace(/'/g,"\\'")}'`,
+    `{Spedizione}='${String(businessSid).replace(/'/g,"\\'")}'`,
+  ];
+
+  for (const f of formulas) {
+    try {
+      const rows = await airFetchAll(f, TB_PL);
+      if (rows.length) return rows;
+    } catch (err) {
+      // 422 = campo inesistente → prova formula successiva
+      if (err?.status !== 422) throw err;
+    }
+  }
+  return [];
 }
 
 // ---------- Signature ----------
@@ -165,18 +143,9 @@ function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
     return h.digest('hex');
   };
 
-  try {
-    const cand1 = make(rawType);
-    if (crypto.timingSafeEqual(Buffer.from(cand1), Buffer.from(String(sig)))) return true;
-  } catch {}
-  try {
-    const cand2 = make(normType);
-    if (crypto.timingSafeEqual(Buffer.from(cand2), Buffer.from(String(sig)))) return true;
-  } catch {}
-  try {
-    const cand3 = makeCanonical();
-    if (crypto.timingSafeEqual(Buffer.from(cand3), Buffer.from(String(sig)))) return true;
-  } catch {}
+  try { if (crypto.timingSafeEqual(Buffer.from(make(rawType)), Buffer.from(String(sig)))) return true; } catch {}
+  try { if (crypto.timingSafeEqual(Buffer.from(make(normType)), Buffer.from(String(sig)))) return true; } catch {}
+  try { if (crypto.timingSafeEqual(Buffer.from(makeCanonical()), Buffer.from(String(sig)))) return true; } catch {}
   return false;
 }
 
@@ -409,10 +378,7 @@ function renderDLEHTML({ ship }) {
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Export Free Declaration — ${escapeHTML(sid)}</title>
 <style>
-:root{
-  --brand:#111827; --accent:#0ea5e9; --text:#0b0f13; --muted:#6b7280;
-  --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --chip:#f3f4f6;
-}
+:root{ --brand:#111827; --accent:#0ea5e9; --text:#0b0f13; --muted:#6b7280; --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --chip:#f3f4f6; }
 *{box-sizing:border-box}
 html,body{margin:0;background:#fff;color:#0b0f13;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
 .page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative}
@@ -425,7 +391,6 @@ header{display:flex; align-items:flex-start; justify-content:space-between; gap:
 .doc-meta .kv{margin-top:6px}
 .kv div{margin:2px 0}
 hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
-h1{font-size:18px; margin:0 0 12px}
 .to{font-size:12px; color:#374151; margin-bottom:12px}
 .section{font-size:13px; line-height:1.55}
 .section p{margin:8px 0}
@@ -532,36 +497,23 @@ export default async function handler(req, res) {
       // DLE does not need PL rows
       html = renderDLEHTML({ ship });
     } else {
-      // Invoices: load PL (try both recId and business SID)
-      const plByRec = await getPLRowsBySid(ship.id);
-      const plBySid = sidRaw ? await getPLRowsBySid(sidRaw) : [];
-      const unique  = new Map();
-      [...plByRec, ...plBySid].forEach(r => unique.set(r.id, r));
-      const pl = [...unique.values()];
+      // Invoices: load PL (join robusto su recId o business SID)
+      const pl = await getPLRows({ ship, sidRaw });
 
-      // Build lines (supporta campi: Etichetta, Bottiglie, Prezzo, HS, Origine, ecc.)
+      // COSTRUZIONE RIGHE come richiesto dall'utente:
+      //  Description  <- Etichetta (single line text)
+      //  Qty          <- Bottiglie (number)
+      //  Price        <- Prezzo (number)
+      //  Total        <- somma di tutti i "Prezzo" riga
       const items = pl.length ? pl.map(r => {
         const f = r.fields || {};
-        const title = get(f, [
-          'Etichetta',
-          'Descrizione','Description','Prodotto','Articolo','SKU','Titolo'
-        ], '');
-        const qty = num(get(f, [
-          'Bottiglie',
-          'Quantità','Quantita','Qtà','Qta','Qty','Pezzi'
-        ], 0));
-        const price = num(get(f, [
-          'Prezzo','Price','Valore Unitario','Unit Price'
-        ], 0));
-        const hs     = get(f, ['HS','HS code','HS Code'], '');
-        const origin = get(f, ['Origine','Country of origin','Origin'], '');
-        const metaBits = [];
-        if (hs) metaBits.push(`HS: ${hs}`);
-        if (origin) metaBits.push(`Origin: ${origin}`);
-        return { title, qty, price, meta: metaBits.join(' · ') };
+        const title = String(f['Etichetta'] ?? '').trim();
+        const qty   = Number(f['Bottiglie'] ?? 0) || 0;
+        const price = Number(f['Prezzo'] ?? 0) || 0;
+        return { title: title || '—', qty, price, meta: '' };
       }) : [{ title:'—', qty:0, price:0, meta:'' }];
 
-      const total = items.reduce((s, r) => s + num(r.qty) * num(r.price), 0);
+      const total = items.reduce((s, r) => s + (Number.isFinite(r.price) ? r.price : 0), 0);
       html = renderInvoiceHTML({ type, ship, lines: items, total });
     }
 
