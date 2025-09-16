@@ -59,7 +59,7 @@ async function airFetch(url, init = {}) {
 
   if (DEBUG_DOCS) {
     dlog('HTTP', init.method || 'GET', res.status, `${ms}ms`, url);
-    if (!res.ok) dlog('HTTP body (error)', truncate(text, 1000));
+    if (!res.ok) dlog('HTTP body (error)', truncate(text, 1200));
   }
   if (!res.ok) {
     const err = new Error(`Airtable ${res.status}: ${text}`);
@@ -70,7 +70,7 @@ async function airFetch(url, init = {}) {
 }
 
 function safeJSON(t) { try { return JSON.parse(t); } catch { return null; } }
-function truncate(s, n=500){ s = String(s||''); return s.length>n ? s.slice(0,n)+'…' : s; }
+function truncate(s, n=600){ s = String(s||''); return s.length>n ? s.slice(0,n)+'…' : s; }
 
 async function airFetchAll(formula, tableName) {
   const rows = [];
@@ -90,7 +90,7 @@ async function airFetchAll(formula, tableName) {
 
 // ---------- Shipment loader (verbose) ----------
 async function getShipmentBySid(sid) {
-  dlog('getShipmentBySid()', 'sid=', sid);
+  dlog('getShipmentBySid() sid=', sid);
   if (/^rec[0-9A-Za-z]{14}/.test(String(sid))) {
     dlog(' → treat as recId');
     try {
@@ -125,13 +125,21 @@ async function getShipmentBySid(sid) {
   return null;
 }
 
-// ---------- PL loader (force fields + full logs) ----------
+// ---------- PL loader (linked first, then fallbacks; full logs) ----------
 /**
- * Join order:
- *  1) {Spedizione} = recId (linked record)
- *  2) {ID Spedizione} = business SID (text)
- *  3) {Spedizione} = business SID (text)
+ * Order:
+ *  A) if shipment has a linked field with PL row ids, fetch by RECORD_ID() IN (...)
+ *  B) {Spedizione} = recId (linked/text)
+ *  C) {ID Spedizione} = business SID (text)
+ *  D) {Spedizione} = business SID (text)
  */
+const PL_LINKED_FIELD_ALIASES = ['SPED_PL', 'PL', 'Packing List', 'Packing list', 'PL Righe', 'Packing list righe'];
+
+function buildOrByRecordIds(ids = []) {
+  const parts = ids.map(id => `RECORD_ID()='${String(id).replace(/'/g,"\\'")}'`);
+  return parts.length ? `OR(${parts.join(',')})` : '';
+}
+
 async function getPLRows({ ship, sidRaw }) {
   const recId = ship.id;
   const businessSid = ship?.fields?.['ID Spedizione']
@@ -139,6 +147,28 @@ async function getPLRows({ ship, sidRaw }) {
     || ship?.fields?.['ID spedizione']
     || String(sidRaw || '');
 
+  // A) prova via linked ids presenti nello shipment (campo "SPED_PL" oppure alias)
+  for (const fname of PL_LINKED_FIELD_ALIASES) {
+    const v = ship?.fields?.[fname];
+    if (Array.isArray(v) && v.length) {
+      dlog('PL via linked field on shipment:', fname, 'count:', v.length);
+      // Airtable può restituire un array di recIds oppure array di strutture {id, name}; gestiamo entrambi.
+      const ids = v.map(x => (typeof x === 'string' ? x : x?.id)).filter(Boolean);
+      const formula = buildOrByRecordIds(ids);
+      if (formula) {
+        try {
+          const rows = await airFetchAll(formula, TB_PL);
+          dlog('PL via linked field → rows:', rows.length);
+          if (rows.length) return rows;
+        } catch (err) {
+          derr('PL via linked field error', fname, err?.status || '', err?.message || err);
+          // continua con i fallback
+        }
+      }
+    }
+  }
+
+  // B, C, D) fallback su formule
   const formulas = [
     `{Spedizione}='${recId}'`,
     `{ID Spedizione}='${String(businessSid).replace(/'/g,"\\'")}'`,
@@ -439,7 +469,7 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 .sign{margin-top:22px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
 .box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
 .printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
-.btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:8px; cursor:pointer}
+.btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:10px; cursor:pointer}
 .btn:hover{background:#f9fafb}
 @media print {.printbar{display:none}}
 </style>
@@ -531,7 +561,7 @@ export default async function handler(req, res) {
     // Load shipment
     const ship = await getShipmentBySid(sidRaw);
     if (!ship) return bad(res, 404, 'Not found', `No shipment found for ${sidRaw}`);
-    dlog('SHIPMENT OK', { recId: ship.id, fieldsKeys: Object.keys(ship.fields || {}).slice(0,40) });
+    dlog('SHIPMENT OK', { recId: ship.id, fieldsKeys: Object.keys(ship.fields || {}).slice(0,80) });
 
     let html;
 
@@ -539,20 +569,21 @@ export default async function handler(req, res) {
       html = renderDLEHTML({ ship });
       dlog('RENDER DLE OK');
     } else {
-      // Invoices: load PL
+      // Invoices: load PL (linked first)
       const pl = await getPLRows({ ship, sidRaw });
       dlog('PL SUMMARY', { count: pl.length });
 
-      // Build items (hard-mapped)
+      // Items mapping hardcoded: Etichetta / Bottiglie / Prezzo
       const items = pl.length ? pl.map((r, i) => {
         const f = r.fields || {};
         const title = String(f['Etichetta'] ?? '').trim();
         const qty   = Number(f['Bottiglie'] ?? 0) || 0;
         const price = Number(f['Prezzo'] ?? 0) || 0;
-        dlog('PL ROW', i+1, { title, qty, price, id: r.id });
+        dlog('PL ROW', i+1, { id: r.id, title, qty, price });
         return { title: title || '—', qty, price, meta: '' };
       }) : [{ title:'—', qty:0, price:0, meta:'' }];
 
+      // Total = somma dei "Prezzo" riga
       const total = items.reduce((s, r) => s + (Number.isFinite(r.price) ? r.price : 0), 0);
       dlog('INVOICE ITEMS', { count: items.length, total });
 
