@@ -59,46 +59,78 @@ async function airFetch(url, init = {}) {
 
 // ---------- Field alias fallback for "ID Spedizione" ----------
 const SID_FIELD_CANDIDATES = [
+  // ID testuale
   'ID Spedizione', 'Id Spedizione', 'ID spedizione', 'id spedizione',
-  'ID\u00A0Spedizione', 'IDSpedizione', 'Spedizione ID', 'Spedizione - ID', 'ID',
+  'ID\u00A0Spedizione', 'IDSpedizione', 'Spedizione - ID', 'Shipment ID', 'ID',
+  // Linked record / join generico
+  'Spedizione', 'Shipment'
 ];
 
 async function findOneByFieldAliases(tableName, value) {
   const safe = String(value).replace(/'/g, "\\'");
   for (const field of SID_FIELD_CANDIDATES) {
-    const formula = `{${field}}='${safe}'`;
-    const url = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formula)}&maxRecords=1`;
+    // 1) uguaglianza (campi testuali)
+    const formulaEq = `{${field}}='${safe}'`;
+    const urlEq = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formulaEq)}&maxRecords=1`;
     try {
-      const data = await airFetch(url);
-      if (data.records?.length) return { record: data.records[0], fieldUsed: field };
+      const dataEq = await airFetch(urlEq);
+      if (dataEq.records?.length) return { record: dataEq.records[0], fieldUsed: field, mode: 'eq' };
     } catch (err) {
-      if (err?.status === 422) continue; // try next alias
-      throw err;
+      if (err?.status !== 422) throw err;
+    }
+    // 2) ARRAYJOIN (linked record)
+    const formulaArr = `FIND('${safe}', ARRAYJOIN({${field}}))`;
+    const urlArr = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formulaArr)}&maxRecords=1`;
+    try {
+      const dataArr = await airFetch(urlArr);
+      if (dataArr.records?.length) return { record: dataArr.records[0], fieldUsed: field, mode: 'arrayjoin' };
+    } catch (err) {
+      if (err?.status !== 422) throw err;
     }
   }
-  return { record: null, fieldUsed: null };
+  return { record: null, fieldUsed: null, mode: null };
 }
 
 async function findManyByFieldAliases(tableName, value) {
   const safe = String(value).replace(/'/g, "\\'");
   for (const field of SID_FIELD_CANDIDATES) {
-    let next = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`{${field}}='${safe}'`)}&pageSize=100`;
     const rows = [];
+
+    // Tentativo 1: uguaglianza (campo testo)
     try {
+      let next = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`{${field}}='${safe}'`)}&pageSize=100`;
+      let used = false;
       while (next) {
         const data = await airFetch(next);
+        used = true;
         rows.push(...(data.records || []));
         next = data.offset
           ? `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`{${field}}='${safe}'`)}&pageSize=100&offset=${data.offset}`
           : null;
       }
-      if (rows.length) return { rows, fieldUsed: field };
+      if (used && rows.length) return { rows, fieldUsed: field, mode: 'eq' };
     } catch (err) {
-      if (err?.status === 422) { next = null; continue; }
-      throw err;
+      if (err?.status !== 422) throw err;
+    }
+
+    // Tentativo 2: ARRAYJOIN (linked record)
+    try {
+      let next = `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`FIND('${safe}', ARRAYJOIN({${field}}))`)}&pageSize=100`;
+      let used = false;
+      while (next) {
+        const data = await airFetch(next);
+        used = true;
+        rows.push(...(data.records || []));
+        next = data.offset
+          ? `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(`FIND('${safe}', ARRAYJOIN({${field}}))`)}&pageSize=100&offset=${data.offset}`
+          : null;
+      }
+      if (used && rows.length) return { rows, fieldUsed: field, mode: 'arrayjoin' };
+    } catch (err) {
+      if (err?.status !== 422) throw err;
     }
   }
-  return { rows: [], fieldUsed: null };
+  return { rows: [], fieldUsed: null, mode: null };
 }
 
 // ---------- Shipment + PL loaders ----------
@@ -126,6 +158,12 @@ function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
     h.update(`${sid}.${t}.${exp}`);
     return h.digest('hex');
   };
+  const makeCanonical = () => {
+    const q = `sid=${encodeURIComponent(String(sid))}&type=${encodeURIComponent(String(rawType))}&exp=${encodeURIComponent(String(exp))}`;
+    const h = crypto.createHmac('sha256', DOCS_SIGN_SECRET);
+    h.update(q);
+    return h.digest('hex');
+  };
 
   try {
     const cand1 = make(rawType);
@@ -134,6 +172,10 @@ function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
   try {
     const cand2 = make(normType);
     if (crypto.timingSafeEqual(Buffer.from(cand2), Buffer.from(String(sig)))) return true;
+  } catch {}
+  try {
+    const cand3 = makeCanonical();
+    if (crypto.timingSafeEqual(Buffer.from(cand3), Buffer.from(String(sig)))) return true;
   } catch {}
   return false;
 }
@@ -372,7 +414,7 @@ function renderDLEHTML({ ship }) {
   --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --chip:#f3f4f6;
 }
 *{box-sizing:border-box}
-html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+html,body{margin:0;background:#fff;color:#0b0f13;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
 .page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative}
 header{display:flex; align-items:flex-start; justify-content:space-between; gap:16px}
 .brand{max-width:70%}
@@ -497,14 +539,22 @@ export default async function handler(req, res) {
       [...plByRec, ...plBySid].forEach(r => unique.set(r.id, r));
       const pl = [...unique.values()];
 
-      // Build lines
+      // Build lines (supporta campi: Etichetta, Bottiglie, Prezzo, HS, Origine, ecc.)
       const items = pl.length ? pl.map(r => {
         const f = r.fields || {};
-        const title = get(f, ['Descrizione','Description','Prodotto','Articolo','SKU','Titolo'], '');
-        const qty   = num(get(f, ['Quantità','Qta','Qtà','Qty','Pezzi'], 0));
-        const price = num(get(f, ['Prezzo','Price','Valore Unitario','Unit Price'], 0));
-        const hs    = get(f, ['HS','HS code','HS Code'], '');
-        const origin= get(f, ['Origine','Country of origin','Origin'], '');
+        const title = get(f, [
+          'Etichetta',
+          'Descrizione','Description','Prodotto','Articolo','SKU','Titolo'
+        ], '');
+        const qty = num(get(f, [
+          'Bottiglie',
+          'Quantità','Quantita','Qtà','Qta','Qty','Pezzi'
+        ], 0));
+        const price = num(get(f, [
+          'Prezzo','Price','Valore Unitario','Unit Price'
+        ], 0));
+        const hs     = get(f, ['HS','HS code','HS Code'], '');
+        const origin = get(f, ['Origine','Country of origin','Origin'], '');
         const metaBits = [];
         if (hs) metaBits.push(`HS: ${hs}`);
         if (origin) metaBits.push(`Origin: ${origin}`);
@@ -516,6 +566,7 @@ export default async function handler(req, res) {
     }
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.status(200).send(html);
   } catch (err) {
     console.error('[render] error', err);
