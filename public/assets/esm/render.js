@@ -1,4 +1,5 @@
-// assets/esm/ui/render.js
+/// spst-logistics/public/assets/esm/render.js
+
 import { TEMPLATES, CARRIERS } from '../config.js';
 import { toKg, trackingUrl } from '../utils/misc.js';
 import { totalPesoKg } from '../utils/weights.js';
