@@ -242,7 +242,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const docTitle  = type === 'proforma' ? 'Proforma Invoice' : 'Commercial Invoice';
   const ccy = get(ship.fields, ['Valuta', 'Currency'], 'EUR');
   let ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
-  if (type === 'proforma') ccySym = '€'; // richiesta: prezzo fisso €2 in proforma (visual euro)
+  if (type === 'proforma') ccySym = '€'; // proforma sempre €2 unit price visualizzato in euro
 
   // Sender (Mittente)
   const senderName    = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
@@ -294,8 +294,8 @@ header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px
 .brand{max-width:70%}
 .tag{display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#374151; background:var(--chip); border:1px solid var(--border); padding:2px 6px; border-radius:6px; margin-bottom:6px}
 .logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:#111827}
-.brand .meta{margin-top:6px; font-size:12px; color:var(--muted)}
-.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
+.brand .meta{margin-top:6px; font-size:12px; color:${watermark?'#475569':'#6b7280'}}
+.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:280px}
 .doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'var(--accent)':'var(--ok)'}; font-weight:800}
 .doc-meta .kv{margin-top:6px}
 .kv div{margin:2px 0}
@@ -305,7 +305,7 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:16px 0 18px}
 .card h3{margin:0 0 8px; font-size:11px; color:#374151; text-transform:uppercase; letter-spacing:.08em}
 .small{font-size:12px; color:#374151}
 .mono{font-feature-settings:"tnum" 1; font-variant-numeric: tabular-nums}
-.muted{color:var(--muted)}
+.muted{color:#6b7280}
 table.items{width:100%; border-collapse:collapse; font-size:12px; margin-top:16px}
 table.items th, table.items td{border-bottom:1px solid var(--border); padding:9px 8px; vertical-align:top}
 table.items thead th{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#374151; text-align:left; background:var(--chip)}
@@ -377,6 +377,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         <tr>
           <th style="width:32px">#</th>
           <th>Description</th>
+          <th style="width:120px">HS Code</th>
           <th style="width:90px" class="num">Qty</th>
           <th style="width:120px" class="num">Price</th>
         </tr>
@@ -389,6 +390,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
               <strong>${escapeHTML(r.title || '—')}</strong>
               ${r.meta?`<br/><span class="muted">${escapeHTML(r.meta)}</span>`:''}
             </td>
+            <td>${escapeHTML(r.hs || '')}</td>
             <td class="num mono">${num(r.qty)}</td>
             <td class="num mono">${money(r.price, ccySym)}</td>
           </tr>
@@ -567,40 +569,41 @@ export default async function handler(req, res) {
       const pl = await getPLRows({ ship, sidRaw });
       dlog('PL SUMMARY', { count: pl.length });
 
-      // Map lines:
-      // - Description ← Etichetta
-      // - Qty         ← Bottiglie
-      // - Price       ← Prezzo (Commerciale) | 2 (Proforma)
-      // - Meta shows HS, ABV, Net/Gross weights per line
+      // Map lines with HS from Tipologia + ABV + weights
       const items = pl.length ? pl.map((r, i) => {
         const f = r.fields || {};
         const title   = String(f['Etichetta'] ?? '').trim();
         const qty     = Number(f['Bottiglie'] ?? 0) || 0;
         const abv     = get(f, ['Gradazione (% vol)','Gradazione','ABV','Vol %'], '');
-        const hs      = get(f, ['HS','HS code','HS Code'], '');
-        const originF = get(f, ['Origine','Country of origin','Origin'], '');
+
+        const tipologia = String(f['Tipologia'] ?? '').trim(); // case sensitive
+        let hsByTip = '';
+        if (tipologia === 'vino fermo') hsByTip = '2204.21';
+        else if (tipologia === 'vino spumante') hsByTip = '2204.10';
+        else if (tipologia === 'brochure/depliant') hsByTip = '4911.10.00';
+        const hsFallback = get(f, ['HS','HS code','HS Code'], '');
+        const hs         = hsByTip || hsFallback;
+
         const netPerB = Number(get(f, ['Peso netto bott. (kg)','Peso netto bott (kg)','Peso netto (kg)','Peso netto'], 0.9)) || 0.9;
         const grsPerB = Number(get(f, ['Peso lordo bott. (kg)','Peso lordo bott (kg)','Peso lordo (kg)','Peso lordo'], 1.3)) || 1.3;
 
         const netLine = qty * netPerB;
         const grsLine = qty * grsPerB;
 
+        // Price: commercial → field Prezzo; proforma → always 2
         const price   = (type === 'proforma') ? 2 : (Number(f['Prezzo'] ?? 0) || 0);
 
         const metaBits = [];
         if (abv) metaBits.push(`ABV: ${abv}% vol`);
-        if (hs)  metaBits.push(`HS: ${hs}`);
         metaBits.push(`Net: ${netLine.toFixed(1)} kg`);
         metaBits.push(`Gross: ${grsLine.toFixed(1)} kg`);
-
         const meta = metaBits.join(' · ');
-        dlog('PL ROW', i+1, { id: r.id, title, qty, price, abv, netPerB, grsPerB, netLine, grsLine, hs, originF });
-        return { title: title || '—', qty, price, meta, netLine, grsLine };
-      }) : [{ title:'—', qty:0, price: (type==='proforma'?2:0), meta:'', netLine:0, grsLine:0 }];
+
+        dlog('PL ROW', i+1, { id: r.id, tipologia, hs, title, qty, price, abv, netPerB, grsPerB, netLine, grsLine });
+        return { title: title || '—', qty, price, meta, netLine, grsLine, hs };
+      }) : [{ title:'—', qty:0, price:(type==='proforma'?2:0), meta:'', netLine:0, grsLine:0, hs:'' }];
 
       // Totals
-      // - Total € = somma dei valori della colonna Price (coerente con richiesta precedente)
-      // - Pesi totali = somma net/gross sulle righe (con fallback 0.9 / 1.3 kg per bottiglia)
       const totalMoney = items.reduce((s, r) => s + (Number.isFinite(r.price) ? r.price : 0), 0);
       const totalNet   = items.reduce((s, r) => s + num(r.netLine), 0);
       const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
