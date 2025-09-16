@@ -88,7 +88,7 @@ async function airFetchAll(formula, tableName) {
   return rows;
 }
 
-// ---------- Shipment loader (verbose) ----------
+// ---------- Shipment loader ----------
 async function getShipmentBySid(sid) {
   dlog('getShipmentBySid() sid=', sid);
   if (/^rec[0-9A-Za-z]{14}/.test(String(sid))) {
@@ -125,14 +125,7 @@ async function getShipmentBySid(sid) {
   return null;
 }
 
-// ---------- PL loader (linked first, then fallbacks; full logs) ----------
-/**
- * Order:
- *  A) if shipment has a linked field with PL row ids, fetch by RECORD_ID() IN (...)
- *  B) {Spedizione} = recId (linked/text)
- *  C) {ID Spedizione} = business SID (text)
- *  D) {Spedizione} = business SID (text)
- */
+// ---------- PL loader ----------
 const PL_LINKED_FIELD_ALIASES = ['SPED_PL', 'PL', 'Packing List', 'Packing list', 'PL Righe', 'Packing list righe'];
 
 function buildOrByRecordIds(ids = []) {
@@ -147,12 +140,11 @@ async function getPLRows({ ship, sidRaw }) {
     || ship?.fields?.['ID spedizione']
     || String(sidRaw || '');
 
-  // A) prova via linked ids presenti nello shipment (campo "SPED_PL" oppure alias)
+  // A) via linked field on shipment
   for (const fname of PL_LINKED_FIELD_ALIASES) {
     const v = ship?.fields?.[fname];
     if (Array.isArray(v) && v.length) {
       dlog('PL via linked field on shipment:', fname, 'count:', v.length);
-      // Airtable può restituire un array di recIds oppure array di strutture {id, name}; gestiamo entrambi.
       const ids = v.map(x => (typeof x === 'string' ? x : x?.id)).filter(Boolean);
       const formula = buildOrByRecordIds(ids);
       if (formula) {
@@ -162,13 +154,12 @@ async function getPLRows({ ship, sidRaw }) {
           if (rows.length) return rows;
         } catch (err) {
           derr('PL via linked field error', fname, err?.status || '', err?.message || err);
-          // continua con i fallback
         }
       }
     }
   }
 
-  // B, C, D) fallback su formule
+  // B, C, D) fallback by formulas
   const formulas = [
     `{Spedizione}='${recId}'`,
     `{ID Spedizione}='${String(businessSid).replace(/'/g,"\\'")}'`,
@@ -195,7 +186,7 @@ async function getPLRows({ ship, sidRaw }) {
   return [];
 }
 
-// ---------- Signature (with logs) ----------
+// ---------- Signature ----------
 function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
   if (BYPASS_SIGNATURE) { dlog('SIGNATURE BYPASSED'); return true; }
   if (!sid || !rawType || !exp || !sig) { dlog('SIG missing pieces', { sid:!!sid, rawType, exp, sig:!!sig }); return false; }
@@ -207,11 +198,7 @@ function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
   const q  = `sid=${encodeURIComponent(String(sid))}&type=${encodeURIComponent(String(rawType))}&exp=${encodeURIComponent(String(exp))}`;
   const h3 = crypto.createHmac('sha256', DOCS_SIGN_SECRET).update(q).digest('hex');
 
-  const ok =
-    safeEqual(h1, String(sig)) ||
-    safeEqual(h2, String(sig)) ||
-    safeEqual(h3, String(sig));
-
+  const ok = safeEqual(h1, String(sig)) || safeEqual(h2, String(sig)) || safeEqual(h3, String(sig));
   dlog('SIG verify', { rawType, normType, match: ok ? 'OK' : 'FAIL' });
   return ok;
 }
@@ -232,11 +219,12 @@ const get = (obj, keys, def = '') => {
 };
 const fmtDate = (d) => { try { return new Date(d).toLocaleDateString('it-IT'); } catch { return ''; } };
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
-const money = (x, ccy = '€') =>
-  `${ccy} ${num(x).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (x, sym = '€') =>
+  `${sym} ${num(x).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const escapeHTML = (x = '') => String(x)
   .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+const kgFmt = (x) => `${(Math.round(num(x)*10)/10).toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kg`;
 
 // ---------- Type normalization ----------
 function normalizeType(t) {
@@ -249,11 +237,12 @@ function normalizeType(t) {
 }
 
 // ---------- INVOICE HTML ----------
-function renderInvoiceHTML({ type, ship, lines, total }) {
+function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const watermark = type === 'proforma';
   const docTitle  = type === 'proforma' ? 'Proforma Invoice' : 'Commercial Invoice';
   const ccy = get(ship.fields, ['Valuta', 'Currency'], 'EUR');
-  const ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
+  let ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
+  if (type === 'proforma') ccySym = '€'; // richiesta: prezzo fisso €2 in proforma (visual euro)
 
   // Sender (Mittente)
   const senderName    = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
@@ -327,6 +316,7 @@ table.items tbody tr:last-child td{border-bottom:1px solid var(--border-strong)}
 .totals table{font-size:12px; border-collapse:collapse; min-width:260px}
 .totals td{padding:8px 10px; border-bottom:1px solid var(--border)}
 .totals tr:last-child td{border-top:1px solid var(--border-strong); border-bottom:none; font-weight:700}
+.note{margin-top:10px; font-size:11px; color:#374151}
 footer{margin-top:22px; font-size:11px; color:#374151}
 .sign{margin-top:20px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
 .sign .box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
@@ -378,6 +368,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         <h3>Shipment Details</h3>
         <div class="small">Carrier: ${escapeHTML(carrier || '—')}</div>
         <div class="small">Incoterm: ${escapeHTML(incoterm || '—')} · Currency: ${escapeHTML(ccy)}</div>
+        <div class="small">Net weight: <strong>${escapeHTML(kgFmt(totalsWeights.net))}</strong> · Gross weight: <strong>${escapeHTML(kgFmt(totalsWeights.gross))}</strong></div>
       </div>
     </section>
 
@@ -395,7 +386,8 @@ footer{margin-top:22px; font-size:11px; color:#374151}
           <tr>
             <td>${i+1}</td>
             <td>
-              <strong>${escapeHTML(r.title || '—')}</strong>${r.meta?`<br/><span class="muted">${escapeHTML(r.meta)}</span>`:''}
+              <strong>${escapeHTML(r.title || '—')}</strong>
+              ${r.meta?`<br/><span class="muted">${escapeHTML(r.meta)}</span>`:''}
             </td>
             <td class="num mono">${num(r.qty)}</td>
             <td class="num mono">${money(r.price, ccySym)}</td>
@@ -413,8 +405,10 @@ footer{margin-top:22px; font-size:11px; color:#374151}
       </table>
     </div>
 
+    <div class="note">Country of origin: <strong>Italy</strong>.</div>
+    ${type==='proforma' ? `<div class="note"><strong>Note:</strong> Goods are not for resale. Declared values are for customs purposes only.</div>` : ''}
+
     <footer>
-      ${type==='proforma' ? `<div class="small"><strong>Note:</strong> Goods are not for resale. Declared values are for customs purposes only.</div>` : ''}
       <div class="sign">
         <div>
           <div class="small"><strong>Place & date:</strong> ${escapeHTML(place)}, ${escapeHTML(dateStr)}</div>
@@ -431,7 +425,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 </html>`;
 }
 
-// ---------- DLE HTML ----------
+// ---------- DLE HTML (unchanged) ----------
 function renderDLEHTML({ ship }) {
   const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
   const senderRS  = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
@@ -569,25 +563,56 @@ export default async function handler(req, res) {
       html = renderDLEHTML({ ship });
       dlog('RENDER DLE OK');
     } else {
-      // Invoices: load PL (linked first)
+      // Invoices: load PL
       const pl = await getPLRows({ ship, sidRaw });
       dlog('PL SUMMARY', { count: pl.length });
 
-      // Items mapping hardcoded: Etichetta / Bottiglie / Prezzo
+      // Map lines:
+      // - Description ← Etichetta
+      // - Qty         ← Bottiglie
+      // - Price       ← Prezzo (Commerciale) | 2 (Proforma)
+      // - Meta shows HS, ABV, Net/Gross weights per line
       const items = pl.length ? pl.map((r, i) => {
         const f = r.fields || {};
-        const title = String(f['Etichetta'] ?? '').trim();
-        const qty   = Number(f['Bottiglie'] ?? 0) || 0;
-        const price = Number(f['Prezzo'] ?? 0) || 0;
-        dlog('PL ROW', i+1, { id: r.id, title, qty, price });
-        return { title: title || '—', qty, price, meta: '' };
-      }) : [{ title:'—', qty:0, price:0, meta:'' }];
+        const title   = String(f['Etichetta'] ?? '').trim();
+        const qty     = Number(f['Bottiglie'] ?? 0) || 0;
+        const abv     = get(f, ['Gradazione (% vol)','Gradazione','ABV','Vol %'], '');
+        const hs      = get(f, ['HS','HS code','HS Code'], '');
+        const originF = get(f, ['Origine','Country of origin','Origin'], '');
+        const netPerB = Number(get(f, ['Peso netto bott. (kg)','Peso netto bott (kg)','Peso netto (kg)','Peso netto'], 0.9)) || 0.9;
+        const grsPerB = Number(get(f, ['Peso lordo bott. (kg)','Peso lordo bott (kg)','Peso lordo (kg)','Peso lordo'], 1.3)) || 1.3;
 
-      // Total = somma dei "Prezzo" riga
-      const total = items.reduce((s, r) => s + (Number.isFinite(r.price) ? r.price : 0), 0);
-      dlog('INVOICE ITEMS', { count: items.length, total });
+        const netLine = qty * netPerB;
+        const grsLine = qty * grsPerB;
 
-      html = renderInvoiceHTML({ type, ship, lines: items, total });
+        const price   = (type === 'proforma') ? 2 : (Number(f['Prezzo'] ?? 0) || 0);
+
+        const metaBits = [];
+        if (abv) metaBits.push(`ABV: ${abv}% vol`);
+        if (hs)  metaBits.push(`HS: ${hs}`);
+        metaBits.push(`Net: ${netLine.toFixed(1)} kg`);
+        metaBits.push(`Gross: ${grsLine.toFixed(1)} kg`);
+
+        const meta = metaBits.join(' · ');
+        dlog('PL ROW', i+1, { id: r.id, title, qty, price, abv, netPerB, grsPerB, netLine, grsLine, hs, originF });
+        return { title: title || '—', qty, price, meta, netLine, grsLine };
+      }) : [{ title:'—', qty:0, price: (type==='proforma'?2:0), meta:'', netLine:0, grsLine:0 }];
+
+      // Totals
+      // - Total € = somma dei valori della colonna Price (coerente con richiesta precedente)
+      // - Pesi totali = somma net/gross sulle righe (con fallback 0.9 / 1.3 kg per bottiglia)
+      const totalMoney = items.reduce((s, r) => s + (Number.isFinite(r.price) ? r.price : 0), 0);
+      const totalNet   = items.reduce((s, r) => s + num(r.netLine), 0);
+      const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
+      dlog('INVOICE TOTALS', { totalMoney, totalNet, totalGross });
+
+      html = renderInvoiceHTML({
+        type,
+        ship,
+        lines: items,
+        total: totalMoney,
+        totalsWeights: { net: totalNet, gross: totalGross },
+      });
       dlog('RENDER INVOICE OK');
     }
 
