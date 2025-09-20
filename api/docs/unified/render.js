@@ -236,7 +236,7 @@ function normalizeType(t) {
   return 'proforma';
 }
 
-// ---------- INVOICE HTML ----------
+// ---------- INVOICE HTML (uses FATT* fields; falls back to Mittente*) ----------
 function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const watermark = type === 'proforma';
   const docTitle  = type === 'proforma' ? 'Proforma Invoice' : 'Commercial Invoice';
@@ -244,14 +244,14 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   let ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
   if (type === 'proforma') ccySym = '€'; // proforma: unit price for customs in €
 
-  // Sender (Mittente)
-  const senderName    = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
-  const senderCountry = get(ship.fields, ['Mittente - Paese'], '');
-  const senderCity    = get(ship.fields, ['Mittente - Città'], '');
-  const senderZip     = get(ship.fields, ['Mittente - CAP'], '');
-  const senderAddr    = get(ship.fields, ['Mittente - Indirizzo'], '');
-  const senderPhone   = get(ship.fields, ['Mittente - Telefono'], '');
-  const senderVat     = get(ship.fields, ['Mittente - P.IVA/CF'], '');
+  // Preferisci i campi FATT …; se mancanti, fallback ai campi Mittente …
+  const billName    = get(ship.fields, ['FATT Ragione Sociale'], get(ship.fields, ['Mittente - Ragione Sociale'], '—'));
+  const billCountry = get(ship.fields, ['FATT Paese'],           get(ship.fields, ['Mittente - Paese'], ''));
+  const billCity    = get(ship.fields, ['FATT Città'],           get(ship.fields, ['Mittente - Città'], ''));
+  const billZip     = get(ship.fields, ['FATT CAP'],             get(ship.fields, ['Mittente - CAP'], ''));
+  const billAddr    = get(ship.fields, ['FATT Indirizzo'],       get(ship.fields, ['Mittente - Indirizzo'], ''));
+  const billPhone   = get(ship.fields, ['FATT Telefono'],        get(ship.fields, ['Mittente - Telefono'], ''));
+  const billVat     = get(ship.fields, ['FATT PIVA/CF'],         get(ship.fields, ['Mittente - P.IVA/CF'], ''));
 
   // Receiver (Destinatario)
   const rcName    = get(ship.fields, ['Destinatario - Ragione Sociale'], '—');
@@ -271,7 +271,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
     ? (get(ship.fields, ['Proforma - Numero'], '') || `PF-${sid}`)
     : (get(ship.fields, ['Fattura - Numero', 'Commercial Invoice - Numero'], '') || `CI-${sid}`);
 
-  const place  = senderCity || '';
+  const place  = billCity || '';
   const dateStr= fmtDate(pickupDate) || fmtDate(Date.now());
 
   return `<!doctype html>
@@ -337,10 +337,10 @@ footer{margin-top:22px; font-size:11px; color:#374151}
     <header>
       <div class="brand">
         <div class="tag">Sender</div>
-        <div class="logo"><div class="word">${escapeHTML(senderName)}</div></div>
+        <div class="logo"><div class="word">${escapeHTML(billName)}</div></div>
         <div class="meta">
-          ${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}${senderCountry? ' · ' : ''}${senderVat ? ('VAT ' + escapeHTML(senderVat)) : ''}<br/>
-          ${senderPhone ? ('Tel: ' + escapeHTML(senderPhone)) : ''}
+          ${escapeHTML(billAddr)}${billAddr?', ':''}${escapeHTML(billZip)} ${escapeHTML(billCity)}${billCity?', ':''}${escapeHTML(billCountry)}${billCountry? ' · ' : ''}${billVat ? ('VAT ' + escapeHTML(billVat)) : ''}<br/>
+          ${billPhone ? ('Tel: ' + escapeHTML(billPhone)) : ''}
         </div>
       </div>
       <div class="doc-meta">
@@ -607,7 +607,6 @@ export default async function handler(req, res) {
       }) : [{ title:'—', qty:0, price:(type==='proforma'?2:0), amount:0, meta:'', netLine:0, grsLine:0, hs:'' }];
 
       // Totals
-      // TOTAL must be sum of (qty × unit price) across lines
       const totalMoney = items.reduce((s, r) => s + num(r.amount), 0);
       const totalNet   = items.reduce((s, r) => s + num(r.netLine), 0);
       const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
