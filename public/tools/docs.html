@@ -1,3 +1,4 @@
+<!-- public/tools/docs.html -->
 <!doctype html>
 <html lang="it">
 <head>
@@ -18,24 +19,25 @@
   .small{color:#93a0bb;font-size:12px;margin-top:8px}
   button{height:40px;border-radius:10px;border:1px solid #f59e0b;background:#f59e0b;color:#111;font-weight:700;cursor:pointer}
   .out{margin-top:14px;white-space:pre-wrap;font-family:ui-monospace,Menlo,Consolas,monospace;background:#0a0f1c;border:1px solid #1f2a44;border-radius:10px;padding:10px}
+  .hidden{display:none}
 </style>
 </head>
 <body>
   <div class="card">
-    <h1>Utility Documenti (Proforma / PL / DLE / Fattura)</h1>
+    <h1>Utility Documenti (Proforma / DLE / Fattura)</h1>
     <div style="display:grid;gap:12px">
       <div>
-        <label>ID Spedizione (record Airtable)</label>
-        <input id="sid" placeholder="recXXXXXXXXXXXX" />
+        <label>ID Spedizione (record Airtable o ID Business)</label>
+        <input id="sid" placeholder="recXXXXXXXXXXXX oppure ID Spedizione" />
       </div>
+
       <div class="row">
         <div>
           <label>Tipo documento</label>
           <select id="dtype">
             <option value="proforma">Proforma</option>
-            <option value="pl">Packing List</option>
             <option value="dle">Dich. Esportazione (DLE)</option>
-            <option value="invoice">Fattura</option>
+            <option value="invoice">Fattura (Commercial Invoice)</option>
           </select>
         </div>
         <div>
@@ -43,6 +45,27 @@
           <input id="akey" placeholder="(se impostata in Vercel)" />
         </div>
       </div>
+
+      <!-- Override Corriere: visibile solo per Proforma -->
+      <div id="carrier-wrap">
+        <label>Corriere (override manuale – solo Proforma)</label>
+        <select id="carrier">
+          <option value="">Usa valore da Airtable</option>
+          <option value="DHL">DHL</option>
+          <option value="UPS">UPS</option>
+          <option value="FedEx">FedEx</option>
+          <option value="GLS">GLS</option>
+          <option value="BRT">BRT</option>
+          <option value="Altro">Altro…</option>
+        </select>
+      </div>
+
+      <!-- Campo libero che appare se selezioni "Altro" -->
+      <div id="carrier-other-wrap" class="hidden">
+        <label>Specificare corriere</label>
+        <input id="carrier-other" placeholder="Es. TNT, ChronoExpress, ecc." />
+      </div>
+
       <button id="go">Genera e allega</button>
       <div id="out" class="out"></div>
       <div class="small">Nota: l’URL firmato scade in ~10 minuti; Airtable scarica e salva il PDF nel proprio CDN.</div>
@@ -51,25 +74,62 @@
 
 <script>
 const $ = s => document.querySelector(s);
+
+const dtype = $('#dtype');
+const carrierWrap = $('#carrier-wrap');
+const carrierSel = $('#carrier');
+const carrierOtherWrap = $('#carrier-other-wrap');
+const carrierOther = $('#carrier-other');
+
+function syncCarrierVisibility(){
+  const isProforma = dtype.value === 'proforma';
+  carrierWrap.classList.toggle('hidden', !isProforma);
+  // reset extra field when not proforma
+  if (!isProforma){ carrierSel.value = ''; carrierOtherWrap.classList.add('hidden'); carrierOther.value=''; }
+}
+dtype.addEventListener('change', syncCarrierVisibility);
+syncCarrierVisibility();
+
+carrierSel.addEventListener('change', () => {
+  const needOther = carrierSel.value === 'Altro';
+  carrierOtherWrap.classList.toggle('hidden', !needOther);
+  if (!needOther) carrierOther.value = '';
+});
+
 $('#go').addEventListener('click', async () => {
   const sid = $('#sid').value.trim();
-  const type = $('#dtype').value;
+  const type = dtype.value;
   const akey = $('#akey').value.trim();
+
+  // calcola eventuale carrier override solo per proforma
+  let carrier = '';
+  if (type === 'proforma') {
+    carrier = carrierSel.value === 'Altro' ? carrierOther.value.trim() : carrierSel.value.trim();
+  }
+
   $('#out').textContent = 'Invio richiesta…';
   try{
+    const payload = { idSpedizione: sid, type };
+    if (type === 'proforma' && carrier) payload.carrier = carrier; // pass-through opzionale
+
     const r = await fetch('/api/docs/unified/generate', {
       method:'POST',
       headers: Object.assign({'Content-Type':'application/json'}, akey ? {'x-admin-key': akey} : {}),
-      body: JSON.stringify({ shipmentId: sid, type })
+      body: JSON.stringify(payload)
     });
+
     const j = await r.json().catch(()=> ({}));
     if (!r.ok || !j.ok) throw new Error(j.error || ('HTTP '+r.status));
+
     $('#out').textContent = [
-      'OK ✓ Documento:', type,
-      '\nCampo:', j.field,
-      '\nURL firmato:', j.url,
-      '\nVai su Airtable: allegato sarà visibile in pochi secondi.'
-    ].join(' ');
+      'OK ✓ Documento: ', type,
+      '\nCampo Airtable: ', j.field,
+      '\nURL firmato: ', j.url,
+      '\nApri il link per anteprima/stampa. Su Airtable l’allegato apparirà a breve.'
+    ].join('');
+
+    // opzionale: apri subito in nuova scheda
+    window.open(j.url, '_blank');
   }catch(e){
     $('#out').textContent = 'Errore: ' + (e.message || e);
   }
