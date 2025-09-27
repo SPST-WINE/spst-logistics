@@ -239,7 +239,7 @@ function normalizeType(t) {
 
 // ---------- INVOICE HTML ----------
 // Mittente: sempre "Mittente – …"
-// Destinatario: usa "FATT …" con fallback ai "Destinatario – …"
+// Nuovo: due card separate → Receiver (spedizione) + Invoice Receiver (fatturazione)
 function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const watermark = type === 'proforma';
   const docTitle  = type === 'proforma' ? 'Proforma Invoice' : 'Commercial Invoice';
@@ -256,14 +256,23 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const senderPhone   = get(ship.fields, ['Mittente - Telefono'], '');
   const senderVat     = get(ship.fields, ['Mittente - P.IVA/CF'], '');
 
-  // Receiver (pref. FATT …, fallback Destinatario …)
-  const rcName    = get(ship.fields, ['FATT Ragione Sociale'], get(ship.fields, ['Destinatario - Ragione Sociale'], '—'));
-  const rcAddr    = get(ship.fields, ['FATT Indirizzo'],       get(ship.fields, ['Destinatario - Indirizzo'], ''));
-  const rcCity    = get(ship.fields, ['FATT Città'],           get(ship.fields, ['Destinatario - Città'], ''));
-  const rcZip     = get(ship.fields, ['FATT CAP'],             get(ship.fields, ['Destinatario - CAP'], ''));
-  const rcCountry = get(ship.fields, ['FATT Paese'],           get(ship.fields, ['Destinatario - Paese'], ''));
-  const rcPhone   = get(ship.fields, ['FATT Telefono'],        get(ship.fields, ['Destinatario - Telefono'], ''));
-  const rcVat     = get(ship.fields, ['FATT PIVA/CF'],         get(ship.fields, ['Destinatario - P.IVA/CF'], ''));
+  // Receiver (SPEDIZIONE) — sempre dai campi Destinatario …
+  const shName    = get(ship.fields, ['Destinatario - Ragione Sociale'], '—');
+  const shAddr    = get(ship.fields, ['Destinatario - Indirizzo'], '');
+  const shCity    = get(ship.fields, ['Destinatario - Città'], '');
+  const shZip     = get(ship.fields, ['Destinatario - CAP'], '');
+  const shCountry = get(ship.fields, ['Destinatario - Paese'], '');
+  const shPhone   = get(ship.fields, ['Destinatario - Telefono'], '');
+  const shVat     = get(ship.fields, ['Destinatario - P.IVA/CF'], '');
+
+  // Invoice Receiver (FATTURAZIONE) — sempre dai campi FATT …
+  const btName    = get(ship.fields, ['FATT Ragione Sociale'], '');
+  const btAddr    = get(ship.fields, ['FATT Indirizzo'], '');
+  const btCity    = get(ship.fields, ['FATT Città'], '');
+  const btZip     = get(ship.fields, ['FATT CAP'], '');
+  const btCountry = get(ship.fields, ['FATT Paese'], '');
+  const btPhone   = get(ship.fields, ['FATT Telefono'], '');
+  const btVat     = get(ship.fields, ['FATT PIVA/CF'], '');
 
   // Shipment meta
   const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
@@ -358,15 +367,28 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 
     <hr class="sep" />
 
+    <!-- ROW 1: Receiver (spedizione) + Invoice Receiver (fatturazione) -->
     <section class="grid">
       <div class="card">
         <h3>Receiver</h3>
-        <div class="small"><strong>${escapeHTML(rcName)}</strong></div>
-        <div class="small">${escapeHTML(rcAddr)}</div>
-        <div class="small">${escapeHTML(rcZip)} ${escapeHTML(rcCity)} (${escapeHTML(rcCountry)})</div>
-        ${rcPhone ? `<div class="small">Tel: ${escapeHTML(rcPhone)}</div>` : ``}
-        ${rcVat   ? `<div class="small">VAT/CF: ${escapeHTML(rcVat)}</div>` : ``}
+        <div class="small"><strong>${escapeHTML(shName)}</strong></div>
+        <div class="small">${escapeHTML(shAddr)}</div>
+        <div class="small">${escapeHTML(shZip)} ${escapeHTML(shCity)} (${escapeHTML(shCountry)})</div>
+        ${shPhone ? `<div class="small">Tel: ${escapeHTML(shPhone)}</div>` : ``}
+        ${shVat   ? `<div class="small">VAT/CF: ${escapeHTML(shVat)}</div>` : ``}
       </div>
+      <div class="card">
+        <h3>Invoice Receiver</h3>
+        <div class="small"><strong>${escapeHTML(btName || shName)}</strong></div>
+        <div class="small">${escapeHTML(btAddr || shAddr)}</div>
+        <div class="small">${escapeHTML(btZip || shZip)} ${escapeHTML(btCity || shCity)} (${escapeHTML(btCountry || shCountry)})</div>
+        ${(btPhone || shPhone) ? `<div class="small">Tel: ${escapeHTML(btPhone || shPhone)}</div>` : ``}
+        ${(btVat || '') ? `<div class="small">VAT/CF: ${escapeHTML(btVat)}</div>` : ``}
+      </div>
+    </section>
+
+    <!-- ROW 2: Shipment Details (come prima) -->
+    <section class="grid" style="grid-template-columns:1fr">
       <div class="card">
         <h3>Shipment Details</h3>
         <div class="small">Carrier: ${escapeHTML(carrier || '—')}</div>
@@ -552,7 +574,7 @@ export default async function handler(req, res) {
     const sig     = q.sig;
     const exp     = q.exp;
 
-    // NEW: override manuale del corriere, valido SOLO per Proforma
+    // override manuale del corriere, valido SOLO per Proforma
     const carrierOverride = (q.carrier || q.courier || '').toString().trim();
 
     dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride: !!carrierOverride });
@@ -618,7 +640,7 @@ export default async function handler(req, res) {
       const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
       dlog('INVOICE TOTALS', { totalMoney, totalNet, totalGross });
 
-      // NEW: applica override corriere SOLO se type === 'proforma'
+      // applica override corriere SOLO se type === 'proforma'
       const shipForRender = (carrierOverride && type === 'proforma')
         ? { ...ship, fields: { ...(ship.fields||{}), Carrier: carrierOverride, Corriere: carrierOverride } }
         : ship;
