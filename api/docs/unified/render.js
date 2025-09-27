@@ -238,14 +238,12 @@ function normalizeType(t) {
 }
 
 // ---------- INVOICE HTML ----------
-// Mittente: sempre "Mittente – …"
-// Nuovo: due card separate → Receiver (spedizione) + Invoice Receiver (fatturazione)
 function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const watermark = type === 'proforma';
   const docTitle  = type === 'proforma' ? 'Proforma Invoice' : 'Commercial Invoice';
   const ccy = get(ship.fields, ['Valuta', 'Currency'], 'EUR');
   let ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
-  if (type === 'proforma') ccySym = '€'; // proforma: unit price for customs in €
+  if (type === 'proforma') ccySym = '€';
 
   // Sender (Mittente)
   const senderName    = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
@@ -256,7 +254,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const senderPhone   = get(ship.fields, ['Mittente - Telefono'], '');
   const senderVat     = get(ship.fields, ['Mittente - P.IVA/CF'], '');
 
-  // Receiver (SPEDIZIONE) — sempre dai campi Destinatario …
+  // Receiver (SPEDIZIONE)
   const shName    = get(ship.fields, ['Destinatario - Ragione Sociale'], '—');
   const shAddr    = get(ship.fields, ['Destinatario - Indirizzo'], '');
   const shCity    = get(ship.fields, ['Destinatario - Città'], '');
@@ -265,7 +263,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const shPhone   = get(ship.fields, ['Destinatario - Telefono'], '');
   const shVat     = get(ship.fields, ['Destinatario - P.IVA/CF'], '');
 
-  // Invoice Receiver (FATTURAZIONE) — sempre dai campi FATT …
+  // Invoice Receiver (FATTURAZIONE)
   const btName    = get(ship.fields, ['FATT Ragione Sociale'], '');
   const btAddr    = get(ship.fields, ['FATT Indirizzo'], '');
   const btCity    = get(ship.fields, ['FATT Città'], '');
@@ -296,6 +294,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
 :root{
   --brand:#111827; --accent:#0ea5e9; --ok:#16a34a; --text:#0b0f13; --muted:#6b7280;
   --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --zebra:#fafafa; --chip:#f3f4f6;
+  --stamp:#133a7a; /* blu timbro */
 }
 *{box-sizing:border-box}
 html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
@@ -307,7 +306,7 @@ header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px
 .tag{display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#374151; background:var(--chip); border:1px solid var(--border); padding:2px 6px; border-radius:6px; margin-bottom:6px}
 .logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:#111827}
 .brand .meta{margin-top:6px; font-size:12px; color:${watermark?'#475569':'#6b7280'}}
-.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:300px}
+.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:12px; padding:10px; min-width:300px}
 .doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'var(--accent)':'var(--ok)'}; font-weight:800}
 .doc-meta .kv{margin-top:6px}
 .kv div{margin:2px 0}
@@ -337,6 +336,32 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 .btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:8px; cursor:pointer}
 .btn:hover{background:#f9fafb}
 @media print {.printbar{display:none}}
+
+/* Margine extra per la card "Shipment Details" */
+.ship-card{margin-top:8px}
+
+/* Timbro "realistico" con effetto inchiostro */
+.stamp{
+  display:inline-block;
+  padding:10px 12px;
+  border:2.5px solid rgba(19,58,122,.92);
+  box-shadow:
+    inset 0 0 0 1.5px rgba(19,58,122,.35),
+    0 1px 0 rgba(0,0,0,.04);
+  color:rgba(19,58,122,.96);
+  border-radius:10px;
+  text-transform:uppercase;
+  font-weight:800;
+  letter-spacing:.05em;
+  transform:rotate(-5deg);
+  opacity:.96;
+  background:
+    radial-gradient(120px 40px at 20% 30%, rgba(19,58,122,.05), transparent 60%),
+    radial-gradient(80px 30px at 80% 70%, rgba(19,58,122,.06), transparent 60%);
+  filter:contrast(1.02) saturate(1.05);
+}
+.stamp .sub{display:block; font-size:10px; letter-spacing:.08em; margin-top:3px; font-weight:700}
+.stamp .thin{font-weight:700; opacity:.95}
 </style>
 </head>
 <body>
@@ -387,9 +412,9 @@ footer{margin-top:22px; font-size:11px; color:#374151}
       </div>
     </section>
 
-    <!-- ROW 2: Shipment Details (come prima) -->
+    <!-- ROW 2: Shipment Details (con un po' di margine extra) -->
     <section class="grid" style="grid-template-columns:1fr">
-      <div class="card">
+      <div class="card ship-card">
         <h3>Shipment Details</h3>
         <div class="small">Carrier: ${escapeHTML(carrier || '—')}</div>
         <div class="small">Incoterm: ${escapeHTML(incoterm || '—')} · Currency: ${escapeHTML(ccy)}</div>
@@ -446,6 +471,14 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         <div>
           <div class="label">Signature</div>
           <div class="box"></div>
+          <!-- Timbro automatizzato con dati mittente -->
+          <div class="stamp" style="margin-top:10px">
+            ${escapeHTML(senderName)}
+            <span class="sub thin">
+              ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)} · VAT: ${escapeHTML(senderVat || '—')}
+              ${senderPhone ? (' · Tel: ' + escapeHTML(senderPhone)) : ''}
+            </span>
+          </div>
         </div>
       </div>
     </footer>
@@ -599,14 +632,14 @@ export default async function handler(req, res) {
       const pl = await getPLRows({ ship, sidRaw });
       dlog('PL SUMMARY', { count: pl.length });
 
-      // Map lines with HS from Tipologia + ABV + weights
+      // Map lines
       const items = pl.length ? pl.map((r, i) => {
         const f = r.fields || {};
         const title   = String(f['Etichetta'] ?? '').trim();
         const qty     = Number(f['Bottiglie'] ?? 0) || 0;
         const abv     = get(f, ['Gradazione (% vol)','Gradazione','ABV','Vol %'], '');
 
-        const tipologia = String(f['Tipologia'] ?? '').trim(); // case sensitive
+        const tipologia = String(f['Tipologia'] ?? '').trim();
         let hsByTip = '';
         if (tipologia === 'vino fermo') hsByTip = '2204.21';
         else if (tipologia === 'vino spumante') hsByTip = '2204.10';
@@ -620,7 +653,6 @@ export default async function handler(req, res) {
         const netLine = qty * netPerB;
         const grsLine = qty * grsPerB;
 
-        // Price: commercial → field Prezzo; proforma → always 2
         const price   = (type === 'proforma') ? 2 : (Number(f['Prezzo'] ?? 0) || 0);
         const amount  = qty * price;
 
@@ -640,7 +672,7 @@ export default async function handler(req, res) {
       const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
       dlog('INVOICE TOTALS', { totalMoney, totalNet, totalGross });
 
-      // applica override corriere SOLO se type === 'proforma'
+      // override corriere SOLO per proforma
       const shipForRender = (carrierOverride && type === 'proforma')
         ? { ...ship, fields: { ...(ship.fields||{}), Carrier: carrierOverride, Corriere: carrierOverride } }
         : ship;
