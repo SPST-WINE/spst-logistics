@@ -68,18 +68,19 @@ export default async function handler(req, res) {
          padding:10px 12px;font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;color:#cfe0ff;white-space:pre-wrap}
     .log.ok{border-color:rgba(30,194,139,.35)}
     .log.err{border-color:rgba(255,107,107,.35)}
+    .hidden{display:none}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="page-title">Utility Documenti</div>
-    <div class="page-sub">Crea <strong>Proforma</strong>, <strong>Fattura commerciale</strong> e <strong>DLE</strong>. Il link generato è firmato.</div>
+    <div class="page-sub">Crea <strong>Proforma</strong>, <strong>Fattura commerciale</strong> e <strong>DLE</strong>. Il link generato è firmato. Per la Proforma puoi selezionare manualmente il corriere.</div>
 
     <div class="card">
       <div class="row cols-2">
         <div class="field">
           <label for="idsped">ID Spedizione</label>
-          <input id="idsped" placeholder="es. SP-2025-09-11-4599" />
+          <input id="idsped" placeholder="es. SP-2025-09-11-4599 o recXXXXXXXXXXXX" />
         </div>
         <div class="field">
           <label for="tipo">Tipo documento</label>
@@ -88,6 +89,26 @@ export default async function handler(req, res) {
             <option value="fattura">Fattura commerciale</option>
             <option value="dle">Dichiarazione libera esportazione</option>
           </select>
+        </div>
+      </div>
+
+      <!-- Override corriere: visibile solo per Proforma -->
+      <div id="carrierBlock" class="row" style="margin-top:var(--gap);">
+        <div class="field">
+          <label for="carrier">Corriere (override manuale — solo Proforma)</label>
+          <select id="carrier">
+            <option value="">Usa valore da Airtable</option>
+            <option value="DHL">DHL</option>
+            <option value="UPS">UPS</option>
+            <option value="FedEx">FedEx</option>
+            <option value="GLS">GLS</option>
+            <option value="BRT">BRT</option>
+            <option value="Altro">Altro…</option>
+          </select>
+        </div>
+        <div class="field hidden" id="carrierOtherWrap">
+          <label for="carrierOther">Specifica corriere</label>
+          <input id="carrierOther" placeholder="Es. TNT, ChronoExpress, ecc." />
         </div>
       </div>
 
@@ -114,6 +135,29 @@ export default async function handler(req, res) {
   var bCopy = $('#copyUrl');
   var lastUrl = '';
 
+  // Carrier UI
+  var carrierBlock = $('#carrierBlock');
+  var selCarrier = $('#carrier');
+  var carrierOtherWrap = $('#carrierOtherWrap');
+  var inpCarrierOther = $('#carrierOther');
+
+  function toggleCarrierUI(){
+    var isProforma = selTp.value === 'proforma';
+    carrierBlock.classList.toggle('hidden', !isProforma);
+    if (!isProforma) {
+      selCarrier.value = '';
+      carrierOtherWrap.classList.add('hidden');
+      inpCarrierOther.value = '';
+    }
+  }
+  selTp.addEventListener('change', toggleCarrierUI);
+  selCarrier.addEventListener('change', function(){
+    var needOther = selCarrier.value === 'Altro';
+    carrierOtherWrap.classList.toggle('hidden', !needOther);
+    if (!needOther) inpCarrierOther.value = '';
+  });
+  toggleCarrierUI();
+
   function say(t, ok){
     log.textContent = t || '';
     log.classList.toggle('ok', !!ok);
@@ -139,14 +183,24 @@ export default async function handler(req, res) {
     var idSped = inpId.value.trim();
     var type   = selTp.value;
 
+    // Calcola override corriere solo per proforma
+    var carrier = '';
+    if (type === 'proforma') {
+      if (selCarrier.value === 'Altro') carrier = (inpCarrierOther.value || '').trim();
+      else carrier = (selCarrier.value || '').trim();
+    }
+
     btn.disabled = true;
     setActionsEnabled(false);
     say('Generazione in corso…');
 
+    var payload = { idSpedizione: idSped, type: type };
+    if (type === 'proforma' && carrier) payload.carrier = carrier;
+
     fetch('/api/docs/unified/generate', {
       method:'POST',
       headers:{ 'Content-Type':'application/json' },
-      body: JSON.stringify({ idSpedizione: idSped, type: type })
+      body: JSON.stringify(payload)
     })
     .then(function(r){
       return r.text().then(function(text){
