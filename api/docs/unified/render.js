@@ -11,6 +11,7 @@ export const config = { runtime: 'nodejs' };
  *  - sid | ship : shipment identifier (business "ID Spedizione" or Airtable recId)
  *  - type       : proforma | fattura | commercial | commerciale | invoice | dle
  *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
+ *  - carrier    : (OPZIONALE) override manuale del corriere — usato SOLO per Proforma
  *
  * Env:
  *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
@@ -551,7 +552,10 @@ export default async function handler(req, res) {
     const sig     = q.sig;
     const exp     = q.exp;
 
-    dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp });
+    // NEW: override manuale del corriere, valido SOLO per Proforma
+    const carrierOverride = (q.carrier || q.courier || '').toString().trim();
+
+    dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride: !!carrierOverride });
 
     if (!sidRaw) return bad(res, 400, 'Bad request', 'Missing sid/ship');
     if (!verifySigFlexible({ sid: sidRaw, rawType, normType: type, exp, sig })) {
@@ -614,9 +618,14 @@ export default async function handler(req, res) {
       const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
       dlog('INVOICE TOTALS', { totalMoney, totalNet, totalGross });
 
+      // NEW: applica override corriere SOLO se type === 'proforma'
+      const shipForRender = (carrierOverride && type === 'proforma')
+        ? { ...ship, fields: { ...(ship.fields||{}), Carrier: carrierOverride, Corriere: carrierOverride } }
+        : ship;
+
       html = renderInvoiceHTML({
         type,
-        ship,
+        ship: shipForRender,
         lines: items,
         total: totalMoney,
         totalsWeights: { net: totalNet, gross: totalGross },
