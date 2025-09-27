@@ -340,31 +340,57 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 /* Margine extra per la card "Shipment Details" */
 .ship-card{margin-top:8px}
 
-/* Timbro "realistico" con effetto inchiostro */
+/* Timbro "scannerizzato": bordo irregolare, rumore, leggero bleed */
 .stamp{
+  position:relative;
   display:inline-block;
-  padding:10px 12px;
-  border:2.5px solid rgba(19,58,122,.92);
-  box-shadow:
-    inset 0 0 0 1.5px rgba(19,58,122,.35),
-    0 1px 0 rgba(0,0,0,.04);
-  color:rgba(19,58,122,.96);
-  border-radius:10px;
+  padding:12px 14px 10px;
+  border:2.6px solid var(--stamp);
+  color:var(--stamp);
+  border-radius:12px;
   text-transform:uppercase;
-  font-weight:800;
-  letter-spacing:.05em;
-  transform:rotate(-5deg);
-  opacity:.96;
+  font-weight:900;
+  letter-spacing:.06em;
+  transform:rotate(-5.2deg);
   background:
-    radial-gradient(120px 40px at 20% 30%, rgba(19,58,122,.05), transparent 60%),
-    radial-gradient(80px 30px at 80% 70%, rgba(19,58,122,.06), transparent 60%);
-  filter:contrast(1.02) saturate(1.05);
+    radial-gradient(120px 40px at 18% 28%, rgba(19,58,122,.06), transparent 60%),
+    radial-gradient(90px 34px at 82% 72%, rgba(19,58,122,.07), transparent 60%),
+    repeating-radial-gradient( circle at 30% 60%, rgba(19,58,122,.06) 0 2px, transparent 2px 4px );
+  box-shadow:
+    0 0 0 1px rgba(19,58,122,.18),
+    inset 0 0 0 1.2px rgba(19,58,122,.32);
+  filter:url(#stampDistort) blur(.15px) contrast(1.08) saturate(1.05);
+  opacity:.98;
+  mix-blend-mode:multiply;
 }
-.stamp .sub{display:block; font-size:10px; letter-spacing:.08em; margin-top:3px; font-weight:700}
-.stamp .thin{font-weight:700; opacity:.95}
+.stamp:after{
+  content:"";
+  position:absolute; inset:-4px;
+  border-radius:14px;
+  background:
+    radial-gradient(12px 6px at 8% 24%, rgba(0,0,0,.08), transparent 70%),
+    radial-gradient(14px 7px at 92% 76%, rgba(0,0,0,.07), transparent 70%),
+    radial-gradient(10px 5px at 60% 18%, rgba(0,0,0,.05), transparent 70%);
+  pointer-events:none;
+  mix-blend-mode:multiply;
+  filter:blur(.6px);
+}
+.stamp .line{display:block; font-size:10px; letter-spacing:.08em; margin-top:3px; font-weight:800}
+.stamp .line.small{font-size:9px; font-weight:700; letter-spacing:.09em}
 </style>
 </head>
 <body>
+  <!-- SVG filter per bordo irregolare/bleed -->
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <filter id="stampDistort">
+        <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="noise"/>
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.4" xChannelSelector="R" yChannelSelector="G"/>
+        <feGaussianBlur stdDeviation="0.15"/>
+      </filter>
+    </defs>
+  </svg>
+
   <div class="page">
     <div class="printbar">
       <button class="btn" onclick="window.print()">Print / Save PDF</button>
@@ -392,7 +418,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 
     <hr class="sep" />
 
-    <!-- ROW 1: Receiver (spedizione) + Invoice Receiver (fatturazione) -->
+    <!-- ROW 1: Receiver (spedizione) + Invoice Receiver -->
     <section class="grid">
       <div class="card">
         <h3>Receiver</h3>
@@ -412,7 +438,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
       </div>
     </section>
 
-    <!-- ROW 2: Shipment Details (con un po' di margine extra) -->
+    <!-- ROW 2: Shipment Details (con margine extra) -->
     <section class="grid" style="grid-template-columns:1fr">
       <div class="card ship-card">
         <h3>Shipment Details</h3>
@@ -471,13 +497,11 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         <div>
           <div class="label">Signature</div>
           <div class="box"></div>
-          <!-- Timbro automatizzato con dati mittente -->
-          <div class="stamp" style="margin-top:10px">
+          <!-- Timbro automatizzato con dati mittente (nome + indirizzo + VAT + tel) -->
+          <div class="stamp" style="margin-top:12px">
             ${escapeHTML(senderName)}
-            <span class="sub thin">
-              ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)} · VAT: ${escapeHTML(senderVat || '—')}
-              ${senderPhone ? (' · Tel: ' + escapeHTML(senderPhone)) : ''}
-            </span>
+            <span class="line">${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}</span>
+            <span class="line small">VAT: ${escapeHTML(senderVat || '—')}${senderPhone ? (' · TEL: ' + escapeHTML(senderPhone)) : ''}</span>
           </div>
         </div>
       </div>
