@@ -631,7 +631,7 @@ export default async function handler(req, res) {
     const sig     = q.sig;
     const exp     = q.exp;
 
-    // override manuale del corriere, valido SOLO per Proforma
+    // override manuale del corriere — valido per Proforma **e** Commercial
     const carrierOverride = (q.carrier || q.courier || '').toString().trim();
 
     dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride: !!carrierOverride });
@@ -696,8 +696,8 @@ export default async function handler(req, res) {
       const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
       dlog('INVOICE TOTALS', { totalMoney, totalNet, totalGross });
 
-      // override corriere SOLO per proforma
-      const shipForRender = (carrierOverride && type === 'proforma')
+      // Applica override corriere per Proforma **e** Commercial
+      const shipForRender = (carrierOverride && (type === 'proforma' || type === 'commercial'))
         ? { ...ship, fields: { ...(ship.fields||{}), Carrier: carrierOverride, Corriere: carrierOverride } }
         : ship;
 
