@@ -29,9 +29,9 @@ export default async function handler(req, res) {
     }
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
-    const idSpedizione = (body.idSpedizione || '').trim();
+    const idSpedizione = (body.idSpedizione || body.shipmentId || '').trim();
     const type = (body.type || 'proforma').trim(); // 'proforma' | 'fattura' | 'dle'
-    const carrier = (body.carrier || body.courier || '').toString().trim(); // pass-through opzionale (usato solo per proforma in render.js)
+    const carrier = (body.carrier || '').toString().trim();
     if (!idSpedizione) {
       return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
     }
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
     const qs = canonical(payload) + `&sig=${sig}` + (carrier ? `&carrier=${encodeURIComponent(carrier)}` : '');
     const url = `${base}/api/docs/unified/render?${qs}`;
 
-    console.log('[generate] OK', { time: now, type, sid, ship, exp, carrier: carrier || null });
+    console.log('[generate] OK', { time: now, type, sid, ship, exp, carrier: !!carrier });
 
     const fieldMap = { proforma: 'Allegato Fattura', fattura: 'Allegato Fattura', dle: 'Allegato DLE' };
 
