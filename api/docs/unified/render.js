@@ -16,7 +16,7 @@ export const config = { runtime: 'nodejs' };
  *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
  *  (PDF) I seguenti file devono esistere nel repo:
  *    ./assets/dle/FedEx_DLE_master.pdf
- *    ./assets/dle/UPS_DLE_master.pdf
+ *    ./assets/dle/UPS_DLE_Master.pdf   <-- attenzione alla M maiuscola
  *    ./assets/fonts/Inter-Regular.ttf
  */
 
@@ -50,7 +50,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const ASSETS_DIR = path.join(__dirname, '..', '..', '..', 'assets'); // /assets
 const PDF_FDX    = path.join(ASSETS_DIR, 'dle', 'FedEx_DLE_master.pdf');
-const PDF_UPS    = path.join(ASSETS_DIR, 'dle', 'UPS_DLE_master.pdf');
+const PDF_UPS    = path.join(ASSETS_DIR, 'dle', 'UPS_DLE_Master.pdf'); // M maiuscola
 const FONT_INTER = path.join(ASSETS_DIR, 'fonts', 'Inter-Regular.ttf');
 
 // ---------- Airtable helpers ----------
@@ -626,8 +626,6 @@ function buildDLEData(ship){
 }
 
 // ---------- COORDINATE: FEDEx / UPS ----------
-// NOTE: Le coordinate seguenti sono una base funzionante A4 (pt). Se servono micro-spostamenti
-// potrai dirmelo e ti restituisco subito i valori aggiornati.
 const FED_EX_FIELDS = {
   // page 0, unità: punti PDF (72pt = 1")
   shipment_id:    { x: 420, y: 760, size: 10 },
