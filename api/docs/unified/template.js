@@ -1,3 +1,5 @@
+// api/docs/unified/template.js
+
 // Rende l'HTML del documento unificato (Proforma/Commercial).
 export function renderUnifiedHTML({ mode = "proforma", sender, consignee, shipment, lines, total }) {
   const title = mode === "commercial" ? "Commercial Invoice" : "Proforma Invoice";
