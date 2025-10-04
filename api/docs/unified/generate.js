@@ -18,7 +18,8 @@ function normalizeType(t) {
 }
 
 function canonical(params) {
-  const keys = ['sid', 'type', 'exp', 'ship', 'format', 'carrier'];
+  // Query ordinata (NON usata per la firma, solo per leggibilità)
+  const keys = ['sid', 'type', 'exp', 'ship', 'carrier']; // niente format: render sceglierà HTML
   return keys
     .filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== '')
     .map((k) => `${k}=${encodeURIComponent(String(params[k]))}`)
@@ -38,41 +39,35 @@ export default async function handler(req, res) {
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const idSpedizione = (body.idSpedizione || body.shipmentId || '').trim();
-    const rawType = (body.type || 'proforma').trim();
+    const rawType = (body.type || 'proforma').trim(); // 'proforma' | 'commercial' | 'dle'
     const type = normalizeType(rawType);
-    const carrier = (body.carrier || body.courier || '').toString().trim().toLowerCase();
-    const formatIn = (body.format || '').toString().trim().toLowerCase();
+    const carrier = (body.carrier || body.courier || '').toString().trim().toLowerCase(); // 'fedex' | 'ups' (opz.)
 
     if (!idSpedizione) {
       return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
     }
 
-    const sid = idSpedizione;
-    const ship = idSpedizione;
-    const exp = Math.floor(Date.now() / 1000) + 15 * 60;
+    // Valori
+    const sid = idSpedizione;  // firmato
+    const ship = idSpedizione; // mostrato nel template
+    const exp = Math.floor(Date.now() / 1000) + 15 * 60; // 15 minuti
     const sig = makeSig(sid, type, exp);
 
     const proto = (req.headers['x-forwarded-proto'] || 'https');
     const host = req.headers['x-forwarded-host'] || req.headers.host;
     const base = `${proto}://${host}`;
 
-    let format = '';
-    let carrierParam = '';
-    if (type === 'dle') {
-      const hasCarrier = carrier === 'fedex' || carrier === 'ups';
-      if (formatIn === 'pdf' || hasCarrier) {
-        format = 'pdf';
-        if (hasCarrier) carrierParam = carrier;
-      }
-    }
-
-    const payload = { sid, type, exp, ship, ...(format ? { format } : {}), ...(carrierParam ? { carrier: carrierParam } : {}) };
+    const payload = { sid, type, exp, ship, ...(carrier ? { carrier } : {}) };
     const qs = canonical(payload) + `&sig=${sig}`;
     const url = `${base}/api/docs/unified/render?${qs}`;
 
-    const fieldMap = { proforma: 'Allegato Fattura', commercial: 'Allegato Fattura', dle: (format ? 'Allegato DLE PDF' : 'Allegato DLE') };
+    const fieldMap = {
+      proforma: 'Allegato Fattura',
+      commercial: 'Allegato Fattura',
+      dle: 'Allegato DLE'
+    };
 
-    console.log('[generate] OK', { time: now, type, sid, ship, exp, format: format || 'html', carrier: carrierParam || null });
+    console.log('[generate] OK', { time: now, type, sid, ship, exp, carrier: carrier || null });
 
     return res.status(200).json({
       ok: true,
