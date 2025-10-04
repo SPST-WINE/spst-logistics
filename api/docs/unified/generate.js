@@ -1,4 +1,6 @@
 // api/docs/unified/generate.js
+
+// api/docs/unified/generate.js
 // ESM: il progetto ha "type":"module" nel package.json
 import crypto from 'node:crypto';
 
@@ -8,20 +10,11 @@ function makeSig(sid, type, exp) {
   return crypto.createHmac('sha256', SECRET).update(`${sid}.${type}.${exp}`).digest('hex');
 }
 
-function normalizeType(t) {
-  const raw = String(t || 'proforma').toLowerCase().trim();
-  const commercialAliases = new Set(['commercial', 'commerciale', 'invoice', 'fattura', 'fattura commerciale']);
-  const dleAliases = new Set(['dle', 'dichiarazione', 'libera', 'esportazione', 'export', 'export declaration']);
-  if (dleAliases.has(raw)) return 'dle';
-  if (commercialAliases.has(raw)) return 'commercial';
-  return 'proforma';
-}
-
 function canonical(params) {
-  // Query ordinata (NON per la firma, solo per leggibilità)
-  const keys = ['sid', 'type', 'exp', 'ship', 'carrier'];
+  // Query ordinata (NON usata per la firma, solo per leggibilità)
+  const keys = ['sid', 'type', 'exp', 'ship'];
   return keys
-    .filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== '')
+    .filter((k) => params[k] !== undefined && params[k] !== null)
     .map((k) => `${k}=${encodeURIComponent(String(params[k]))}`)
     .join('&');
 }
@@ -39,31 +32,30 @@ export default async function handler(req, res) {
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const idSpedizione = (body.idSpedizione || body.shipmentId || '').trim();
-    const rawType = (body.type || 'proforma').trim();
-    const type = normalizeType(rawType);
-    const carrier = (body.carrier || body.courier || '').toString().trim().toLowerCase();
-
+    const type = (body.type || 'proforma').trim(); // 'proforma' | 'fattura' | 'dle'
+    const carrier = (body.carrier || '').toString().trim();
     if (!idSpedizione) {
       return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
     }
 
     // Valori
     const sid = idSpedizione;  // firmato
-    const ship = idSpedizione; // echo in query
+    const ship = idSpedizione; // mostrato nel template
+
     const exp = Math.floor(Date.now() / 1000) + 15 * 60; // 15 minuti
+    const payload = { sid, type, exp, ship };
     const sig = makeSig(sid, type, exp);
 
     const proto = (req.headers['x-forwarded-proto'] || 'https');
     const host = req.headers['x-forwarded-host'] || req.headers.host;
     const base = `${proto}://${host}`;
 
-    const payload = { sid, type, exp, ship, ...(carrier ? { carrier } : {}) };
-    const qs = canonical(payload) + `&sig=${sig}`;
+    const qs = canonical(payload) + `&sig=${sig}` + (carrier ? `&carrier=${encodeURIComponent(carrier)}` : '');
     const url = `${base}/api/docs/unified/render?${qs}`;
 
-    const fieldMap = { proforma: 'Allegato Fattura', commercial: 'Allegato Fattura', dle: 'Allegato DLE' };
+    console.log('[generate] OK', { time: now, type, sid, ship, exp, carrier: !!carrier });
 
-    console.log('[generate] OK', { time: now, type, sid, ship, exp, carrier: carrier || null });
+    const fieldMap = { proforma: 'Allegato Fattura', fattura: 'Allegato Fattura', dle: 'Allegato DLE' };
 
     return res.status(200).json({
       ok: true,
