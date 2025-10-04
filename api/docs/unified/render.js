@@ -11,7 +11,7 @@ export const config = { runtime: 'nodejs' };
  *  - sid | ship : shipment identifier (business "ID Spedizione" or Airtable recId)
  *  - type       : proforma | fattura | commercial | commerciale | invoice | dle
  *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
- *  - carrier    : (OPZIONALE) 'fedex' | 'ups' — se non passato, letto da Airtable (Corriere/Carrier)
+ *  - carrier    : (OPZIONALE) 'fedex' | 'ups' — per DLE seleziona il template e **sovrascrive** il "To:"
  *
  * Env:
  *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
@@ -219,13 +219,6 @@ const get = (obj, keys, def = '') => {
   return def;
 };
 const fmtDate = (d) => { try { return new Date(d).toLocaleDateString('it-IT'); } catch { return ''; } };
-const fmtDateDD = (d) => {
-  const dt = new Date(d || Date.now());
-  const dd = String(dt.getDate()).padStart(2,'0');
-  const mm = String(dt.getMonth()+1).padStart(2,'0');
-  const yy = dt.getFullYear();
-  return `${dd}-${mm}-${yy}`;
-};
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
 const money = (x, sym = '€') =>
   `${sym} ${num(x).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -242,6 +235,22 @@ function normalizeType(t) {
   if (dleAliases.has(raw)) return 'dle';
   if (commercialAliases.has(raw)) return 'commercial';
   return 'proforma';
+}
+
+// ---------- Carrier helpers ----------
+function resolveCarrierKeyAndDisplay({ carrierOverride, ship }) {
+  const norm = (s='') => String(s || '').toLowerCase().trim();
+  const over = norm(carrierOverride);
+  if (over === 'fedex') return { key: 'fedex', display: 'FedEx' };
+  if (over === 'ups')   return { key: 'ups',   display: 'UPS' };
+
+  const f = ship?.fields || {};
+  const raw = String(f['Corriere'] || f['Carrier'] || '').trim();
+  const low = norm(raw);
+  if (low.includes('fedex')) return { key: 'fedex', display: 'FedEx' };
+  if (low.includes('ups'))   return { key: 'ups',   display: 'UPS' };
+  // generico
+  return { key: null, display: raw || '—' };
 }
 
 /* =======================================================================================
@@ -347,10 +356,6 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 .btn:hover{background:#f9fafb}
 @media print {.printbar{display:none}}
 .ship-card{margin-top:8px}
-.stamp{position:relative; display:inline-block; padding:12px 14px 10px; border:2.6px solid #133a7a; color:#133a7a; border-radius:12px;
-  text-transform:uppercase; font-weight:900; letter-spacing:.06em; transform:rotate(-5.2deg);}
-.stamp .line{display:block; font-size:10px; letter-spacing:.08em; margin-top:3px; font-weight:800}
-.stamp .line.small{font-size:9px; font-weight:700; letter-spacing:.09em}
 </style>
 </head>
 <body>
@@ -430,9 +435,6 @@ footer{margin-top:22px; font-size:11px; color:#374151}
       </table>
     </div>
 
-    <div class="note">Country of origin: <strong>Italy</strong>.</div>
-    ${type==='proforma' ? `<div class="note"><strong>Note:</strong> Goods are not for resale. Declared values are for customs purposes only.</div>` : ''}
-
     <footer>
       <div class="sign">
         <div>
@@ -442,11 +444,6 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         <div>
           <div class="label">Signature</div>
           <div class="box"></div>
-          <div class="stamp" style="margin-top:12px">
-            ${escapeHTML(senderName)}
-            <span class="line">${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}</span>
-            <span class="line small">VAT: ${escapeHTML(senderVat || '—')}${senderPhone ? (' · TEL: ' + escapeHTML(senderPhone)) : ''}</span>
-          </div>
         </div>
       </div>
     </footer>
@@ -456,29 +453,21 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 }
 
 /* =======================================================================================
- * DLE HTML — GENERICO + VARIANTI FEDEX/UPS
+ * DLE HTML — FedEx / UPS / Generico
  * ======================================================================================= */
 
-function renderDLEGenericHTML({ ship }) {
-  const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
-  const senderRS  = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
-  const senderCity= get(ship.fields, ['Mittente - Città'], '');
-  const pickup    = get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
-  const dateStr   = fmtDate(pickup) || fmtDate(Date.now());
-  const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
-
-  return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Export Free Declaration — ${escapeHTML(sid)}</title>
-<style>
-:root{ --text:#0b0f13; --muted:#6b7280; --border:#e5e7eb; }
-*{box-sizing:border-box} html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+function dleCommonCss() {
+  return `
+:root{ --text:#0b0f13; --muted:#6b7280; --border:#e5e7eb; --chip:#f3f4f6 }
+*{box-sizing:border-box}
+html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
 .page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm}
 header{display:flex; align-items:flex-start; justify-content:space-between; gap:16px}
 .brand{max-width:70%} .logo{font-size:24px; font-weight:800}
 .meta{margin-top:4px; font-size:12px; color:var(--muted)}
 .doc-meta{text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
-.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#111827; font-weight:800}
+.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; font-weight:800}
+.badge{display:inline-block; font-size:11px; text-transform:uppercase; letter-spacing:.06em; border-radius:8px; padding:6px 8px; border:1px solid var(--border); background:var(--chip)}
 hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 .to{font-size:12px; color:#374151; margin-bottom:12px}
 .section{font-size:13px; line-height:1.55}
@@ -488,36 +477,13 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 .box{height:64px; border:1px dashed #d1d5db; border-radius:10px; width:260px}
 .printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
 .btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:10px; cursor:pointer}
-@media print {.printbar{display:none}}
-</style></head>
-<body><div class="page">
-  <div class="printbar"><button class="btn" onclick="window.print()">Print / Save PDF</button></div>
-  <header>
-    <div class="brand">
-      <div class="logo">${escapeHTML(senderRS)}</div>
-      <div class="meta">Shipment ID: ${escapeHTML(sid)}</div>
-    </div>
-    <div class="doc-meta">
-      <div class="title">Export Free Declaration</div>
-      <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
-      <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
-    </div>
-  </header>
-  <hr class="sep" />
-  <div class="to"><strong>To:</strong> ${escapeHTML(carrier)}</div>
-  ${dleBodyHTML(carrier, senderRS)}
-  <div class="footer">
-    <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
-    <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
-    <div class="sign" style="margin-top:10px"><div><strong>Signature of Shipper:</strong></div><div class="box"></div></div>
-  </div>
-</div></body></html>`;
+@media print {.printbar{display:none}}`;
 }
 
-function dleBodyHTML(carrier, senderRS) {
+function dleBodyFixedText(carrierDisplay, senderRS) {
   return `
   <div class="section">
-    <p>I, the undersigned <strong>${escapeHTML(senderRS)}</strong>, as Shipper, hereby declare under my sole responsibility that all goods entrusted to <strong>${escapeHTML(carrier)}</strong>:</p>
+    <p>I, the undersigned <strong>${escapeHTML(senderRS)}</strong>, as Shipper, hereby declare under my sole responsibility that all goods entrusted to <strong>${escapeHTML(carrierDisplay)}</strong>:</p>
     <ul class="list">
       <li>Are not included in the list of products protected by the Washington Convention (CITES) – Council Regulation (EC) No. 338/97 and subsequent amendments.</li>
       <li>Are not included in the list of goods covered by Council Regulation (EC) No. 116/2009 on the export of cultural goods.</li>
@@ -546,30 +512,56 @@ function dleBodyHTML(carrier, senderRS) {
   </div>`;
 }
 
-// FedEx: variante stilistica (richiama il contenuto del PDF, ma in HTML)
-function renderDLEFedExHTML({ ship }) {
-  const html = renderDLEGenericHTML({ ship });
-  return html.replace('<div class="title">Export Free Declaration</div>', '<div class="title">Export Free Declaration · FedEx</div>');
+function renderDLEGenericHTML({ ship, carrierDisplay }) {
+  const senderRS   = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
+  const senderCity = get(ship.fields, ['Mittente - Città'], '');
+  const pickup     = get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
+  const dateStr    = fmtDate(pickup) || fmtDate(Date.now());
+  const sid        = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
+
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Export Free Declaration — ${escapeHTML(sid)}</title>
+<style>${dleCommonCss()}</style></head>
+<body>
+<div class="page">
+  <div class="printbar"><button class="btn" onclick="window.print()">Print / Save PDF</button></div>
+  <header>
+    <div class="brand">
+      <div class="logo">${escapeHTML(senderRS)}</div>
+      <div class="meta">Shipment ID: ${escapeHTML(sid)}</div>
+    </div>
+    <div class="doc-meta">
+      <div class="title">Export Free Declaration</div>
+      <div class="badge">Date: ${escapeHTML(dateStr)}<br/>Place: ${escapeHTML(senderCity || '')}</div>
+    </div>
+  </header>
+
+  <hr class="sep" />
+  <div class="to"><strong>To:</strong> ${escapeHTML(carrierDisplay)}</div>
+
+  ${dleBodyFixedText(carrierDisplay, senderRS)}
+
+  <div class="footer">
+    <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
+    <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
+    <div class="sign" style="margin-top:10px"><div><strong>Signature of Shipper:</strong></div><div class="box"></div></div>
+  </div>
+</div>
+</body></html>`;
 }
 
-// UPS: variante stilistica (richiama il contenuto del PDF, ma in HTML)
-function renderDLEUPSHTML({ ship }) {
-  const html = renderDLEGenericHTML({ ship });
-  return html.replace('<div class="title">Export Free Declaration</div>', '<div class="title">Export Free Declaration · UPS</div>');
+function renderDLEFedExHTML({ ship, carrierDisplay }) {
+  const base = renderDLEGenericHTML({ ship, carrierDisplay });
+  // leggero branding
+  return base.replace('<div class="title">Export Free Declaration</div>',
+    '<div class="title">EXPORT FREE DECLARATION · FEDEX</div>');
 }
 
-// Carrier resolver
-function resolveCarrierKey({ carrierOverride, ship }) {
-  const norm = (s='') => String(s || '').toLowerCase().trim();
-  const over = norm(carrierOverride);
-  if (over === 'fedex') return 'fedex';
-  if (over === 'ups') return 'ups';
-
-  const f = ship?.fields || {};
-  const fromShip = norm(f['Corriere'] || f['Carrier'] || '');
-  if (fromShip.includes('fedex')) return 'fedex';
-  if (fromShip.includes('ups')) return 'ups';
-  return null; // sconosciuto
+function renderDLEUPSHTML({ ship, carrierDisplay }) {
+  const base = renderDLEGenericHTML({ ship, carrierDisplay });
+  return base.replace('<div class="title">Export Free Declaration</div>',
+    '<div class="title">EXPORT FREE DECLARATION · UPS</div>');
 }
 
 /* =======================================================================================
@@ -586,6 +578,7 @@ export default async function handler(req, res) {
     const sig     = q.sig;
     const exp     = q.exp;
 
+    // override corriere usato anche per DLE
     const carrierOverride = (q.carrier || q.courier || '').toString().trim().toLowerCase();
 
     dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride });
@@ -602,16 +595,16 @@ export default async function handler(req, res) {
 
     // ===== DLE (HTML) — FedEx / UPS / Generico =====
     if (type === 'dle') {
-      const carrierKey = resolveCarrierKey({ carrierOverride, ship });
+      const { key: carrierKey, display: carrierDisplay } = resolveCarrierKeyAndDisplay({ carrierOverride, ship });
       let html;
       if (carrierKey === 'fedex') {
-        html = renderDLEFedExHTML({ ship });
+        html = renderDLEFedExHTML({ ship, carrierDisplay: 'FedEx' });
         dlog('RENDER DLE FedEx HTML OK');
       } else if (carrierKey === 'ups') {
-        html = renderDLEUPSHTML({ ship });
+        html = renderDLEUPSHTML({ ship, carrierDisplay: 'UPS' });
         dlog('RENDER DLE UPS HTML OK');
       } else {
-        html = renderDLEGenericHTML({ ship });
+        html = renderDLEGenericHTML({ ship, carrierDisplay });
         dlog('RENDER DLE HTML (generic) OK');
       }
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
