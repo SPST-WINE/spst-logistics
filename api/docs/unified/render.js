@@ -1,25 +1,31 @@
-// api/docs/unified/render.js
+// api/docs/unified/render.js — SOSTITUISCI INTERO FILE CON QUESTO CONTENUTO
+
 export const config = { runtime: 'nodejs' };
 
 /**
- * HTML renderer for:
- *  - Proforma Invoice
- *  - Commercial Invoice
- *  - DLE (Export Free Declaration)
+ * HTML renderer (Proforma/Commercial), DLE HTML generico
+ * + DLE "pixel perfect" via PDF (FedEx / UPS)
  *
  * Query:
  *  - sid | ship : shipment identifier (business "ID Spedizione" or Airtable recId)
- *  - type       : proforma | fattura | commercial | commerciale | invoice | dle
+ *  - type       : proforma | fattura | commercial | commerciale | invoice | dle | dle:fedex | dle:ups
  *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
- *  - carrier    : (OPZIONALE) override manuale del corriere — usato SOLO per Proforma
+ *  - carrier    : (OPZIONALE) override manuale del corriere — usato per Invoice e per routing DLE
  *
  * Env:
  *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
- * Tables:
- *  SpedizioniWebApp (shipments), SPED_PL (lines)
+ *  (PDF) I seguenti file devono esistere nel repo:
+ *    ./assets/dle/FedEx_DLE_master.pdf
+ *    ./assets/dle/UPS_DLE_master.pdf
+ *    ./assets/fonts/Inter-Regular.ttf
  */
 
 import crypto from 'node:crypto';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { PDFDocument, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 
 // ---------- ENV ----------
 const AIRTABLE_PAT      = process.env.AIRTABLE_PAT;
@@ -38,6 +44,14 @@ const TB_PL         = 'SPED_PL';
 if (!AIRTABLE_PAT || !AIRTABLE_BASE_ID) {
   console.warn('[render] Missing Airtable envs');
 }
+
+// ---------- PATHS (PDF/Font) ----------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = path.dirname(__filename);
+const ASSETS_DIR = path.join(__dirname, '..', '..', '..', 'assets'); // /assets
+const PDF_FDX    = path.join(ASSETS_DIR, 'dle', 'FedEx_DLE_master.pdf');
+const PDF_UPS    = path.join(ASSETS_DIR, 'dle', 'UPS_DLE_master.pdf');
+const FONT_INTER = path.join(ASSETS_DIR, 'fonts', 'Inter-Regular.ttf');
 
 // ---------- Airtable helpers ----------
 const API_ROOT = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
@@ -230,6 +244,8 @@ const kgFmt = (x) => `${(Math.round(num(x)*10)/10).toLocaleString('it-IT', { min
 // ---------- Type normalization ----------
 function normalizeType(t) {
   const raw = String(t || 'proforma').toLowerCase().trim();
+  if (raw === 'dle:fedex' || raw === 'dle-fedex') return 'dle_fedex';
+  if (raw === 'dle:ups'   || raw === 'dle-ups')   return 'dle_ups';
   const commercialAliases = new Set(['commercial', 'commerciale', 'invoice', 'fattura', 'fattura commerciale']);
   const dleAliases = new Set(['dle', 'dichiarazione', 'libera', 'esportazione', 'export', 'export declaration']);
   if (dleAliases.has(raw)) return 'dle';
@@ -294,7 +310,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
 :root{
   --brand:#111827; --accent:#0ea5e9; --ok:#16a34a; --text:#0b0f13; --muted:#6b7280;
   --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --zebra:#fafafa; --chip:#f3f4f6;
-  --stamp:#133a7a; /* blu timbro */
+  --stamp:#133a7a;
 }
 *{box-sizing:border-box}
 html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
@@ -336,66 +352,20 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 .btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:8px; cursor:pointer}
 .btn:hover{background:#f9fafb}
 @media print {.printbar{display:none}}
-
-/* Margine extra per la card "Shipment Details" */
-.ship-card{margin-top:8px}
-
-/* Timbro "scannerizzato": bordo irregolare, rumore, leggero bleed */
 .stamp{
-  position:relative;
-  display:inline-block;
-  padding:12px 14px 10px;
-  border:2.6px solid var(--stamp);
-  color:var(--stamp);
-  border-radius:12px;
-  text-transform:uppercase;
-  font-weight:900;
-  letter-spacing:.06em;
-  transform:rotate(-5.2deg);
-  background:
-    radial-gradient(120px 40px at 18% 28%, rgba(19,58,122,.06), transparent 60%),
-    radial-gradient(90px 34px at 82% 72%, rgba(19,58,122,.07), transparent 60%),
-    repeating-radial-gradient( circle at 30% 60%, rgba(19,58,122,.06) 0 2px, transparent 2px 4px );
-  box-shadow:
-    0 0 0 1px rgba(19,58,122,.18),
-    inset 0 0 0 1.2px rgba(19,58,122,.32);
-  filter:url(#stampDistort) blur(.15px) contrast(1.08) saturate(1.05);
-  opacity:.98;
-  mix-blend-mode:multiply;
-}
-.stamp:after{
-  content:"";
-  position:absolute; inset:-4px;
-  border-radius:14px;
-  background:
-    radial-gradient(12px 6px at 8% 24%, rgba(0,0,0,.08), transparent 70%),
-    radial-gradient(14px 7px at 92% 76%, rgba(0,0,0,.07), transparent 70%),
-    radial-gradient(10px 5px at 60% 18%, rgba(0,0,0,.05), transparent 70%);
-  pointer-events:none;
-  mix-blend-mode:multiply;
-  filter:blur(.6px);
+  position:relative; display:inline-block; padding:12px 14px 10px;
+  border:2.6px solid #133a7a; color:#133a7a; border-radius:12px; text-transform:uppercase; font-weight:900; letter-spacing:.06em; transform:rotate(-5.2deg);
 }
 .stamp .line{display:block; font-size:10px; letter-spacing:.08em; margin-top:3px; font-weight:800}
 .stamp .line.small{font-size:9px; font-weight:700; letter-spacing:.09em}
 </style>
 </head>
 <body>
-  <!-- SVG filter per bordo irregolare/bleed -->
-  <svg width="0" height="0" style="position:absolute">
-    <defs>
-      <filter id="stampDistort">
-        <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="noise"/>
-        <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.4" xChannelSelector="R" yChannelSelector="G"/>
-        <feGaussianBlur stdDeviation="0.15"/>
-      </filter>
-    </defs>
-  </svg>
-
   <div class="page">
     <div class="printbar">
       <button class="btn" onclick="window.print()">Print / Save PDF</button>
     </div>
-    <div class="watermark"><span>PROFORMA</span></div>
+    <div class="watermark"><span>${watermark ? 'PROFORMA' : ''}</span></div>
 
     <header>
       <div class="brand">
@@ -418,7 +388,6 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 
     <hr class="sep" />
 
-    <!-- ROW 1: Receiver (spedizione) + Invoice Receiver -->
     <section class="grid">
       <div class="card">
         <h3>Receiver</h3>
@@ -438,7 +407,6 @@ footer{margin-top:22px; font-size:11px; color:#374151}
       </div>
     </section>
 
-    <!-- ROW 2: Shipment Details (con margine extra) -->
     <section class="grid" style="grid-template-columns:1fr">
       <div class="card ship-card">
         <h3>Shipment Details</h3>
@@ -497,7 +465,6 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         <div>
           <div class="label">Signature</div>
           <div class="box"></div>
-          <!-- Timbro automatizzato con dati mittente (nome + indirizzo + VAT + tel) -->
           <div class="stamp" style="margin-top:12px">
             ${escapeHTML(senderName)}
             <span class="line">${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}</span>
@@ -511,7 +478,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 </html>`;
 }
 
-// ---------- DLE HTML (unchanged) ----------
+// ---------- DLE HTML (fallback generico) ----------
 function renderDLEHTML({ ship }) {
   const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
   const senderRS  = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
@@ -620,18 +587,124 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 </html>`;
 }
 
+// ---------- DLE PDF HELPERS ----------
+async function loadPdfTemplate(absolutePath) {
+  const bytes = await readFile(absolutePath);
+  const pdf = await PDFDocument.load(bytes);
+  pdf.registerFontkit(fontkit);
+  const fontBytes = await readFile(FONT_INTER);
+  const font = await pdf.embedFont(fontBytes, { subset: true });
+  return { pdf, font };
+}
+
+function drawText(page, text, { x, y, size }, font, color = rgb(0,0,0)) {
+  page.drawText(String(text ?? ''), { x, y, size, font, color });
+}
+
+function buildDLEData(ship){
+  const f = ship.fields || {};
+  const mitt = {
+    rs:   get(f, ['Mittente - Ragione Sociale'], ''),
+    piva: get(f, ['Mittente - P.IVA/CF'], ''),
+    ind:  get(f, ['Mittente - Indirizzo'], ''),
+    cap:  get(f, ['Mittente - CAP'], ''),
+    city: get(f, ['Mittente - Città'], ''),
+    country: get(f, ['Mittente - Paese'], 'Italy'),
+    tel:  get(f, ['Mittente - Telefono'], ''),
+    ref:  get(f, ['Mittente - Referente','Referente Mittente'], ''),
+    email:get(f, ['Mittente - Email','Email Mittente'], ''),
+  };
+  const dest = {
+    country: get(f, ['Destinatario - Paese'], ''),
+  };
+  const sid   = get(f, ['ID Spedizione', 'Id Spedizione'], ship.id);
+  const dataRitiro = get(f, ['Ritiro - Data'], '') || f['Ritiro Data'];
+  const dateStr = fmtDate(dataRitiro) || fmtDate(Date.now());
+  const carrier = get(f, ['Corriere','Carrier'], '');
+  const invNo = get(f, ['Fattura - Numero','Commercial Invoice - Numero','Proforma - Numero'], '') || `CI-${sid}`;
+  return { mitt, dest, sid, dateStr, carrier, invNo };
+}
+
+// ---------- COORDINATE: FEDEx / UPS ----------
+// NOTE: Le coordinate seguenti sono una base funzionante A4 (pt). Se servono micro-spostamenti
+// potrai dirmelo e ti restituisco subito i valori aggiornati.
+const FED_EX_FIELDS = {
+  // page 0, unità: punti PDF (72pt = 1")
+  shipment_id:    { x: 420, y: 760, size: 10 },
+  invoice_no:     { x: 420, y: 744, size: 10 },
+  sender_rs:      { x: 120, y: 705, size: 10 },
+  sender_addr:    { x: 120, y: 690, size: 10 },
+  sender_vat_tel: { x: 120, y: 675, size: 10 },
+  origin_country: { x: 160, y: 640, size: 10 },
+  dest_country:   { x: 420, y: 640, size: 10 },
+  place_date:     { x: 120, y: 175, size: 10 },
+  signature_hint: { x: 420, y: 150, size: 9 },
+};
+
+const UPS_FIELDS = {
+  // page 0, unità: punti PDF
+  sottoscritto:   { x: 160, y: 745, size: 11 },
+  societa:        { x: 160, y: 728, size: 11 },
+  luogo:          { x: 160, y: 270, size: 11 },
+  data:           { x: 360, y: 270, size: 11 },
+  firma_hint:     { x: 360, y: 238, size: 9 },
+};
+
+// ---------- DLE PDF RENDERERS ----------
+async function renderFedExPDF({ ship }, res){
+  const { pdf, font } = await loadPdfTemplate(PDF_FDX);
+  const page = pdf.getPage(0);
+  const data = buildDLEData(ship);
+
+  const addrLine = [data.mitt.ind, `${data.mitt.cap} ${data.mitt.city}`, data.mitt.country].filter(Boolean).join(' · ');
+  const vatTel   = [data.mitt.piva ? `VAT/CF: ${data.mitt.piva}` : '', data.mitt.tel ? `TEL: ${data.mitt.tel}`:''].filter(Boolean).join(' · ');
+  const placeDate= `${data.mitt.city}, ${data.dateStr}`;
+
+  drawText(page, data.sid,                        FED_EX_FIELDS.shipment_id,    font);
+  drawText(page, data.invNo,                      FED_EX_FIELDS.invoice_no,     font);
+  drawText(page, data.mitt.rs,                    FED_EX_FIELDS.sender_rs,      font);
+  drawText(page, addrLine,                        FED_EX_FIELDS.sender_addr,    font);
+  drawText(page, vatTel,                          FED_EX_FIELDS.sender_vat_tel, font);
+  drawText(page, 'ITALY',                         FED_EX_FIELDS.origin_country, font);
+  drawText(page, (data.dest.country||'').toUpperCase(), FED_EX_FIELDS.dest_country, font);
+  drawText(page, placeDate,                       FED_EX_FIELDS.place_date,     font);
+  drawText(page, 'Signature',                     FED_EX_FIELDS.signature_hint, font);
+
+  const pdfBytes = await pdf.save();
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.status(200).send(Buffer.from(pdfBytes));
+}
+
+async function renderUPSPDF({ ship }, res){
+  const { pdf, font } = await loadPdfTemplate(PDF_UPS);
+  const page = pdf.getPage(0);
+  const data = buildDLEData(ship);
+
+  drawText(page, (data.mitt.ref || data.mitt.rs), UPS_FIELDS.sottoscritto, font);
+  drawText(page, data.mitt.rs,                    UPS_FIELDS.societa,     font);
+  drawText(page, data.mitt.city,                  UPS_FIELDS.luogo,       font);
+  drawText(page, data.dateStr,                    UPS_FIELDS.data,        font);
+  drawText(page, 'Firma',                         UPS_FIELDS.firma_hint,  font);
+
+  const pdfBytes = await pdf.save();
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.status(200).send(Buffer.from(pdfBytes));
+}
+
 // ---------- Handler ----------
 export default async function handler(req, res) {
   const t0 = Date.now();
   try {
     const q = req.query || {};
     const rawType = String(q.type || 'proforma').toLowerCase();
-    const type    = normalizeType(rawType); // 'proforma' | 'commercial' | 'dle'
+    const type    = normalizeType(rawType); // 'proforma' | 'commercial' | 'dle' | 'dle_fedex' | 'dle_ups'
     const sidRaw  = q.sid || q.ship;
     const sig     = q.sig;
     const exp     = q.exp;
 
-    // override manuale del corriere — valido per Proforma **e** Commercial
+    // override manuale del corriere — valido anche per DLE (routing)
     const carrierOverride = (q.carrier || q.courier || '').toString().trim();
 
     dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride: !!carrierOverride });
@@ -646,74 +719,95 @@ export default async function handler(req, res) {
     if (!ship) return bad(res, 404, 'Not found', `No shipment found for ${sidRaw}`);
     dlog('SHIPMENT OK', { recId: ship.id, fieldsKeys: Object.keys(ship.fields || {}).slice(0,80) });
 
-    let html;
+    // DLE PDF routing
+    if (type === 'dle' || type === 'dle_fedex' || type === 'dle_ups') {
+      const carrierFromShip = get(ship.fields, ['Corriere','Carrier'], '');
+      const carrier = (carrierOverride || carrierFromShip || '').toUpperCase();
 
-    if (type === 'dle') {
-      html = renderDLEHTML({ ship });
-      dlog('RENDER DLE OK');
-    } else {
-      // Invoices: load PL
-      const pl = await getPLRows({ ship, sidRaw });
-      dlog('PL SUMMARY', { count: pl.length });
+      if (type === 'dle_fedex' || carrier.includes('FEDEX')) {
+        dlog('RENDER DLE FEDEX (PDF)');
+        await renderFedExPDF({ ship }, res);
+        dlog('DONE', { ms: Date.now() - t0 });
+        return;
+      }
+      if (type === 'dle_ups' || carrier.includes('UPS')) {
+        dlog('RENDER DLE UPS (PDF)');
+        await renderUPSPDF({ ship }, res);
+        dlog('DONE', { ms: Date.now() - t0 });
+        return;
+      }
 
-      // Map lines
-      const items = pl.length ? pl.map((r, i) => {
-        const f = r.fields || {};
-        const title   = String(f['Etichetta'] ?? '').trim();
-        const qty     = Number(f['Bottiglie'] ?? 0) || 0;
-        const abv     = get(f, ['Gradazione (% vol)','Gradazione','ABV','Vol %'], '');
-
-        const tipologia = String(f['Tipologia'] ?? '').trim();
-        let hsByTip = '';
-        if (tipologia === 'vino fermo') hsByTip = '2204.21';
-        else if (tipologia === 'vino spumante') hsByTip = '2204.10';
-        else if (tipologia === 'brochure/depliant') hsByTip = '4911.10.00';
-        const hsFallback = get(f, ['HS','HS code','HS Code'], '');
-        const hs         = hsByTip || hsFallback;
-
-        const netPerB = Number(get(f, ['Peso netto bott. (kg)','Peso netto bott (kg)','Peso netto (kg)','Peso netto'], 0.9)) || 0.9;
-        const grsPerB = Number(get(f, ['Peso lordo bott. (kg)','Peso lordo bott (kg)','Peso lordo (kg)','Peso lordo'], 1.3)) || 1.3;
-
-        const netLine = qty * netPerB;
-        const grsLine = qty * grsPerB;
-
-        const price   = (type === 'proforma') ? 2 : (Number(f['Prezzo'] ?? 0) || 0);
-        const amount  = qty * price;
-
-        const metaBits = [];
-        if (abv) metaBits.push(`ABV: ${abv}% vol`);
-        metaBits.push(`Net: ${netLine.toFixed(1)} kg`);
-        metaBits.push(`Gross: ${grsLine.toFixed(1)} kg`);
-        const meta = metaBits.join(' · ');
-
-        dlog('PL ROW', i+1, { id: r.id, tipologia, hs, title, qty, price, amount, abv, netPerB, grsPerB, netLine, grsLine });
-        return { title: title || '—', qty, price, amount, meta, netLine, grsLine, hs };
-      }) : [{ title:'—', qty:0, price:(type==='proforma'?2:0), amount:0, meta:'', netLine:0, grsLine:0, hs:'' }];
-
-      // Totals
-      const totalMoney = items.reduce((s, r) => s + num(r.amount), 0);
-      const totalNet   = items.reduce((s, r) => s + num(r.netLine), 0);
-      const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
-      dlog('INVOICE TOTALS', { totalMoney, totalNet, totalGross });
-
-      // Applica override corriere per Proforma **e** Commercial
-      const shipForRender = (carrierOverride && (type === 'proforma' || type === 'commercial'))
-        ? { ...ship, fields: { ...(ship.fields||{}), Carrier: carrierOverride, Corriere: carrierOverride } }
-        : ship;
-
-      html = renderInvoiceHTML({
-        type,
-        ship: shipForRender,
-        lines: items,
-        total: totalMoney,
-        totalsWeights: { net: totalNet, gross: totalGross },
-      });
-      dlog('RENDER INVOICE OK');
+      // fallback HTML generico
+      const html = renderDLEHTML({ ship });
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      res.status(200).send(html);
+      dlog('RENDER DLE HTML (fallback) OK');
+      dlog('DONE', { ms: Date.now() - t0 });
+      return;
     }
+
+    // Invoices (Proforma/Commercial): load PL
+    const pl = await getPLRows({ ship, sidRaw });
+    dlog('PL SUMMARY', { count: pl.length });
+
+    // Map lines
+    const items = pl.length ? pl.map((r, i) => {
+      const f = r.fields || {};
+      const title   = String(f['Etichetta'] ?? '').trim();
+      const qty     = Number(f['Bottiglie'] ?? 0) || 0;
+      const abv     = get(f, ['Gradazione (% vol)','Gradazione','ABV','Vol %'], '');
+
+      const tipologia = String(f['Tipologia'] ?? '').trim();
+      let hsByTip = '';
+      if (tipologia === 'vino fermo') hsByTip = '2204.21';
+      else if (tipologia === 'vino spumante') hsByTip = '2204.10';
+      else if (tipologia === 'brochure/depliant') hsByTip = '4911.10.00';
+      const hsFallback = get(f, ['HS','HS code','HS Code'], '');
+      const hs         = hsByTip || hsFallback;
+
+      const netPerB = Number(get(f, ['Peso netto bott. (kg)','Peso netto bott (kg)','Peso netto (kg)','Peso netto'], 0.9)) || 0.9;
+      const grsPerB = Number(get(f, ['Peso lordo bott. (kg)','Peso lordo bott (kg)','Peso lordo (kg)','Peso lordo'], 1.3)) || 1.3;
+
+      const netLine = qty * netPerB;
+      const grsLine = qty * grsPerB;
+
+      const price   = (type === 'proforma') ? 2 : (Number(f['Prezzo'] ?? 0) || 0);
+      const amount  = qty * price;
+
+      const metaBits = [];
+      if (abv) metaBits.push(`ABV: ${abv}% vol`);
+      metaBits.push(`Net: ${netLine.toFixed(1)} kg`);
+      metaBits.push(`Gross: ${grsLine.toFixed(1)} kg`);
+      const meta = metaBits.join(' · ');
+
+      dlog('PL ROW', i+1, { id: r.id, tipologia, hs, title, qty, price, amount, abv, netPerB, grsPerB, netLine, grsLine });
+      return { title: title || '—', qty, price, amount, meta, netLine, grsLine, hs };
+    }) : [{ title:'—', qty:0, price:(type==='proforma'?2:0), amount:0, meta:'', netLine:0, grsLine:0, hs:'' }];
+
+    // Totals
+    const totalMoney = items.reduce((s, r) => s + num(r.amount), 0);
+    const totalNet   = items.reduce((s, r) => s + num(r.netLine), 0);
+    const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
+    dlog('INVOICE TOTALS', { totalMoney, totalNet, totalGross });
+
+    // Applica override corriere per Proforma **e** Commercial
+    const shipForRender = (carrierOverride && (type === 'proforma' || type === 'commercial'))
+      ? { ...ship, fields: { ...(ship.fields||{}), Carrier: carrierOverride, Corriere: carrierOverride } }
+      : ship;
+
+    const html = renderInvoiceHTML({
+      type,
+      ship: shipForRender,
+      lines: items,
+      total: totalMoney,
+      totalsWeights: { net: totalNet, gross: totalGross },
+    });
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.status(200).send(html);
+    dlog('RENDER INVOICE OK');
     dlog('DONE', { ms: Date.now() - t0 });
   } catch (err) {
     derr('render error', err?.status || '', err?.message || err);
