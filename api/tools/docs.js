@@ -58,7 +58,7 @@ export default async function handler(req, res) {
 
     .subactions{display:flex; gap:10px; flex-wrap:wrap; margin:10px 0 0}
     .chip{
-      border:1px solid var(--line); background:#0b1328; color:var(--text);
+      border:1px solid var(--line); background:#0b1328; color:#fff;
       border-radius:999px; padding:10px 14px; font-weight:700; letter-spacing:.2px; cursor:pointer;
     }
     .chip:hover{border-color:rgba(255,255,255,.18)}
@@ -74,7 +74,11 @@ export default async function handler(req, res) {
 <body>
   <div class="wrap">
     <div class="page-title">Utility Documenti</div>
-    <div class="page-sub">Crea <strong>Proforma</strong>, <strong>Fattura commerciale</strong> e <strong>DLE</strong>. Il link generato è firmato. Puoi selezionare manualmente il corriere per Proforma e Fattura.</div>
+    <div class="page-sub">
+      Crea <strong>Proforma</strong>, <strong>Fattura commerciale</strong> e <strong>DLE</strong>.
+      Il link generato è firmato. Puoi selezionare manualmente il corriere per Proforma/Fattura (override)
+      e scegliere il <strong>template DLE</strong> per <b>FedEx</b> o <b>UPS</b>.
+    </div>
 
     <div class="card">
       <div class="row cols-2">
@@ -87,17 +91,17 @@ export default async function handler(req, res) {
           <select id="tipo">
             <option value="proforma">Proforma</option>
             <option value="fattura">Fattura commerciale</option>
-            <option value="dle">Dichiarazione libera esportazione</option>
+            <option value="dle">Dichiarazione libera esportazione (DLE)</option>
           </select>
         </div>
       </div>
 
-      <!-- Override corriere: visibile per Proforma e Fattura -->
+      <!-- Corriere: override per Proforma/Fattura, scelta template per DLE -->
       <div id="carrierBlock" class="row" style="margin-top:var(--gap);">
         <div class="field">
-          <label for="carrier">Corriere (override manuale — Proforma / Fattura)</label>
+          <label for="carrier">Corriere — Proforma/Fattura: override · DLE: template (FedEx/UPS)</label>
           <select id="carrier">
-            <option value="">Usa valore da Airtable</option>
+            <option value="">Usa valore da Airtable / Generico</option>
             <option value="DHL">DHL</option>
             <option value="UPS">UPS</option>
             <option value="FedEx">FedEx</option>
@@ -118,7 +122,10 @@ export default async function handler(req, res) {
         <button id="openPrint" class="chip" disabled>Stampa / Salva PDF</button>
         <button id="copyUrl" class="chip" disabled>Copia URL</button>
       </div>
-      <div class="note">Nota: l’URL firmato scade in ~15 minuti. L’allegato (se configurato) viene salvato su Airtable.</div>
+      <div class="note">
+        Nota: l’URL firmato scade in ~15 minuti. L’allegato (se configurato) viene salvato su Airtable.
+        Per DLE: se selezioni <b>FedEx</b> o <b>UPS</b> verrà usato il relativo template HTML; altrimenti generico.
+      </div>
       <div id="log" class="log"></div>
     </div>
   </div>
@@ -141,11 +148,12 @@ export default async function handler(req, res) {
   var carrierOtherWrap = $('#carrierOtherWrap');
   var inpCarrierOther = $('#carrierOther');
 
-  function isTypeWithCarrierOverride(v){
-    return v === 'proforma' || v === 'fattura';
+  function isTypeWithCarrierControl(v){
+    // Mostra il blocco per Proforma, Fattura e DLE (per DLE serve a scegliere il template FedEx/UPS)
+    return v === 'proforma' || v === 'fattura' || v === 'dle';
   }
   function toggleCarrierUI(){
-    var show = isTypeWithCarrierOverride(selTp.value);
+    var show = isTypeWithCarrierControl(selTp.value);
     carrierBlock.classList.toggle('hidden', !show);
     if (!show) {
       selCarrier.value = '';
@@ -186,11 +194,18 @@ export default async function handler(req, res) {
     var idSped = inpId.value.trim();
     var type   = selTp.value;
 
-    // Override corriere per Proforma e Fattura
+    // Carrier: override per Proforma/Fattura, template select per DLE
     var carrier = '';
-    if (isTypeWithCarrierOverride(type)) {
+    if (isTypeWithCarrierControl(type)) {
       if (selCarrier.value === 'Altro') carrier = (inpCarrierOther.value || '').trim();
       else carrier = (selCarrier.value || '').trim();
+
+      // Normalizza in lowercase per la backend API
+      // Per DLE passiamo solo 'fedex' o 'ups'; gli altri valori verranno ignorati (fallback generico o da Airtable)
+      if (type === 'dle') {
+        var low = carrier.toLowerCase();
+        carrier = (low === 'fedex' || low === 'ups') ? low : '';
+      }
     }
 
     btn.disabled = true;
