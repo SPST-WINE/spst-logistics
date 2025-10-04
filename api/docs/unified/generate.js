@@ -8,11 +8,20 @@ function makeSig(sid, type, exp) {
   return crypto.createHmac('sha256', SECRET).update(`${sid}.${type}.${exp}`).digest('hex');
 }
 
+function normalizeType(t) {
+  const raw = String(t || 'proforma').toLowerCase().trim();
+  const commercialAliases = new Set(['commercial', 'commerciale', 'invoice', 'fattura', 'fattura commerciale']);
+  const dleAliases = new Set(['dle', 'dichiarazione', 'libera', 'esportazione', 'export', 'export declaration']);
+  if (dleAliases.has(raw)) return 'dle';
+  if (commercialAliases.has(raw)) return 'commercial';
+  return 'proforma';
+}
+
 function canonical(params) {
   // Query ordinata (NON usata per la firma, solo per leggibilità)
-  const keys = ['sid', 'type', 'exp', 'ship'];
+  const keys = ['sid', 'type', 'exp', 'ship', 'format', 'carrier'];
   return keys
-    .filter((k) => params[k] !== undefined && params[k] !== null)
+    .filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== '')
     .map((k) => `${k}=${encodeURIComponent(String(params[k]))}`)
     .join('&');
 }
@@ -28,32 +37,47 @@ export default async function handler(req, res) {
       return res.status(500).json({ ok: false, error: 'Missing DOCS_SIGN_SECRET' });
     }
 
+    // Body
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const idSpedizione = (body.idSpedizione || body.shipmentId || '').trim();
-    const type = (body.type || 'proforma').trim(); // 'proforma' | 'fattura' | 'dle'
-    const carrier = (body.carrier || '').toString().trim();
+    const rawType = (body.type || 'proforma').trim(); // 'proforma' | 'commercial' | 'dle'
+    const type = normalizeType(rawType);
+    const carrier = (body.carrier || body.courier || '').toString().trim().toLowerCase(); // 'fedex' | 'ups'
+    const formatIn = (body.format || '').toString().trim().toLowerCase();                 // 'pdf' per DLE template
+
     if (!idSpedizione) {
       return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
     }
 
-    // Valori
+    // Valori base
     const sid = idSpedizione;  // firmato
     const ship = idSpedizione; // mostrato nel template
-
     const exp = Math.floor(Date.now() / 1000) + 15 * 60; // 15 minuti
-    const payload = { sid, type, exp, ship };
     const sig = makeSig(sid, type, exp);
 
+    // Costruzione URL
     const proto = (req.headers['x-forwarded-proto'] || 'https');
     const host = req.headers['x-forwarded-host'] || req.headers.host;
     const base = `${proto}://${host}`;
 
-    const qs = canonical(payload) + `&sig=${sig}` + (carrier ? `&carrier=${encodeURIComponent(carrier)}` : '');
+    // Se DLE + (format=pdf oppure carrier valido) ⇒ forza PDF con template del corriere
+    let format = '';
+    let carrierParam = '';
+    if (type === 'dle') {
+      const hasCarrier = carrier === 'fedex' || carrier === 'ups';
+      if (formatIn === 'pdf' || hasCarrier) {
+        format = 'pdf';
+        if (hasCarrier) carrierParam = carrier;
+      }
+    }
+
+    const payload = { sid, type, exp, ship, ...(format ? { format } : {}), ...(carrierParam ? { carrier: carrierParam } : {}) };
+    const qs = canonical(payload) + `&sig=${sig}`;
     const url = `${base}/api/docs/unified/render?${qs}`;
 
-    console.log('[generate] OK', { time: now, type, sid, ship, exp, carrier: !!carrier });
+    const fieldMap = { proforma: 'Allegato Fattura', commercial: 'Allegato Fattura', dle: (format ? 'Allegato DLE PDF' : 'Allegato DLE') };
 
-    const fieldMap = { proforma: 'Allegato Fattura', fattura: 'Allegato Fattura', dle: 'Allegato DLE' };
+    console.log('[generate] OK', { time: now, type, sid, ship, exp, format: format || 'html', carrier: carrierParam || null });
 
     return res.status(200).json({
       ok: true,
