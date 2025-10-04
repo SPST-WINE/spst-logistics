@@ -5,17 +5,13 @@ export const config = { runtime: 'nodejs' };
  * HTML renderer for:
  *  - Proforma Invoice
  *  - Commercial Invoice
- *  - DLE (Export Free Declaration)
- *
- * + PDF renderer (carrier templates) for DLE:
- *   /api/docs/unified/render?type=dle&format=pdf&carrier=fedex|ups
+ *  - DLE (Export Free Declaration) — con layout specifico FedEx/UPS in HTML
  *
  * Query:
  *  - sid | ship : shipment identifier (business "ID Spedizione" or Airtable recId)
  *  - type       : proforma | fattura | commercial | commerciale | invoice | dle
  *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
- *  - carrier    : (OPZ) override manuale del corriere — usato per Proforma/Commercial e per DLE PDF
- *  - format     : (OPZ) "pdf" per DLE su template; altrimenti HTML
+ *  - carrier    : (OPZIONALE) 'fedex' | 'ups' — se non passato, letto da Airtable (Corriere/Carrier)
  *
  * Env:
  *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
@@ -24,8 +20,6 @@ export const config = { runtime: 'nodejs' };
  */
 
 import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 
 // ---------- ENV ----------
 const AIRTABLE_PAT      = process.env.AIRTABLE_PAT;
@@ -251,7 +245,7 @@ function normalizeType(t) {
 }
 
 /* =======================================================================================
- *                               RENDER HTML (invariato)
+ * INVOICES HTML (come prima)
  * ======================================================================================= */
 
 function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
@@ -346,52 +340,22 @@ table.items tbody tr:last-child td{border-bottom:1px solid var(--border-strong)}
 .note{margin-top:10px; font-size:11px; color:#374151}
 footer{margin-top:22px; font-size:11px; color:#374151}
 .sign{margin-top:20px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
-.sign .box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
+.sign .box{height:64px; border:1px dashed var(--border-strong); border-radius:12px; width:260px}
 .sign .label{font-size:11px; color:#374151; margin-bottom:6px}
 .printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
 .btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:8px; cursor:pointer}
 .btn:hover{background:#f9fafb}
 @media print {.printbar{display:none}}
 .ship-card{margin-top:8px}
-.stamp{
-  position:relative; display:inline-block; padding:12px 14px 10px;
-  border:2.6px solid var(--stamp); color:var(--stamp); border-radius:12px;
-  text-transform:uppercase; font-weight:900; letter-spacing:.06em; transform:rotate(-5.2deg);
-  background:
-    radial-gradient(120px 40px at 18% 28%, rgba(19,58,122,.06), transparent 60%),
-    radial-gradient(90px 34px at 82% 72%, rgba(19,58,122,.07), transparent 60%),
-    repeating-radial-gradient( circle at 30% 60%, rgba(19,58,122,.06) 0 2px, transparent 2px 4px );
-  box-shadow:0 0 0 1px rgba(19,58,122,.18), inset 0 0 0 1.2px rgba(19,58,122,.32);
-  filter:url(#stampDistort) blur(.15px) contrast(1.08) saturate(1.05);
-  opacity:.98; mix-blend-mode:multiply;
-}
-.stamp:after{
-  content:""; position:absolute; inset:-4px; border-radius:14px;
-  background:
-    radial-gradient(12px 6px at 8% 24%, rgba(0,0,0,.08), transparent 70%),
-    radial-gradient(14px 7px at 92% 76%, rgba(0,0,0,.07), transparent 70%),
-    radial-gradient(10px 5px at 60% 18%, rgba(0,0,0,.05), transparent 70%);
-  pointer-events:none; mix-blend-mode:multiply; filter:blur(.6px);
-}
+.stamp{position:relative; display:inline-block; padding:12px 14px 10px; border:2.6px solid #133a7a; color:#133a7a; border-radius:12px;
+  text-transform:uppercase; font-weight:900; letter-spacing:.06em; transform:rotate(-5.2deg);}
 .stamp .line{display:block; font-size:10px; letter-spacing:.08em; margin-top:3px; font-weight:800}
 .stamp .line.small{font-size:9px; font-weight:700; letter-spacing:.09em}
 </style>
 </head>
 <body>
-  <svg width="0" height="0" style="position:absolute">
-    <defs>
-      <filter id="stampDistort">
-        <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="noise"/>
-        <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.4" xChannelSelector="R" yChannelSelector="G"/>
-        <feGaussianBlur stdDeviation="0.15"/>
-      </filter>
-    </defs>
-  </svg>
-
   <div class="page">
-    <div class="printbar">
-      <button class="btn" onclick="window.print()">Print / Save PDF</button>
-    </div>
+    <div class="printbar"><button class="btn" onclick="window.print()">Print / Save PDF</button></div>
     <div class="watermark"><span>${watermark ? 'PROFORMA' : ''}</span></div>
 
     <header>
@@ -425,17 +389,6 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         ${shVat   ? `<div class="small">VAT/CF: ${escapeHTML(shVat)}</div>` : ``}
       </div>
       <div class="card">
-        <h3>Invoice Receiver</h3>
-        <div class="small"><strong>${escapeHTML(btName || shName)}</strong></div>
-        <div class="small">${escapeHTML(btAddr || shAddr)}</div>
-        <div class="small">${escapeHTML(btZip || shZip)} ${escapeHTML(btCity || shCity)} (${escapeHTML(btCountry || shCountry)})</div>
-        ${(btPhone || shPhone) ? `<div class="small">Tel: ${escapeHTML(btPhone || shPhone)}</div>` : ``}
-        ${(btVat || '') ? `<div class="small">VAT/CF: ${escapeHTML(btVat)}</div>` : ``}
-      </div>
-    </section>
-
-    <section class="grid" style="grid-template-columns:1fr">
-      <div class="card ship-card">
         <h3>Shipment Details</h3>
         <div class="small">Carrier: ${escapeHTML(carrier || '—')}</div>
         <div class="small">Incoterm: ${escapeHTML(incoterm || '—')} · Currency: ${escapeHTML(ccy)}</div>
@@ -458,10 +411,7 @@ footer{margin-top:22px; font-size:11px; color:#374151}
         ${lines.map((r,i)=>`
           <tr>
             <td>${i+1}</td>
-            <td>
-              <strong>${escapeHTML(r.title || '—')}</strong>
-              ${r.meta?`<br/><span class="muted">${escapeHTML(r.meta)}</span>`:''}
-            </td>
+            <td><strong>${escapeHTML(r.title || '—')}</strong>${r.meta?`<br/><span class="muted">${escapeHTML(r.meta)}</span>`:''}</td>
             <td>${escapeHTML(r.hs || '')}</td>
             <td class="num mono">${num(r.qty)}</td>
             <td class="num mono">${money(r.price, ccySym)}</td>
@@ -505,8 +455,11 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 </html>`;
 }
 
-// DLE HTML (come prima)
-function renderDLEHTML({ ship }) {
+/* =======================================================================================
+ * DLE HTML — GENERICO + VARIANTI FEDEX/UPS
+ * ======================================================================================= */
+
+function renderDLEGenericHTML({ ship }) {
   const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
   const senderRS  = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
   const senderCity= get(ship.fields, ['Mittente - Città'], '');
@@ -515,277 +468,112 @@ function renderDLEHTML({ ship }) {
   const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
 
   return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Export Free Declaration — ${escapeHTML(sid)}</title>
 <style>
-:root{ --brand:#111827; --accent:#0ea5e9; --text:#0b0f13; --muted:#6b7280; --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --chip:#f3f4f6; }
-*{box-sizing:border-box}
-html,body{margin:0;background:#fff;color:#0b0f13;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-.page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative}
+:root{ --text:#0b0f13; --muted:#6b7280; --border:#e5e7eb; }
+*{box-sizing:border-box} html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm}
 header{display:flex; align-items:flex-start; justify-content:space-between; gap:16px}
-.brand{max-width:70%}
-.logo .word{font-size:24px; font-weight:800; letter-spacing:.01em; color:#111827}
+.brand{max-width:70%} .logo{font-size:24px; font-weight:800}
 .meta{margin-top:4px; font-size:12px; color:var(--muted)}
-.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
+.doc-meta{text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
 .doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#111827; font-weight:800}
-.doc-meta .kv{margin-top:6px}
-.kv div{margin:2px 0}
 hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 .to{font-size:12px; color:#374151; margin-bottom:12px}
 .section{font-size:13px; line-height:1.55}
-.section p{margin:8px 0}
-.list{margin:8px 0 8px 16px; padding:0}
-.list li{margin:6px 0}
+.section p{margin:8px 0} .list{margin:8px 0 8px 16px; padding:0} .list li{margin:6px 0}
 .footer{margin-top:22px; font-size:12px; color:#374151}
 .sign{margin-top:22px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
-.box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
+.box{height:64px; border:1px dashed #d1d5db; border-radius:10px; width:260px}
 .printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
 .btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:10px; cursor:pointer}
-.btn:hover{background:#f9fafb}
 @media print {.printbar{display:none}}
-</style>
-</head>
-<body>
-  <div class="page">
-    <div class="printbar">
-      <button class="btn" onclick="window.print()">Print / Save PDF</button>
+</style></head>
+<body><div class="page">
+  <div class="printbar"><button class="btn" onclick="window.print()">Print / Save PDF</button></div>
+  <header>
+    <div class="brand">
+      <div class="logo">${escapeHTML(senderRS)}</div>
+      <div class="meta">Shipment ID: ${escapeHTML(sid)}</div>
     </div>
-
-    <header>
-      <div class="brand">
-        <div class="logo"><div class="word">${escapeHTML(senderRS)}</div></div>
-        <div class="meta">Shipment ID: ${escapeHTML(sid)}</div>
-      </div>
-      <div class="doc-meta">
-        <div class="title">Export Free Declaration</div>
-        <div class="kv">
-          <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
-          <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
-        </div>
-      </div>
-    </header>
-
-    <hr class="sep" />
-
-    <div class="to"><strong>To:</strong> ${escapeHTML(carrier)}</div>
-
-    <div class="section">
-      <p>I, the undersigned <strong>${escapeHTML(senderRS)}</strong>, as Shipper, hereby declare under my sole responsibility that all goods entrusted to <strong>${escapeHTML(carrier)}</strong>:</p>
-      <ul class="list">
-        <li>Are not included in the list of products protected by the Washington Convention (CITES) – Council Regulation (EC) No. 338/97 and subsequent amendments.</li>
-        <li>Are not included in the list of goods covered by Council Regulation (EC) No. 116/2009 on the export of cultural goods.</li>
-        <li>Are not subject to Regulation (EU) No. 821/2021 on dual-use items and subsequent amendments.</li>
-        <li>Are not included in Regulation (EU) No. 125/2019 concerning trade in certain goods that could be used for capital punishment, torture, or other cruel, inhuman, or degrading treatment.</li>
-        <li>Do not contain cat or dog fur, in accordance with Council Regulation (EC) No. 1523/2007.</li>
-        <li>Are not subject to Regulation (EU) No. 649/2012 on the export and import of hazardous chemicals.</li>
-        <li>Are not included in Regulation (EU) No. 590/2024 on substances that deplete the ozone layer.</li>
-        <li>Are not subject to Regulation (EC) No. 1013/2006 concerning shipments of waste.</li>
-        <li>Are not included in the restrictive measures provided for by the following EU Regulations and Decisions:</li>
-      </ul>
-      <ul class="list">
-        <li>Regulation (EC) No. 1210/2003 (Iraq)</li>
-        <li>Regulation (EU) No. 2016/44 (Libya)</li>
-        <li>Regulation (EU) No. 36/2012 (Syria)</li>
-        <li>Regulation (EC) No. 765/2006 (Belarus)</li>
-        <li>Regulation (EU) No. 833/2014 and Council Decision 2014/512/CFSP (Russia/Ukraine)</li>
-        <li>Regulation (EU) No. 692/2014 (Crimea/Sevastopol)</li>
-        <li>Regulation (EU) No. 2022/263 (Ukrainian territories occupied by the Russian Federation)</li>
-      </ul>
-      <p>Furthermore, the goods:</p>
-      <ul class="list">
-        <li>Are not included in any other restrictive list under current EU legislation.</li>
-        <li>Are intended exclusively for civilian use and have no dual-use or military purpose.</li>
-      </ul>
-    </div>
-
-    <div class="footer">
-      <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
+    <div class="doc-meta">
+      <div class="title">Export Free Declaration</div>
       <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
-      <div class="sign" style="margin-top:10px">
-        <div><strong>Signature of Shipper:</strong></div>
-        <div class="box"></div>
-      </div>
+      <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
     </div>
+  </header>
+  <hr class="sep" />
+  <div class="to"><strong>To:</strong> ${escapeHTML(carrier)}</div>
+  ${dleBodyHTML(carrier, senderRS)}
+  <div class="footer">
+    <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
+    <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
+    <div class="sign" style="margin-top:10px"><div><strong>Signature of Shipper:</strong></div><div class="box"></div></div>
   </div>
-</body>
-</html>`;
+</div></body></html>`;
+}
+
+function dleBodyHTML(carrier, senderRS) {
+  return `
+  <div class="section">
+    <p>I, the undersigned <strong>${escapeHTML(senderRS)}</strong>, as Shipper, hereby declare under my sole responsibility that all goods entrusted to <strong>${escapeHTML(carrier)}</strong>:</p>
+    <ul class="list">
+      <li>Are not included in the list of products protected by the Washington Convention (CITES) – Council Regulation (EC) No. 338/97 and subsequent amendments.</li>
+      <li>Are not included in the list of goods covered by Council Regulation (EC) No. 116/2009 on the export of cultural goods.</li>
+      <li>Are not subject to Regulation (EU) No. 821/2021 on dual-use items and subsequent amendments.</li>
+      <li>Are not included in Regulation (EU) No. 125/2019 concerning trade in certain goods that could be used for capital punishment, torture, or other cruel, inhuman, or degrading treatment.</li>
+      <li>Do not contain cat or dog fur, in accordance with Council Regulation (EC) No. 1523/2007.</li>
+      <li>Are not subject to Regulation (EU) No. 649/2012 on the export and import of hazardous chemicals.</li>
+      <li>Are not included in Regulation (EU) No. 590/2024 on substances that deplete the ozone layer.</li>
+      <li>Are not subject to Regulation (EC) No. 1013/2006 concerning shipments of waste.</li>
+      <li>Are not included in the restrictive measures provided for by the following EU Regulations and Decisions:</li>
+    </ul>
+    <ul class="list">
+      <li>Regulation (EC) No. 1210/2003 (Iraq)</li>
+      <li>Regulation (EU) No. 2016/44 (Libya)</li>
+      <li>Regulation (EU) No. 36/2012 (Syria)</li>
+      <li>Regulation (EC) No. 765/2006 (Belarus)</li>
+      <li>Regulation (EU) No. 833/2014 and Council Decision 2014/512/CFSP (Russia/Ukraine)</li>
+      <li>Regulation (EU) No. 692/2014 (Crimea/Sevastopol)</li>
+      <li>Regulation (EU) No. 2022/263 (Ukrainian territories occupied by the Russian Federation)</li>
+    </ul>
+    <p>Furthermore, the goods:</p>
+    <ul class="list">
+      <li>Are not included in any other restrictive list under current EU legislation.</li>
+      <li>Are intended exclusively for civilian use and have no dual-use or military purpose.</li>
+    </ul>
+  </div>`;
+}
+
+// FedEx: variante stilistica (richiama il contenuto del PDF, ma in HTML)
+function renderDLEFedExHTML({ ship }) {
+  const html = renderDLEGenericHTML({ ship });
+  return html.replace('<div class="title">Export Free Declaration</div>', '<div class="title">Export Free Declaration · FedEx</div>');
+}
+
+// UPS: variante stilistica (richiama il contenuto del PDF, ma in HTML)
+function renderDLEUPSHTML({ ship }) {
+  const html = renderDLEGenericHTML({ ship });
+  return html.replace('<div class="title">Export Free Declaration</div>', '<div class="title">Export Free Declaration · UPS</div>');
+}
+
+// Carrier resolver
+function resolveCarrierKey({ carrierOverride, ship }) {
+  const norm = (s='') => String(s || '').toLowerCase().trim();
+  const over = norm(carrierOverride);
+  if (over === 'fedex') return 'fedex';
+  if (over === 'ups') return 'ups';
+
+  const f = ship?.fields || {};
+  const fromShip = norm(f['Corriere'] || f['Carrier'] || '');
+  if (fromShip.includes('fedex')) return 'fedex';
+  if (fromShip.includes('ups')) return 'ups';
+  return null; // sconosciuto
 }
 
 /* =======================================================================================
- *                        DLE su TEMPLATE PDF (UPS / FEDEX)
- * ======================================================================================= */
-
-// Lazy-loader PDF libs (evita crash in ESM/Node e carica solo quando serve)
-async function loadPdfLibs() {
-  const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
-  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
-  // disattiva il worker su server per evitare require/workerSrc
-  pdfjs.GlobalWorkerOptions.workerSrc = undefined;
-  return { PDFDocument, rgb, StandardFonts, pdfjs };
-}
-
-// Estrattore posizioni dei placeholder
-async function extractTextPositions(pdfBuffer /* Uint8Array */) {
-  const { pdfjs } = await loadPdfLibs();
-  const loadingTask = pdfjs.getDocument({ data: pdfBuffer, disableWorker: true });
-  const pdf = await loadingTask.promise;
-  const items = [];
-
-  for (let p = 1; p <= pdf.numPages; p++) {
-    const page = await pdf.getPage(p);
-    const content = await page.getTextContent();
-
-    for (const t of content.items) {
-      const str = t.str;
-      const [a,b,c,d,e,f] = t.transform;
-      const fontHeight = Math.hypot(b,d);
-      const x = e;
-      const y = f - fontHeight;
-      const w = t.width;
-      const h = fontHeight;
-      items.push({ pageIndex: p-1, text: str, x, y, w, h });
-    }
-  }
-  return items;
-}
-
-// Overlay (copre placeholder e scrive valore)
-async function overlayReplacements(pdfBuffer, replacements) {
-  const { PDFDocument, rgb, StandardFonts } = await loadPdfLibs();
-  const pdfDoc = await PDFDocument.load(pdfBuffer);
-  const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const items = await extractTextPositions(pdfBuffer);
-
-  for (const [needle, value] of Object.entries(replacements)) {
-    if (!value) continue;
-    const matches = items.filter(it => it.text.trim() === needle.trim());
-
-    for (const m of matches) {
-      const page = pdfDoc.getPage(m.pageIndex);
-      const pad = 1.5;
-
-      page.drawRectangle({
-        x: m.x - pad, y: m.y - pad,
-        width: m.w + pad*2, height: m.h + pad*2,
-        color: rgb(1,1,1),
-      });
-
-      let fontSize = m.h * 0.9;
-      const maxWidth = m.w;
-      const text = String(value);
-
-      while (helv.widthOfTextAtSize(text, fontSize) > maxWidth && fontSize > 6) {
-        fontSize -= 0.5;
-      }
-      page.drawText(text, {
-        x: m.x,
-        y: m.y + (m.h - fontSize) * 0.2,
-        size: fontSize,
-        font: helv,
-        color: rgb(0,0,0),
-      });
-    }
-  }
-
-  return pdfDoc.save();
-}
-
-// Post-processing FedEx (segna "No cumulation applied")
-async function postProcessFedEx(pdfBytes) {
-  const { PDFDocument, StandardFonts } = await loadPdfLibs();
-  const pdfDoc = await PDFDocument.load(pdfBytes);
-  const items = await extractTextPositions(pdfBytes);
-
-  const target = items.find(it => it.text.toUpperCase().includes('NO CUMULATION APPLIED'));
-  if (target) {
-    const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
-    const page = pdfDoc.getPage(target.pageIndex);
-    page.drawText('X', {
-      x: target.x - 12,
-      y: target.y,
-      size: target.h,
-      font: helv,
-    });
-  }
-  return pdfDoc.save();
-}
-
-// Percorsi template PDF
-const TEMPLATE_PATHS = {
-  fedex: path.resolve(process.cwd(), 'public/templates/DLE_FEDEX_CON_PLACEHOLDER.pdf'),
-  ups:   path.resolve(process.cwd(), 'public/templates/UPS_DLE_CON_PLACEHOLDER.pdf'),
-};
-
-// Mappa placeholder → valore (adatta ai tuoi template)
-function buildDLEReplacements({ ship, carrier }) {
-  const f = ship.fields || {};
-  const senderRS   = get(f, ['Mittente - Ragione Sociale'], '');
-  const senderPiva = get(f, ['Mittente - P.IVA/CF', 'Partita IVA Mittente'], '');
-  const senderAddr = get(f, ['Mittente - Indirizzo'], '');
-  const senderZip  = get(f, ['Mittente - CAP'], '');
-  const senderCity = get(f, ['Mittente - Città'], '');
-  const senderCntr = get(f, ['Mittente - Paese'], '');
-  const senderTel  = get(f, ['Mittente - Telefono'], '');
-  const senderRef  = get(f, ['Mittente - Referente'], '');
-
-  const destCountry= get(f, ['Destinatario - Paese'], '');
-
-  const pickup     = get(f, ['Ritiro - Data'], '') || f['Ritiro Data'];
-  const dateStr    = fmtDateDD(pickup || Date.now());
-  const docNo      = get(f, ['Numero Fattura', 'Proforma - Numero'], '');
-
-  const common = {
-    'Mittente - Ragione Sociale'       : senderRS,
-    'INTESTAZIONE DEL MITTENTE'        : senderRS, // FedEx
-    'Mittente - P.IVA/CF'              : senderPiva,
-    'Mittente - Indirizzo'             : senderAddr,
-    'Mittente - Città'                 : senderCity,
-    'MITTENTE CITTÀ + MITTENTE CAP'    : [senderCity, senderZip].filter(Boolean).join(' '),
-    'Mittente - Città, Mittente - CAP' : [senderCity, senderZip].filter(Boolean).join(' '),
-    'Mittente - CAP'                   : senderZip,
-    'Mittente - Paese'                 : senderCntr,
-    'Mittente - Telefono'              : senderTel,
-    'Mittente - Referente (se non c’è usa Mittente - Ragione Sociale)' : senderRef || senderRS,
-    'Destinatario - Paese'             : destCountry,
-    'NUMERO FATTURA GENERATO'          : docNo || '',
-    'DATA'                             : dateStr,
-    'Data'                             : dateStr,
-  };
-
-  if (carrier === 'fedex') return { ...common };
-  if (carrier === 'ups')   return { ...common };
-  return common;
-}
-
-async function renderDLECarrierPDF({ ship, carrier }) {
-  const key = String(carrier || '').toLowerCase();
-  if (!['fedex','ups'].includes(key)) {
-    const err = new Error('Carrier non supportato per DLE PDF (usa fedex|ups)');
-    err.status = 400; throw err;
-  }
-
-  const templatePath = TEMPLATE_PATHS[key];
-
-  // Caricamento template con errore leggibile se mancante
-  let pdfBuffer;
-  try {
-    pdfBuffer = new Uint8Array(await fs.readFile(templatePath));
-  } catch {
-    const err = new Error(`Template PDF non trovato: ${templatePath}`);
-    err.status = 422; throw err;
-  }
-
-  const replacements = buildDLEReplacements({ ship, carrier: key });
-  let out = await overlayReplacements(pdfBuffer, replacements);
-  if (key === 'fedex') out = await postProcessFedEx(out);
-  return out;
-}
-
-/* =======================================================================================
- *                                     HANDLER
+ * HANDLER
  * ======================================================================================= */
 
 export default async function handler(req, res) {
@@ -797,10 +585,10 @@ export default async function handler(req, res) {
     const sidRaw  = q.sid || q.ship;
     const sig     = q.sig;
     const exp     = q.exp;
-    const format  = (q.format || '').toString().toLowerCase();  // 'pdf' per DLE template
+
     const carrierOverride = (q.carrier || q.courier || '').toString().trim().toLowerCase();
 
-    dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride, format });
+    dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride });
 
     if (!sidRaw) return bad(res, 400, 'Bad request', 'Missing sid/ship');
     if (!verifySigFlexible({ sid: sidRaw, rawType, normType: type, exp, sig })) {
@@ -812,24 +600,24 @@ export default async function handler(req, res) {
     if (!ship) return bad(res, 404, 'Not found', `No shipment found for ${sidRaw}`);
     dlog('SHIPMENT OK', { recId: ship.id, fieldsKeys: Object.keys(ship.fields || {}).slice(0,80) });
 
-    // ===== DLE su TEMPLATE PDF (UPS/FEDEX) =====
-    if (type === 'dle' && format === 'pdf' && (carrierOverride === 'fedex' || carrierOverride === 'ups')) {
-      const pdfBytes = await renderDLECarrierPDF({ ship, carrier: carrierOverride });
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `inline; filename="DLE-${carrierOverride}-${ship.id}.pdf"`);
-      res.setHeader('Cache-Control', 'no-store, max-age=0');
-      res.status(200).send(Buffer.from(pdfBytes));
-      dlog('RENDER DLE PDF OK', { ms: Date.now() - t0, carrier: carrierOverride });
-      return;
-    }
-
-    // ===== DLE HTML (fallback / default) =====
+    // ===== DLE (HTML) — FedEx / UPS / Generico =====
     if (type === 'dle') {
-      const html = renderDLEHTML({ ship });
+      const carrierKey = resolveCarrierKey({ carrierOverride, ship });
+      let html;
+      if (carrierKey === 'fedex') {
+        html = renderDLEFedExHTML({ ship });
+        dlog('RENDER DLE FedEx HTML OK');
+      } else if (carrierKey === 'ups') {
+        html = renderDLEUPSHTML({ ship });
+        dlog('RENDER DLE UPS HTML OK');
+      } else {
+        html = renderDLEGenericHTML({ ship });
+        dlog('RENDER DLE HTML (generic) OK');
+      }
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store, max-age=0');
       res.status(200).send(html);
-      dlog('RENDER DLE HTML OK', { ms: Date.now() - t0 });
+      dlog('DONE', { ms: Date.now() - t0 });
       return;
     }
 
