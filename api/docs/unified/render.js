@@ -6,15 +6,16 @@ export const config = { runtime: 'nodejs' };
  *  - Proforma Invoice
  *  - Commercial Invoice
  *  - DLE (Export Free Declaration)
+ *
  * + PDF renderer (carrier templates) for DLE:
- *    /api/docs/unified/render?type=dle&format=pdf&carrier=fedex|ups
+ *   /api/docs/unified/render?type=dle&format=pdf&carrier=fedex|ups
  *
  * Query:
- *  - sid | ship  : shipment identifier (business "ID Spedizione" or Airtable recId)
- *  - type        : proforma | fattura | commercial | commerciale | invoice | dle
- *  - exp, sig    : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
- *  - carrier     : (OPZ) "fedex" | "ups" (per DLE su template PDF)
- *  - format      : (OPZ) "pdf" per DLE su template; altrimenti HTML
+ *  - sid | ship : shipment identifier (business "ID Spedizione" or Airtable recId)
+ *  - type       : proforma | fattura | commercial | commerciale | invoice | dle
+ *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
+ *  - carrier    : (OPZ) override manuale del corriere — usato per Proforma/Commercial e per DLE PDF
+ *  - format     : (OPZ) "pdf" per DLE su template; altrimenti HTML
  *
  * Env:
  *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
@@ -26,11 +27,6 @@ import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import dayjs from 'dayjs';
-
-// PDF libs per DLE carrier template
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-// pdfjs-dist per leggere le posizioni dei placeholder nel PDF
-import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.js';
 
 // ---------- ENV ----------
 const AIRTABLE_PAT      = process.env.AIRTABLE_PAT;
@@ -51,7 +47,7 @@ if (!AIRTABLE_PAT || !AIRTABLE_BASE_ID) {
 }
 
 // ---------- Airtable helpers ----------
-const API_ROOT = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
+const API_ROOT  = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
 const tableURL  = (t) => `${API_ROOT}/${encodeURIComponent(t)}`;
 const recordURL = (t, id) => `${tableURL(t)}/${encodeURIComponent(id)}`;
 
@@ -211,7 +207,7 @@ function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
   const h3 = crypto.createHmac('sha256', DOCS_SIGN_SECRET).update(q).digest('hex');
 
   const ok = safeEqual(h1, String(sig)) || safeEqual(h2, String(sig)) || safeEqual(h3, String(sig));
-  dlog('SIG verify', { rawType, normType: normType, match: ok ? 'OK' : 'FAIL' });
+  dlog('SIG verify', { rawType, normType, match: ok ? 'OK' : 'FAIL' });
   return ok;
 }
 function safeEqual(a,b){ try{ return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)); }catch{ return false; } }
@@ -305,13 +301,205 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>${docTitle} — ${escapeHTML(sid)}</title>
 <style>
-/* ... (STILI identici a prima, omessi qui per brevità) ... */
+:root{
+  --brand:#111827; --accent:#0ea5e9; --ok:#16a34a; --text:#0b0f13; --muted:#6b7280;
+  --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --zebra:#fafafa; --chip:#f3f4f6;
+  --stamp:#133a7a;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative}
+.watermark{position:absolute; inset:0; display:${watermark?'flex':'none'}; align-items:center; justify-content:center; pointer-events:none}
+.watermark span{opacity:0.06; font-size:180px; letter-spacing:0.22em; transform:rotate(-24deg); font-weight:800; color:#0f172a}
+header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px}
+.brand{max-width:70%}
+.tag{display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#374151; background:var(--chip); border:1px solid var(--border); padding:2px 6px; border-radius:6px; margin-bottom:6px}
+.logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:#111827}
+.brand .meta{margin-top:6px; font-size:12px; color:${watermark?'#475569':'#6b7280'}}
+.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:12px; padding:10px; min-width:300px}
+.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'var(--accent)':'var(--ok)'}; font-weight:800}
+.doc-meta .kv{margin-top:6px}
+.kv div{margin:2px 0}
+hr.sep{border:none;border-top:1px solid var(--border); margin:16px 0 18px}
+.grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
+.card{border:1px solid var(--border); border-radius:12px; padding:12px}
+.card h3{margin:0 0 8px; font-size:11px; color:#374151; text-transform:uppercase; letter-spacing:.08em}
+.small{font-size:12px; color:#374151}
+.mono{font-feature-settings:"tnum" 1; font-variant-numeric: tabular-nums}
+.muted{color:#6b7280}
+table.items{width:100%; border-collapse:collapse; font-size:12px; margin-top:16px}
+table.items th, table.items td{border-bottom:1px solid var(--border); padding:9px 8px; vertical-align:top}
+table.items thead th{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#374151; text-align:left; background:var(--chip)}
+table.items td.num, table.items th.num{text-align:right}
+table.items tbody tr:nth-child(odd){background:var(--zebra)}
+table.items tbody tr:last-child td{border-bottom:1px solid var(--border-strong)}
+.totals{margin-top:10px; display:flex; justify-content:flex-end}
+.totals table{font-size:12px; border-collapse:collapse; min-width:300px}
+.totals td{padding:8px 10px; border-bottom:1px solid var(--border)}
+.totals tr:last-child td{border-top:1px solid var(--border-strong); border-bottom:none; font-weight:700}
+.note{margin-top:10px; font-size:11px; color:#374151}
+footer{margin-top:22px; font-size:11px; color:#374151}
+.sign{margin-top:20px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
+.sign .box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
+.sign .label{font-size:11px; color:#374151; margin-bottom:6px}
+.printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
+.btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:8px; cursor:pointer}
+.btn:hover{background:#f9fafb}
+@media print {.printbar{display:none}}
+.ship-card{margin-top:8px}
+.stamp{
+  position:relative; display:inline-block; padding:12px 14px 10px;
+  border:2.6px solid var(--stamp); color:var(--stamp); border-radius:12px;
+  text-transform:uppercase; font-weight:900; letter-spacing:.06em; transform:rotate(-5.2deg);
+  background:
+    radial-gradient(120px 40px at 18% 28%, rgba(19,58,122,.06), transparent 60%),
+    radial-gradient(90px 34px at 82% 72%, rgba(19,58,122,.07), transparent 60%),
+    repeating-radial-gradient( circle at 30% 60%, rgba(19,58,122,.06) 0 2px, transparent 2px 4px );
+  box-shadow:0 0 0 1px rgba(19,58,122,.18), inset 0 0 0 1.2px rgba(19,58,122,.32);
+  filter:url(#stampDistort) blur(.15px) contrast(1.08) saturate(1.05);
+  opacity:.98; mix-blend-mode:multiply;
+}
+.stamp:after{
+  content:""; position:absolute; inset:-4px; border-radius:14px;
+  background:
+    radial-gradient(12px 6px at 8% 24%, rgba(0,0,0,.08), transparent 70%),
+    radial-gradient(14px 7px at 92% 76%, rgba(0,0,0,.07), transparent 70%),
+    radial-gradient(10px 5px at 60% 18%, rgba(0,0,0,.05), transparent 70%);
+  pointer-events:none; mix-blend-mode:multiply; filter:blur(.6px);
+}
+.stamp .line{display:block; font-size:10px; letter-spacing:.08em; margin-top:3px; font-weight:800}
+.stamp .line.small{font-size:9px; font-weight:700; letter-spacing:.09em}
 </style>
 </head>
-<body> ... </body></html>`;
+<body>
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <filter id="stampDistort">
+        <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="noise"/>
+        <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.4" xChannelSelector="R" yChannelSelector="G"/>
+        <feGaussianBlur stdDeviation="0.15"/>
+      </filter>
+    </defs>
+  </svg>
+
+  <div class="page">
+    <div class="printbar">
+      <button class="btn" onclick="window.print()">Print / Save PDF</button>
+    </div>
+    <div class="watermark"><span>${watermark ? 'PROFORMA' : ''}</span></div>
+
+    <header>
+      <div class="brand">
+        <div class="tag">Sender</div>
+        <div class="logo"><div class="word">${escapeHTML(senderName)}</div></div>
+        <div class="meta">
+          ${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}${senderCountry? ' · ' : ''}${senderVat ? ('VAT ' + escapeHTML(senderVat)) : ''}<br/>
+          ${senderPhone ? ('Tel: ' + escapeHTML(senderPhone)) : ''}
+        </div>
+      </div>
+      <div class="doc-meta">
+        <div class="title">${docTitle}</div>
+        <div class="kv">
+          <div><strong>No.:</strong> ${escapeHTML(docNo)}</div>
+          <div><strong>Date:</strong> ${escapeHTML(fmtDate(pickupDate) || fmtDate(Date.now()))}</div>
+          <div><strong>Shipment ID:</strong> ${escapeHTML(sid)}</div>
+        </div>
+      </div>
+    </header>
+
+    <hr class="sep" />
+
+    <section class="grid">
+      <div class="card">
+        <h3>Receiver</h3>
+        <div class="small"><strong>${escapeHTML(shName)}</strong></div>
+        <div class="small">${escapeHTML(shAddr)}</div>
+        <div class="small">${escapeHTML(shZip)} ${escapeHTML(shCity)} (${escapeHTML(shCountry)})</div>
+        ${shPhone ? `<div class="small">Tel: ${escapeHTML(shPhone)}</div>` : ``}
+        ${shVat   ? `<div class="small">VAT/CF: ${escapeHTML(shVat)}</div>` : ``}
+      </div>
+      <div class="card">
+        <h3>Invoice Receiver</h3>
+        <div class="small"><strong>${escapeHTML(btName || shName)}</strong></div>
+        <div class="small">${escapeHTML(btAddr || shAddr)}</div>
+        <div class="small">${escapeHTML(btZip || shZip)} ${escapeHTML(btCity || shCity)} (${escapeHTML(btCountry || shCountry)})</div>
+        ${(btPhone || shPhone) ? `<div class="small">Tel: ${escapeHTML(btPhone || shPhone)}</div>` : ``}
+        ${(btVat || '') ? `<div class="small">VAT/CF: ${escapeHTML(btVat)}</div>` : ``}
+      </div>
+    </section>
+
+    <section class="grid" style="grid-template-columns:1fr">
+      <div class="card ship-card">
+        <h3>Shipment Details</h3>
+        <div class="small">Carrier: ${escapeHTML(carrier || '—')}</div>
+        <div class="small">Incoterm: ${escapeHTML(incoterm || '—')} · Currency: ${escapeHTML(ccy)}</div>
+        <div class="small">Net weight: <strong>${escapeHTML(kgFmt(totalsWeights.net))}</strong> · Gross weight: <strong>${escapeHTML(kgFmt(totalsWeights.gross))}</strong></div>
+      </div>
+    </section>
+
+    <table class="items" aria-label="Goods details">
+      <thead>
+        <tr>
+          <th style="width:28px">#</th>
+          <th>Description</th>
+          <th style="width:110px">HS Code</th>
+          <th style="width:70px" class="num">Qty</th>
+          <th style="width:110px" class="num">Price / unit</th>
+          <th style="width:120px" class="num">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${lines.map((r,i)=>`
+          <tr>
+            <td>${i+1}</td>
+            <td>
+              <strong>${escapeHTML(r.title || '—')}</strong>
+              ${r.meta?`<br/><span class="muted">${escapeHTML(r.meta)}</span>`:''}
+            </td>
+            <td>${escapeHTML(r.hs || '')}</td>
+            <td class="num mono">${num(r.qty)}</td>
+            <td class="num mono">${money(r.price, ccySym)}</td>
+            <td class="num mono">${money(r.amount, ccySym)}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+
+    <div class="totals">
+      <table>
+        <tr>
+          <td style="text-align:right">Total</td>
+          <td style="text-align:right; width:140px"><strong>${money(total, ccySym)}</strong></td>
+        </tr>
+      </table>
+    </div>
+
+    <div class="note">Country of origin: <strong>Italy</strong>.</div>
+    ${type==='proforma' ? `<div class="note"><strong>Note:</strong> Goods are not for resale. Declared values are for customs purposes only.</div>` : ''}
+
+    <footer>
+      <div class="sign">
+        <div>
+          <div class="small"><strong>Place & date:</strong> ${escapeHTML(place)}, ${escapeHTML(dateStr)}</div>
+          <div class="small">If you need more information about this shipping you can contact us at:<br/>info@spst.it · +39 320 144 1789 · www.spst.it</div>
+        </div>
+        <div>
+          <div class="label">Signature</div>
+          <div class="box"></div>
+          <div class="stamp" style="margin-top:12px">
+            ${escapeHTML(senderName)}
+            <span class="line">${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}</span>
+            <span class="line small">VAT: ${escapeHTML(senderVat || '—')}${senderPhone ? (' · TEL: ' + escapeHTML(senderPhone)) : ''}</span>
+          </div>
+        </div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>`;
 }
 
-// DLE HTML (come prima, invariato nei testi)
+// DLE HTML (come prima)
 function renderDLEHTML({ ship }) {
   const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
   const senderRS  = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
@@ -321,28 +509,122 @@ function renderDLEHTML({ ship }) {
   const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
 
   return `<!doctype html>
-<html lang="en"><head><meta charset="utf-8" />
+<html lang="en">
+<head>
+<meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Export Free Declaration — ${escapeHTML(sid)}</title></head>
-<body> ... (HTML DLE identico alla tua versione attuale) ... </body></html>`;
+<title>Export Free Declaration — ${escapeHTML(sid)}</title>
+<style>
+:root{ --brand:#111827; --accent:#0ea5e9; --text:#0b0f13; --muted:#6b7280; --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --chip:#f3f4f6; }
+*{box-sizing:border-box}
+html,body{margin:0;background:#fff;color:#0b0f13;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative}
+header{display:flex; align-items:flex-start; justify-content:space-between; gap:16px}
+.brand{max-width:70%}
+.logo .word{font-size:24px; font-weight:800; letter-spacing:.01em; color:#111827}
+.meta{margin-top:4px; font-size:12px; color:var(--muted)}
+.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:10px; padding:10px; min-width:260px}
+.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:#111827; font-weight:800}
+.doc-meta .kv{margin-top:6px}
+.kv div{margin:2px 0}
+hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
+.to{font-size:12px; color:#374151; margin-bottom:12px}
+.section{font-size:13px; line-height:1.55}
+.section p{margin:8px 0}
+.list{margin:8px 0 8px 16px; padding:0}
+.list li{margin:6px 0}
+.footer{margin-top:22px; font-size:12px; color:#374151}
+.sign{margin-top:22px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
+.box{height:64px; border:1px dashed var(--border-strong); border-radius:10px; width:260px}
+.printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
+.btn{font-size:12px; border:1px solid var(--border); background:#fff; padding:6px 10px; border-radius:10px; cursor:pointer}
+.btn:hover{background:#f9fafb}
+@media print {.printbar{display:none}}
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="printbar">
+      <button class="btn" onclick="window.print()">Print / Save PDF</button>
+    </div>
+
+    <header>
+      <div class="brand">
+        <div class="logo"><div class="word">${escapeHTML(senderRS)}</div></div>
+        <div class="meta">Shipment ID: ${escapeHTML(sid)}</div>
+      </div>
+      <div class="doc-meta">
+        <div class="title">Export Free Declaration</div>
+        <div class="kv">
+          <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
+          <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
+        </div>
+      </div>
+    </header>
+
+    <hr class="sep" />
+
+    <div class="to"><strong>To:</strong> ${escapeHTML(carrier)}</div>
+
+    <div class="section">
+      <p>I, the undersigned <strong>${escapeHTML(senderRS)}</strong>, as Shipper, hereby declare under my sole responsibility that all goods entrusted to <strong>${escapeHTML(carrier)}</strong>:</p>
+      <ul class="list">
+        <li>Are not included in the list of products protected by the Washington Convention (CITES) – Council Regulation (EC) No. 338/97 and subsequent amendments.</li>
+        <li>Are not included in the list of goods covered by Council Regulation (EC) No. 116/2009 on the export of cultural goods.</li>
+        <li>Are not subject to Regulation (EU) No. 821/2021 on dual-use items and subsequent amendments.</li>
+        <li>Are not included in Regulation (EU) No. 125/2019 concerning trade in certain goods that could be used for capital punishment, torture, or other cruel, inhuman, or degrading treatment.</li>
+        <li>Do not contain cat or dog fur, in accordance with Council Regulation (EC) No. 1523/2007.</li>
+        <li>Are not subject to Regulation (EU) No. 649/2012 on the export and import of hazardous chemicals.</li>
+        <li>Are not included in Regulation (EU) No. 590/2024 on substances that deplete the ozone layer.</li>
+        <li>Are not subject to Regulation (EC) No. 1013/2006 concerning shipments of waste.</li>
+        <li>Are not included in the restrictive measures provided for by the following EU Regulations and Decisions:</li>
+      </ul>
+      <ul class="list">
+        <li>Regulation (EC) No. 1210/2003 (Iraq)</li>
+        <li>Regulation (EU) No. 2016/44 (Libya)</li>
+        <li>Regulation (EU) No. 36/2012 (Syria)</li>
+        <li>Regulation (EC) No. 765/2006 (Belarus)</li>
+        <li>Regulation (EU) No. 833/2014 and Council Decision 2014/512/CFSP (Russia/Ukraine)</li>
+        <li>Regulation (EU) No. 692/2014 (Crimea/Sevastopol)</li>
+        <li>Regulation (EU) No. 2022/263 (Ukrainian territories occupied by the Russian Federation)</li>
+      </ul>
+      <p>Furthermore, the goods:</p>
+      <ul class="list">
+        <li>Are not included in any other restrictive list under current EU legislation.</li>
+        <li>Are intended exclusively for civilian use and have no dual-use or military purpose.</li>
+      </ul>
+    </div>
+
+    <div class="footer">
+      <div><strong>Place:</strong> ${escapeHTML(senderCity || '')}</div>
+      <div><strong>Date:</strong> ${escapeHTML(dateStr)}</div>
+      <div class="sign" style="margin-top:10px">
+        <div><strong>Signature of Shipper:</strong></div>
+        <div class="box"></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
 }
 
 /* =======================================================================================
  *                        DLE su TEMPLATE PDF (UPS / FEDEX)
  * ======================================================================================= */
 
-// Percorsi template PDF
-const TEMPLATE_PATHS = {
-  fedex: path.resolve(process.cwd(), 'public/templates/DLE_FEDEX_CON_PLACEHOLDER.pdf'),
-  ups:   path.resolve(process.cwd(), 'public/templates/UPS_DLE_CON_PLACEHOLDER.pdf'),
-};
+// Lazy-loader PDF libs (evita crash in ESM/Node e carica solo quando serve)
+async function loadPdfLibs() {
+  const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.js');
+  // disattiva il worker su server per evitare require/workerSrc
+  pdfjs.GlobalWorkerOptions.workerSrc = undefined;
+  return { PDFDocument, rgb, StandardFonts, pdfjs };
+}
 
-// Estrattore posizioni testo dal PDF (usa pdfjs-dist)
+// Estrattore posizioni dei placeholder
 async function extractTextPositions(pdfBuffer /* Uint8Array */) {
-  // @ts-ignore
-  pdfjs.GlobalWorkerOptions.workerSrc = require('pdfjs-dist/legacy/build/pdf.worker.js');
-
-  const loadingTask = pdfjs.getDocument({ data: pdfBuffer });
+  const { pdfjs } = await loadPdfLibs();
+  const loadingTask = pdfjs.getDocument({ data: pdfBuffer, disableWorker: true });
   const pdf = await loadingTask.promise;
   const items = [];
 
@@ -364,8 +646,9 @@ async function extractTextPositions(pdfBuffer /* Uint8Array */) {
   return items;
 }
 
-// Overlay: copre i placeholder e scrive il valore
+// Overlay (copre placeholder e scrive valore)
 async function overlayReplacements(pdfBuffer, replacements) {
+  const { PDFDocument, rgb, StandardFonts } = await loadPdfLibs();
   const pdfDoc = await PDFDocument.load(pdfBuffer);
   const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const items = await extractTextPositions(pdfBuffer);
@@ -378,22 +661,20 @@ async function overlayReplacements(pdfBuffer, replacements) {
       const page = pdfDoc.getPage(m.pageIndex);
       const pad = 1.5;
 
-      // rettangolo bianco sopra il placeholder
       page.drawRectangle({
         x: m.x - pad, y: m.y - pad,
         width: m.w + pad*2, height: m.h + pad*2,
         color: rgb(1,1,1),
       });
 
-      // shrink-to-fit semplice
       let fontSize = m.h * 0.9;
       const maxWidth = m.w;
-      let textToDraw = String(value);
+      const text = String(value);
 
-      while (helv.widthOfTextAtSize(textToDraw, fontSize) > maxWidth && fontSize > 6) {
+      while (helv.widthOfTextAtSize(text, fontSize) > maxWidth && fontSize > 6) {
         fontSize -= 0.5;
       }
-      page.drawText(textToDraw, {
+      page.drawText(text, {
         x: m.x,
         y: m.y + (m.h - fontSize) * 0.2,
         size: fontSize,
@@ -406,14 +687,15 @@ async function overlayReplacements(pdfBuffer, replacements) {
   return pdfDoc.save();
 }
 
-// Post-processing FedEx: “X” su “No cumulation applied” (se presente)
+// Post-processing FedEx (segna "No cumulation applied")
 async function postProcessFedEx(pdfBytes) {
+  const { PDFDocument, StandardFonts } = await loadPdfLibs();
   const pdfDoc = await PDFDocument.load(pdfBytes);
-  const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
-
   const items = await extractTextPositions(pdfBytes);
+
   const target = items.find(it => it.text.toUpperCase().includes('NO CUMULATION APPLIED'));
   if (target) {
+    const helv = await pdfDoc.embedFont(StandardFonts.Helvetica);
     const page = pdfDoc.getPage(target.pageIndex);
     page.drawText('X', {
       x: target.x - 12,
@@ -425,7 +707,13 @@ async function postProcessFedEx(pdfBytes) {
   return pdfDoc.save();
 }
 
-// Mappa placeholder → valore (adatta i nomi ai tuoi template)
+// Percorsi template PDF
+const TEMPLATE_PATHS = {
+  fedex: path.resolve(process.cwd(), 'public/templates/DLE_FEDEX_CON_PLACEHOLDER.pdf'),
+  ups:   path.resolve(process.cwd(), 'public/templates/UPS_DLE_CON_PLACEHOLDER.pdf'),
+};
+
+// Mappa placeholder → valore (adatta ai tuoi template)
 function buildDLEReplacements({ ship, carrier }) {
   const f = ship.fields || {};
   const senderRS   = get(f, ['Mittente - Ragione Sociale'], '');
@@ -443,12 +731,9 @@ function buildDLEReplacements({ ship, carrier }) {
   const dateStr    = dayjs(pickup || new Date()).format('DD-MM-YYYY');
   const docNo      = get(f, ['Numero Fattura', 'Proforma - Numero'], '');
 
-  // ATTENZIONE: le chiavi a sinistra DEVONO corrispondere ai testi esatti
-  // dei placeholder presenti in rosso nel PDF template che ci hai fornito.
-  // Se un placeholder ha un nome diverso nel tuo file, cambia la chiave.
   const common = {
     'Mittente - Ragione Sociale'       : senderRS,
-    'INTESTAZIONE DEL MITTENTE'        : senderRS,                // FedEx
+    'INTESTAZIONE DEL MITTENTE'        : senderRS, // FedEx
     'Mittente - P.IVA/CF'              : senderPiva,
     'Mittente - Indirizzo'             : senderAddr,
     'Mittente - Città'                 : senderCity,
@@ -464,36 +749,33 @@ function buildDLEReplacements({ ship, carrier }) {
     'Data'                             : dateStr,
   };
 
-  // Se servono particolarità per carrier: aggiungi/override qui
-  if (carrier === 'fedex') {
-    return { ...common };
-  }
-  if (carrier === 'ups') {
-    return { ...common };
-  }
+  if (carrier === 'fedex') return { ...common };
+  if (carrier === 'ups')   return { ...common };
   return common;
 }
 
 async function renderDLECarrierPDF({ ship, carrier }) {
   const key = String(carrier || '').toLowerCase();
-  if (key !== 'fedex' && key !== 'ups') {
+  if (!['fedex','ups'].includes(key)) {
     const err = new Error('Carrier non supportato per DLE PDF (usa fedex|ups)');
-    err.status = 400;
-    throw err;
+    err.status = 400; throw err;
   }
 
-  // carica template
   const templatePath = TEMPLATE_PATHS[key];
-  const pdfBuffer = new Uint8Array(await fs.readFile(templatePath));
 
-  // costruisci mappa sostituzioni dai campi Airtable
+  // Caricamento template con errore leggibile se mancante
+  let pdfBuffer;
+  try {
+    pdfBuffer = new Uint8Array(await fs.readFile(templatePath));
+  } catch {
+    const err = new Error(`Template PDF non trovato: ${templatePath}`);
+    err.status = 422; throw err;
+  }
+
   const replacements = buildDLEReplacements({ ship, carrier: key });
-
-  // overlay + post processing
   let out = await overlayReplacements(pdfBuffer, replacements);
   if (key === 'fedex') out = await postProcessFedEx(out);
-
-  return out; // Uint8Array
+  return out;
 }
 
 /* =======================================================================================
@@ -546,7 +828,6 @@ export default async function handler(req, res) {
     }
 
     // ===== INVOICES =====
-    // Carica PL, mappa righe, calcola totali (identico a prima)
     const pl = await getPLRows({ ship, sidRaw });
     const items = pl.length ? pl.map((r,i) => {
       const f = r.fields || {};
@@ -604,7 +885,7 @@ export default async function handler(req, res) {
     dlog('RENDER INVOICE OK', { ms: Date.now() - t0 });
   } catch (err) {
     derr('render error', err?.status || '', err?.message || err);
-    try { return bad(res, 500, 'Render error', String(err?.message || err)); }
+    try { return bad(res, (err?.status && Number(err.status)) || 500, 'Render error', String(err?.message || err)); }
     catch { /* noop */ }
   }
 }
