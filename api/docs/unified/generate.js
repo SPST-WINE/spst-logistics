@@ -18,8 +18,8 @@ function normalizeType(t) {
 }
 
 function canonical(params) {
-  // Query ordinata (NON usata per la firma, solo per leggibilità)
-  const keys = ['sid', 'type', 'exp', 'ship', 'carrier']; // niente format: render sceglierà HTML
+  // Query ordinata (NON per la firma, solo per leggibilità)
+  const keys = ['sid', 'type', 'exp', 'ship', 'carrier'];
   return keys
     .filter((k) => params[k] !== undefined && params[k] !== null && params[k] !== '')
     .map((k) => `${k}=${encodeURIComponent(String(params[k]))}`)
@@ -39,9 +39,9 @@ export default async function handler(req, res) {
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const idSpedizione = (body.idSpedizione || body.shipmentId || '').trim();
-    const rawType = (body.type || 'proforma').trim(); // 'proforma' | 'commercial' | 'dle'
+    const rawType = (body.type || 'proforma').trim();
     const type = normalizeType(rawType);
-    const carrier = (body.carrier || body.courier || '').toString().trim().toLowerCase(); // 'fedex' | 'ups' (opz.)
+    const carrier = (body.carrier || body.courier || '').toString().trim().toLowerCase();
 
     if (!idSpedizione) {
       return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
@@ -49,7 +49,7 @@ export default async function handler(req, res) {
 
     // Valori
     const sid = idSpedizione;  // firmato
-    const ship = idSpedizione; // mostrato nel template
+    const ship = idSpedizione; // echo in query
     const exp = Math.floor(Date.now() / 1000) + 15 * 60; // 15 minuti
     const sig = makeSig(sid, type, exp);
 
@@ -61,11 +61,7 @@ export default async function handler(req, res) {
     const qs = canonical(payload) + `&sig=${sig}`;
     const url = `${base}/api/docs/unified/render?${qs}`;
 
-    const fieldMap = {
-      proforma: 'Allegato Fattura',
-      commercial: 'Allegato Fattura',
-      dle: 'Allegato DLE'
-    };
+    const fieldMap = { proforma: 'Allegato Fattura', commercial: 'Allegato Fattura', dle: 'Allegato DLE' };
 
     console.log('[generate] OK', { time: now, type, sid, ship, exp, carrier: carrier || null });
 
