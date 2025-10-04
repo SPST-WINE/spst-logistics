@@ -26,7 +26,6 @@ export const config = { runtime: 'nodejs' };
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import dayjs from 'dayjs';
 
 // ---------- ENV ----------
 const AIRTABLE_PAT      = process.env.AIRTABLE_PAT;
@@ -226,6 +225,13 @@ const get = (obj, keys, def = '') => {
   return def;
 };
 const fmtDate = (d) => { try { return new Date(d).toLocaleDateString('it-IT'); } catch { return ''; } };
+const fmtDateDD = (d) => {
+  const dt = new Date(d || Date.now());
+  const dd = String(dt.getDate()).padStart(2,'0');
+  const mm = String(dt.getMonth()+1).padStart(2,'0');
+  const yy = dt.getFullYear();
+  return `${dd}-${mm}-${yy}`;
+};
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
 const money = (x, sym = '€') =>
   `${sym} ${num(x).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -728,7 +734,7 @@ function buildDLEReplacements({ ship, carrier }) {
   const destCountry= get(f, ['Destinatario - Paese'], '');
 
   const pickup     = get(f, ['Ritiro - Data'], '') || f['Ritiro Data'];
-  const dateStr    = dayjs(pickup || new Date()).format('DD-MM-YYYY');
+  const dateStr    = fmtDateDD(pickup || Date.now());
   const docNo      = get(f, ['Numero Fattura', 'Proforma - Numero'], '');
 
   const common = {
