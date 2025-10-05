@@ -1,8 +1,10 @@
 // api/docs/unified/generate.js
+// SOSTITUISCI INTERO FILE. Instrada automaticamente i DLE verso /api/docs/unified/dle_writer
+// e lascia Proforma/Commercial su /api/docs/unified/render. Firma invariata.
 
-// api/docs/unified/generate.js
-// ESM: il progetto ha "type":"module" nel package.json
 import crypto from 'node:crypto';
+
+export const config = { runtime: 'nodejs' };
 
 const SECRET = process.env.DOCS_SIGN_SECRET || '';
 
@@ -11,12 +13,17 @@ function makeSig(sid, type, exp) {
 }
 
 function canonical(params) {
-  // Query ordinata (NON usata per la firma, solo per leggibilità)
   const keys = ['sid', 'type', 'exp', 'ship'];
   return keys
     .filter((k) => params[k] !== undefined && params[k] !== null)
     .map((k) => `${k}=${encodeURIComponent(String(params[k]))}`)
     .join('&');
+}
+
+function routePathForType(type) {
+  const t = String(type || '').toLowerCase();
+  if (t.startsWith('dle')) return '/api/docs/unified/dle_writer';  // ➜ writer da zero
+  return '/api/docs/unified/render';                               // ➜ invoice/proforma/commercial
 }
 
 export default async function handler(req, res) {
@@ -32,13 +39,13 @@ export default async function handler(req, res) {
 
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
     const idSpedizione = (body.idSpedizione || body.shipmentId || '').trim();
-    const type = (body.type || 'proforma').trim(); // 'proforma' | 'fattura' | 'dle'
+    const type = (body.type || 'proforma').trim(); // 'proforma' | 'fattura' | 'commercial' | 'dle' | 'dle:fedex' | 'dle:ups'
     const carrier = (body.carrier || '').toString().trim();
+
     if (!idSpedizione) {
       return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
     }
 
-    // Valori
     const sid = idSpedizione;  // firmato
     const ship = idSpedizione; // mostrato nel template
 
@@ -50,17 +57,25 @@ export default async function handler(req, res) {
     const host = req.headers['x-forwarded-host'] || req.headers.host;
     const base = `${proto}://${host}`;
 
+    const path = routePathForType(type);
     const qs = canonical(payload) + `&sig=${sig}` + (carrier ? `&carrier=${encodeURIComponent(carrier)}` : '');
-    const url = `${base}/api/docs/unified/render?${qs}`;
+    const url = `${base}${path}?${qs}`;
 
-    console.log('[generate] OK', { time: now, type, sid, ship, exp, carrier: !!carrier });
+    console.log('[generate] OK', { time: now, type, sid, ship, exp, path });
 
-    const fieldMap = { proforma: 'Allegato Fattura', fattura: 'Allegato Fattura', dle: 'Allegato DLE' };
+    const fieldMap = {
+      proforma: 'Allegato Fattura',
+      fattura:  'Allegato Fattura',
+      commercial: 'Allegato Fattura',
+      dle:      'Allegato DLE',
+      'dle:fedex': 'Allegato DLE',
+      'dle:ups':   'Allegato DLE',
+    };
 
     return res.status(200).json({
       ok: true,
       url,
-      field: fieldMap[type] || 'Allegato Fattura',
+      field: fieldMap[type.toLowerCase()] || 'Allegato Fattura',
       type,
       via: 'referer',
     });
@@ -69,5 +84,3 @@ export default async function handler(req, res) {
     return res.status(500).json({ ok: false, error: 'Server error' });
   }
 }
-
-export const config = { runtime: "nodejs" };
