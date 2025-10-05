@@ -103,11 +103,11 @@ function extractDLE(ship){
   return { mitt, destCountry, sid, invNo, dateStr, carrier, addr, vatTel };
 }
 
-// ---------- HTML base CSS ----------
+// Sostituisci la funzione baseCSS in api/docs/unified/dle_html.js
 function baseCSS() {
   return `
-  *{box-sizing:border-box}
-  html,body{margin:0;background:#fff;color:#111827;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  *{box-sizing:border-box; font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  html,body{margin:0;background:#fff;color:#111827}
   @page{size:A4;margin:18mm 16mm}
   .page{width:210mm;min-height:297mm;margin:0 auto;position:relative}
   .printbar{position:sticky;top:0;background:#fff;padding:8px 0 12px;display:flex;gap:8px;justify-content:flex-end}
@@ -124,26 +124,26 @@ function baseCSS() {
   .kv div{margin:2px 0}
   hr.sep{border:none;border-top:1px solid #e5e7eb;margin:16px 0}
   h3{margin:0 0 8px;font-size:12px;color:#374151;text-transform:uppercase;letter-spacing:.08em}
-  .small{font-size:12px;color:#374151}
+  .small{font-size:12px;color:#374151;margin:0}
   .muted{color:#6b7280}
   ul.list{margin:8px 0 8px 18px;padding:0}
   ul.list li{margin:6px 0;font-size:12px;line-height:1.5}
   .footer{margin-top:18px;font-size:12px;color:#374151}
   .signrow{margin-top:10px;display:flex;gap:18px;align-items:flex-end}
   .sigbox{height:64px;border:1px dashed #d1d5db;border-radius:10px;width:260px}
-  .letterhead{white-space:pre-line}
-  .subject{margin:14px 0 8px;font-weight:700}
   .addrBlock{line-height:1.5}
-  .checkbox{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+  /* font uniforme ovunque, niente monospace per le checkbox */
+  .checkbox{font-family:inherit}
   `;
 }
+
 
 // ---------- FedEx-like ----------
 // Sostituisci INTERA funzione renderFedExHTML in api/docs/unified/dle_html.js
 
 function renderFedExHTML({ data }) {
   const place = data.mitt.city || '';
-  const placeCap = `${escapeHTML(place)} ${escapeHTML(data.mitt.cap || '')}`.trim();
+  const placeCap = `${escapeHTML(place)}${data.mitt.cap ? ', ' + escapeHTML(data.mitt.cap) : ''}`;
   return `<!doctype html><html lang="en"><head>
   <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Export Free Declaration — ${escapeHTML(data.sid)}</title>
@@ -154,15 +154,15 @@ function renderFedExHTML({ data }) {
     <div style="font-size:11px;color:#4b5563;margin-bottom:8px"><em>(If the consignor is a company, the Declaration below must be printed on company letterhead)</em></div>
     <div class="small" style="margin-bottom:8px"><strong>To the attention of the Customs Agency</strong></div>
 
-    <!-- Sender details compatti, senza box -->
-    <div class="letterhead">
+    <!-- Sender details compatti (nessun box, righe adiacenti senza riga vuota) -->
+    <div>
       <div class="title" style="margin-bottom:4px">Sender details</div>
-      <div class="small" style="margin:2px 0"><strong>${escapeHTML(data.mitt.rs)}</strong></div>
-      ${data.mitt.piva ? `<div class="small" style="margin:2px 0">VAT/CF: ${escapeHTML(data.mitt.piva)}</div>` : ``}
-      <div class="small" style="margin:2px 0">${escapeHTML(data.mitt.ind)}</div>
-      <div class="small" style="margin:2px 0">${escapeHTML(data.mitt.city)}${data.mitt.cap ? ', ' + escapeHTML(data.mitt.cap) : ''}</div>
-      <div class="small" style="margin:2px 0">${escapeHTML(data.mitt.country)}</div>
-      ${data.mitt.tel ? `<div class="small" style="margin:2px 0">Tel: ${escapeHTML(data.mitt.tel)}</div>` : ``}
+      <div class="small" style="line-height:1.35"><strong>${escapeHTML(data.mitt.rs)}</strong></div>
+      ${data.mitt.piva ? `<div class="small" style="line-height:1.35">VAT/CF: ${escapeHTML(data.mitt.piva)}</div>` : ``}
+      <div class="small" style="line-height:1.35">${escapeHTML(data.mitt.ind)}</div>
+      <div class="small" style="line-height:1.35">${escapeHTML(data.mitt.city)}${data.mitt.cap ? ', ' + escapeHTML(data.mitt.cap) : ''}</div>
+      <div class="small" style="line-height:1.35">${escapeHTML(data.mitt.country)}</div>
+      ${data.mitt.tel ? `<div class="small" style="line-height:1.35">Tel: ${escapeHTML(data.mitt.tel)}</div>` : ``}
     </div>
 
     <div class="small" style="margin:10px 0 8px 0">
@@ -189,7 +189,6 @@ function renderFedExHTML({ data }) {
       <div class="muted" style="margin-top:4px;line-height:1.8">
         ..........................................................................................................................<br/>
         ..........................................................................................................................<br/>
-        ..........................................................................................................................
       </div>
     </div>
 
