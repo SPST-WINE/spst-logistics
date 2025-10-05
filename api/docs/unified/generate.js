@@ -1,9 +1,7 @@
 // api/docs/unified/generate.js
-// SOSTITUISCI INTERO FILE. Instrada automaticamente i DLE verso /api/docs/unified/dle_writer
-// e lascia Proforma/Commercial su /api/docs/unified/render. Firma invariata.
+// SOSTITUISCI INTERO FILE. Per i DLE passa all'endpoint HTML “dle_html”.
 
 import crypto from 'node:crypto';
-
 export const config = { runtime: 'nodejs' };
 
 const SECRET = process.env.DOCS_SIGN_SECRET || '';
@@ -11,19 +9,15 @@ const SECRET = process.env.DOCS_SIGN_SECRET || '';
 function makeSig(sid, type, exp) {
   return crypto.createHmac('sha256', SECRET).update(`${sid}.${type}.${exp}`).digest('hex');
 }
-
 function canonical(params) {
   const keys = ['sid', 'type', 'exp', 'ship'];
-  return keys
-    .filter((k) => params[k] !== undefined && params[k] !== null)
-    .map((k) => `${k}=${encodeURIComponent(String(params[k]))}`)
-    .join('&');
+  return keys.filter(k => params[k]!==undefined && params[k]!==null)
+             .map(k => `${k}=${encodeURIComponent(String(params[k]))}`).join('&');
 }
-
 function routePathForType(type) {
   const t = String(type || '').toLowerCase();
-  if (t.startsWith('dle')) return '/api/docs/unified/dle_writer';  // ➜ writer da zero
-  return '/api/docs/unified/render';                               // ➜ invoice/proforma/commercial
+  if (t.startsWith('dle')) return '/api/docs/unified/dle_html'; // ➜ HTML template
+  return '/api/docs/unified/render';                             // ➜ proforma/commercial
 }
 
 export default async function handler(req, res) {
@@ -31,25 +25,19 @@ export default async function handler(req, res) {
   try {
     if (req.method !== 'POST') {
       res.setHeader('Allow', 'POST');
-      return res.status(405).json({ ok: false, error: 'Method Not Allowed' });
+      return res.status(405).json({ ok:false, error:'Method Not Allowed' });
     }
-    if (!SECRET) {
-      return res.status(500).json({ ok: false, error: 'Missing DOCS_SIGN_SECRET' });
-    }
+    if (!SECRET) return res.status(500).json({ ok:false, error:'Missing DOCS_SIGN_SECRET' });
 
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+    const body = typeof req.body === 'string' ? JSON.parse(req.body||'{}') : (req.body||{});
     const idSpedizione = (body.idSpedizione || body.shipmentId || '').trim();
-    const type = (body.type || 'proforma').trim(); // 'proforma' | 'fattura' | 'commercial' | 'dle' | 'dle:fedex' | 'dle:ups'
+    const type = (body.type || 'proforma').trim();
     const carrier = (body.carrier || '').toString().trim();
+    if (!idSpedizione) return res.status(400).json({ ok:false, error:'idSpedizione is required' });
 
-    if (!idSpedizione) {
-      return res.status(400).json({ ok: false, error: 'idSpedizione is required' });
-    }
-
-    const sid = idSpedizione;  // firmato
-    const ship = idSpedizione; // mostrato nel template
-
-    const exp = Math.floor(Date.now() / 1000) + 15 * 60; // 15 minuti
+    const sid = idSpedizione;
+    const ship = idSpedizione;
+    const exp = Math.floor(Date.now()/1000) + 15*60;
     const payload = { sid, type, exp, ship };
     const sig = makeSig(sid, type, exp);
 
@@ -61,7 +49,7 @@ export default async function handler(req, res) {
     const qs = canonical(payload) + `&sig=${sig}` + (carrier ? `&carrier=${encodeURIComponent(carrier)}` : '');
     const url = `${base}${path}?${qs}`;
 
-    console.log('[generate] OK', { time: now, type, sid, ship, exp, path });
+    console.log('[generate] OK', { time: now, type, sid, path });
 
     const fieldMap = {
       proforma: 'Allegato Fattura',
@@ -81,6 +69,6 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('[generate] 500', now, err);
-    return res.status(500).json({ ok: false, error: 'Server error' });
+    return res.status(500).json({ ok:false, error:'Server error' });
   }
 }
