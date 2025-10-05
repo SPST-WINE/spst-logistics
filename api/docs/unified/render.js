@@ -8,10 +8,11 @@ export const config = { runtime: 'nodejs' };
  *  - DLE (Export Free Declaration)
  *
  * Query:
- *  - sid | ship : shipment identifier (business "ID Spedizione" or Airtable recId)
- *  - type       : proforma | fattura | commercial | commerciale | invoice | dle
+ *  - sid | ship | shipmentId : shipment identifier (business "ID Spedizione" or Airtable recId)
+ *  - type       : proforma | fattura | commercial | commerciale | invoice | dle | dle:*
  *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
- *  - carrier    : (OPZIONALE) override manuale del corriere — usato SOLO per Proforma
+ *  - carrier    : (OPZIONALE) override manuale del corriere — usato per Proforma/Commercial e DLE generica
+ *  - tpl/template/dleTpl/dle_template/dleCarrier: alias per il valore del corriere dalla UI
  *
  * Env:
  *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
@@ -227,14 +228,29 @@ const escapeHTML = (x = '') => String(x)
   .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 const kgFmt = (x) => `${(Math.round(num(x)*10)/10).toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kg`;
 
-// ---------- Type normalization ----------
+// ---------- Normalizers ----------
 function normalizeType(t) {
   const raw = String(t || 'proforma').toLowerCase().trim();
+  if (raw.startsWith('dle')) return 'dle'; // handles 'dle', 'dle:fedex', 'dle:ups', etc
   const commercialAliases = new Set(['commercial', 'commerciale', 'invoice', 'fattura', 'fattura commerciale']);
   const dleAliases = new Set(['dle', 'dichiarazione', 'libera', 'esportazione', 'export', 'export declaration']);
   if (dleAliases.has(raw)) return 'dle';
   if (commercialAliases.has(raw)) return 'commercial';
   return 'proforma';
+}
+function normalizeCarrierName(x='') {
+  let v = String(x || '').replace(/\+/g,' ').trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1');
+  const low = v.toLowerCase();
+  if (!v) return '';
+  if (/(usa|use).*(valore|value)|generico|altro|other/.test(low)) return ''; // treat as "no override"
+  if (low === 'fx' || low === 'fedex' || low === 'fe d ex') return 'FedEx';
+  if (low === 'ups') return 'UPS';
+  if (low === 'dhl') return 'DHL';
+  if (low === 'gls') return 'GLS';
+  if (low === 'tnt') return 'TNT';
+  if (low === 'brt') return 'BRT';
+  // fallback: capitalize first letter only
+  return v.charAt(0).toUpperCase() + v.slice(1);
 }
 
 // ---------- INVOICE HTML ----------
@@ -511,16 +527,12 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 </html>`;
 }
 
-// ---------- DLE HTML (unchanged) ----------
-// ✅ Sostituisci **SOLO** questa funzione in api/docs/unified/render.js
-
+// ---------- DLE HTML (generic) ----------
 function renderDLEHTML({ ship, overrideCarrier }) {
-  // Carrier: usa override della UI (DHL/GLS/TNT/BRT) se presente,
-  // altrimenti ricade sul valore in Airtable.
+  // Usa SEMPRE l'override se presente; altrimenti valore da Airtable
   const carrierFromShip = get(ship.fields, ['Corriere', 'Carrier'], '—');
-  const ov = String(overrideCarrier || '').trim();
-  const ignoreOverride = /^(usa|use).*(valore|value)|generico|altro|other$/i.test(ov);
-  const carrier = (ov && !ignoreOverride) ? ov : carrierFromShip;
+  const ov = normalizeCarrierName(overrideCarrier);
+  const carrier = ov || carrierFromShip || '—';
 
   const senderRS   = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
   const senderCity = get(ship.fields, ['Mittente - Città'], '');
@@ -630,18 +642,18 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 
 
 // ---------- Handler ----------
-// Sostituisci INTERA funzione handler in api/docs/unified/render.js
-
 export default async function handler(req, res) {
   const t0 = Date.now();
   try {
     const q = req.query || {};
     const rawType = String(q.type || 'proforma').toLowerCase();
     const type    = normalizeType(rawType); // 'proforma' | 'commercial' | 'dle'
-    const sidRaw  = q.sid || q.ship;
+    const sidRaw  = q.sid || q.ship || q.shipmentId;
 
-    // ⬇️ Prende l’override del corriere anche da tpl/template (UI DLE)
-    const carrierOverride = (q.carrier || q.courier || q.tpl || q.template || '').toString().trim();
+    // ⬇️ Prende l’override del corriere da vari alias di query della UI
+    const carrierOverride = normalizeCarrierName(
+      q.carrier ?? q.courier ?? q.tpl ?? q.template ?? q.dleTpl ?? q.dle_template ?? q.dleCarrier ?? ''
+    );
 
     const sig  = q.sig;
     const exp  = q.exp;
