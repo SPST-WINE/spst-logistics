@@ -1,16 +1,24 @@
-// api/docs/unified/render.js — SOSTITUISCI INTERO FILE CON QUESTO CONTENUTO
-// Fix: riempimento "pixel perfect" con copertura (whiteout) dei placeholder rossi + scrittura testo
+// api/docs/unified/render.js
+// SOSTITUISCI INTERO FILE. Correzione errore "Identifier 'PDFDocument' has already been declared"
+// + DLE FedEx/UPS pixel-perfect con overlay sicuro (whiteout + testo).
 
 export const config = { runtime: 'nodejs' };
 
 /**
- * HTML renderer (Proforma/Commercial), DLE HTML fallback
- * + DLE PDF (FedEx / UPS) con overlay “whiteout” dei placeholder rossi
+ * /api/docs/unified/render
  *
- * Requisiti file:
- *  - ./assets/dle/FedEx_DLE_master.pdf
- *  - ./assets/dle/UPS_DLE_Master.pdf
- *  - ./assets/fonts/Inter-Regular.ttf
+ * Query:
+ *  - sid | ship : shipment identifier (business "ID Spedizione" or Airtable recId)
+ *  - type       : proforma | commercial | invoice | fattura | dle | dle:fedex | dle:ups
+ *  - exp, sig   : HMAC-SHA256 over `${sid}.${type}.${exp}` — bypassable with BYPASS_SIGNATURE=1
+ *  - carrier    : (opz.) override del corriere — usato per Invoice e routing DLE
+ *
+ * Env:
+ *  AIRTABLE_PAT, AIRTABLE_BASE_ID, DOCS_SIGN_SECRET, BYPASS_SIGNATURE=1, DEBUG_DOCS=1
+ *  File richiesti nel repo:
+ *    ./assets/dle/FedEx_DLE_master.pdf
+ *    ./assets/dle/UPS_DLE_Master.pdf
+ *    ./assets/fonts/Inter-Regular.ttf
  */
 
 import crypto from 'node:crypto';
@@ -27,14 +35,14 @@ const DOCS_SIGN_SECRET  = process.env.DOCS_SIGN_SECRET || '';
 const BYPASS_SIGNATURE  = process.env.BYPASS_SIGNATURE === '1';
 const DEBUG_DOCS        = process.env.DEBUG_DOCS === '1';
 
-// ---------- LOG HELPERS ----------
-const dlog = (...args) => { if (DEBUG_DOCS) console.log('[docs]', ...args); };
-const derr = (...args) => { console.error('[docs:ERR]', ...args); };
+// ---------- LOG ----------
+const dlog = (...a) => { if (DEBUG_DOCS) console.log('[docs]', ...a); };
+const derr = (...a) => { console.error('[docs:ERR]', ...a); };
 
+// ---------- CONST ----------
 const TB_SPEDIZIONI = 'SpedizioniWebApp';
 const TB_PL         = 'SPED_PL';
 
-// ---------- PATHS ----------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 const ASSETS_DIR = path.join(__dirname, '..', '..', '..', 'assets');
@@ -42,7 +50,9 @@ const PDF_FDX    = path.join(ASSETS_DIR, 'dle', 'FedEx_DLE_master.pdf');
 const PDF_UPS    = path.join(ASSETS_DIR, 'dle', 'UPS_DLE_Master.pdf'); // M maiuscola
 const FONT_INTER = path.join(ASSETS_DIR, 'fonts', 'Inter-Regular.ttf');
 
-// ---------- Airtable helpers ----------
+if (!AIRTABLE_PAT || !AIRTABLE_BASE_ID) console.warn('[render] Missing Airtable envs');
+
+// ---------- Airtable ----------
 const API_ROOT = `https://api.airtable.com/v0/${AIRTABLE_BASE_ID}`;
 const tableURL  = (t) => `${API_ROOT}/${encodeURIComponent(t)}`;
 const recordURL = (t, id) => `${tableURL(t)}/${encodeURIComponent(id)}`;
@@ -72,7 +82,6 @@ async function airFetch(url, init = {}) {
   }
   return data;
 }
-
 function safeJSON(t) { try { return JSON.parse(t); } catch { return null; } }
 function truncate(s, n=600){ s = String(s||''); return s.length>n ? s.slice(0,n)+'…' : s; }
 
@@ -86,14 +95,16 @@ async function airFetchAll(formula, tableName) {
       ? `${tableURL(tableName)}?filterByFormula=${encodeURIComponent(formula)}&pageSize=100&offset=${data.offset}`
       : null;
   }
+  dlog('airFetchAll', tableName, 'rows:', rows.length);
   return rows;
 }
 
-// ---------- Shipment loader ----------
+// ---------- Shipment ----------
 async function getShipmentBySid(sid) {
+  dlog('getShipmentBySid()', sid);
   if (/^rec[0-9A-Za-z]{14}/.test(String(sid))) {
-    try { return await airFetch(recordURL(TB_SPEDIZIONI, sid)); }
-    catch { return null; }
+    try { const rec = await airFetch(recordURL(TB_SPEDIZIONI, sid)); return rec; }
+    catch (e) { derr('airFetch(record) failed', e?.status || '', e?.message || e); return null; }
   }
   const candidates = [
     'ID Spedizione','Id Spedizione','ID spedizione','id spedizione',
@@ -108,20 +119,19 @@ async function getShipmentBySid(sid) {
       if (rec) return rec;
     } catch (err) {
       if (err?.status === 422) continue;
+      derr('find shipment failed', field, err?.status || '', err?.message || err);
       throw err;
     }
   }
   return null;
 }
 
-// ---------- PL loader ----------
+// ---------- PL ----------
 const PL_LINKED_FIELD_ALIASES = ['SPED_PL', 'PL', 'Packing List', 'Packing list', 'PL Righe', 'Packing list righe'];
-
 function buildOrByRecordIds(ids = []) {
   const parts = ids.map(id => `RECORD_ID()='${String(id).replace(/'/g,"\\'")}'`);
   return parts.length ? `OR(${parts.join(',')})` : '';
 }
-
 async function getPLRows({ ship, sidRaw }) {
   const recId = ship.id;
   const businessSid = ship?.fields?.['ID Spedizione']
@@ -138,7 +148,7 @@ async function getPLRows({ ship, sidRaw }) {
         try {
           const rows = await airFetchAll(formula, TB_PL);
           if (rows.length) return rows;
-        } catch {}
+        } catch (err) { derr('PL via linked field error', fname, err?.status || '', err?.message || err); }
       }
     }
   }
@@ -153,6 +163,7 @@ async function getPLRows({ ship, sidRaw }) {
       if (rows.length) return rows;
     } catch (err) {
       if (err?.status === 422) continue;
+      derr('PL fetch error', err?.status || '', err?.message || err);
       throw err;
     }
   }
@@ -161,39 +172,28 @@ async function getPLRows({ ship, sidRaw }) {
 
 // ---------- Signature ----------
 function verifySigFlexible({ sid, rawType, normType, exp, sig }) {
-  if (BYPASS_SIGNATURE) return true;
+  if (BYPASS_SIGNATURE) { dlog('SIGNATURE BYPASSED'); return true; }
   if (!sid || !rawType || !exp || !sig) return false;
   const now = Math.floor(Date.now() / 1000);
   if (Number(exp) < now) return false;
-
   const h1 = crypto.createHmac('sha256', DOCS_SIGN_SECRET).update(`${sid}.${rawType}.${exp}`).digest('hex');
   const h2 = crypto.createHmac('sha256', DOCS_SIGN_SECRET).update(`${sid}.${normType}.${exp}`).digest('hex');
   const q  = `sid=${encodeURIComponent(String(sid))}&type=${encodeURIComponent(String(rawType))}&exp=${encodeURIComponent(String(exp))}`;
   const h3 = crypto.createHmac('sha256', DOCS_SIGN_SECRET).update(q).digest('hex');
-
   return safeEqual(h1, String(sig)) || safeEqual(h2, String(sig)) || safeEqual(h3, String(sig));
 }
 function safeEqual(a,b){ try{ return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)); }catch{ return false; } }
-
 function bad(res, code, msg, details) {
+  dlog('RESP', code, msg, details || '');
   res.status(code).json({ ok: false, error: msg, details });
 }
 
 // ---------- Utils ----------
-const get = (obj, keys, def = '') => {
-  for (const k of keys) {
-    const v = obj?.[k];
-    if (v !== undefined && v !== null && v !== '') return v;
-  }
-  return def;
-};
+const get = (obj, keys, def = '') => { for (const k of keys) { const v = obj?.[k]; if (v!==undefined && v!==null && v!=='') return v; } return def; };
 const fmtDate = (d) => { try { return new Date(d).toLocaleDateString('it-IT'); } catch { return ''; } };
 const num = (x) => { const n = Number(x); return Number.isFinite(n) ? n : 0; };
-const money = (x, sym = '€') =>
-  `${sym} ${num(x).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const escapeHTML = (x = '') => String(x)
-  .replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
-  .replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+const money = (x, sym = '€') => `${sym} ${num(x).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const escapeHTML = (x = '') => String(x).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
 const kgFmt = (x) => `${(Math.round(num(x)*10)/10).toLocaleString('it-IT', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} kg`;
 
 // ---------- Type normalization ----------
@@ -202,7 +202,7 @@ function normalizeType(t) {
   if (raw === 'dle:fedex' || raw === 'dle-fedex') return 'dle_fedex';
   if (raw === 'dle:ups'   || raw === 'dle-ups')   return 'dle_ups';
   const commercialAliases = new Set(['commercial', 'commerciale', 'invoice', 'fattura', 'fattura commerciale']);
-  const dleAliases = new Set(['dle', 'dichiarazione', 'libera', 'esportazione', 'export', 'export declaration']);
+  const dleAliases = new Set(['dle','dichiarazione','libera','esportazione','export','export declaration']);
   if (dleAliases.has(raw)) return 'dle';
   if (commercialAliases.has(raw)) return 'commercial';
   return 'proforma';
@@ -216,7 +216,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   let ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
   if (type === 'proforma') ccySym = '€';
 
-  // Sender (Mittente)
+  // Sender
   const senderName    = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
   const senderCountry = get(ship.fields, ['Mittente - Paese'], '');
   const senderCity    = get(ship.fields, ['Mittente - Città'], '');
@@ -225,7 +225,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const senderPhone   = get(ship.fields, ['Mittente - Telefono'], '');
   const senderVat     = get(ship.fields, ['Mittente - P.IVA/CF'], '');
 
-  // Receiver (SPEDIZIONE)
+  // Receiver (spedizione)
   const shName    = get(ship.fields, ['Destinatario - Ragione Sociale'], '—');
   const shAddr    = get(ship.fields, ['Destinatario - Indirizzo'], '');
   const shCity    = get(ship.fields, ['Destinatario - Città'], '');
@@ -234,7 +234,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const shPhone   = get(ship.fields, ['Destinatario - Telefono'], '');
   const shVat     = get(ship.fields, ['Destinatario - P.IVA/CF'], '');
 
-  // Invoice Receiver (FATTURAZIONE)
+  // Invoice receiver (fatturazione)
   const btName    = get(ship.fields, ['FATT Ragione Sociale'], '');
   const btAddr    = get(ship.fields, ['FATT Indirizzo'], '');
   const btCity    = get(ship.fields, ['FATT Città'], '');
@@ -243,7 +243,7 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const btPhone   = get(ship.fields, ['FATT Telefono'], '');
   const btVat     = get(ship.fields, ['FATT PIVA/CF'], '');
 
-  // Shipment meta
+  // Meta
   const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
   const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
   const incoterm  = get(ship.fields, ['Incoterm'], '');
@@ -256,173 +256,115 @@ function renderInvoiceHTML({ type, ship, lines, total, totalsWeights }) {
   const dateStr= fmtDate(pickupDate) || fmtDate(Date.now());
 
   return `<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>${docTitle} — ${escapeHTML(sid)}</title>
 <style>
-:root{
-  --brand:#111827; --accent:#0ea5e9; --ok:#16a34a; --text:#0b0f13; --muted:#6b7280;
-  --border:#e5e7eb; --border-strong:#d1d5db; --bg:#ffffff; --zebra:#fafafa; --chip:#f3f4f6;
-  --stamp:#133a7a;
-}
-*{box-sizing:border-box}
-html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-.page{width:210mm; min-height:297mm; margin:0 auto; padding:18mm 16mm; position:relative}
-.watermark{position:absolute; inset:0; display:${watermark?'flex':'none'}; align-items:center; justify-content:center; pointer-events:none}
-.watermark span{opacity:0.06; font-size:180px; letter-spacing:0.22em; transform:rotate(-24deg); font-weight:800; color:#0f172a}
-header{display:grid; grid-template-columns:1fr auto; align-items:start; gap:16px}
+:root{--brand:#111827;--accent:#0ea5e9;--ok:#16a34a;--text:#0b0f13;--muted:#6b7280;--border:#e5e7eb;--border-strong:#d1d5db;--zebra:#fafafa;--chip:#f3f4f6}
+*{box-sizing:border-box}html,body{margin:0;background:#fff;color:var(--text);font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+.page{width:210mm;min-height:297mm;margin:0 auto;padding:18mm 16mm;position:relative}
+.watermark{position:absolute;inset:0;display:${watermark?'flex':'none'};align-items:center;justify-content:center;pointer-events:none}
+.watermark span{opacity:.06;font-size:180px;letter-spacing:.22em;transform:rotate(-24deg);font-weight:800;color:#0f172a}
+header{display:grid;grid-template-columns:1fr auto;align-items:start;gap:16px}
 .brand{max-width:70%}
-.tag{display:inline-block; font-size:10px; text-transform:uppercase; letter-spacing:.08em; color:#374151; background:#f3f4f6; border:1px solid #e5e7eb; padding:2px 6px; border-radius:6px; margin-bottom:6px}
-.logo .word{font-size:26px; font-weight:800; letter-spacing:.01em; color:#111827}
-.brand .meta{margin-top:6px; font-size:12px; color:${watermark?'#475569':'#6b7280'}}
-.doc-meta{ text-align:right; font-size:12px; border:1px solid var(--border); border-radius:12px; padding:10px; min-width:300px}
-.doc-meta .title{font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:${watermark?'var(--accent)':'var(--ok)'}; font-weight:800}
-.doc-meta .kv{margin-top:6px}
-.kv div{margin:2px 0}
-hr.sep{border:none;border-top:1px solid #e5e7eb; margin:16px 0 18px}
-.grid{display:grid; grid-template-columns:1fr 1fr; gap:12px}
-.card{border:1px solid #e5e7eb; border-radius:12px; padding:12px}
-.card h3{margin:0 0 8px; font-size:11px; color:#374151; text-transform:uppercase; letter-spacing:.08em}
-.small{font-size:12px; color:#374151}
-.mono{font-feature-settings:"tnum" 1; font-variant-numeric: tabular-nums}
-.muted{color:#6b7280}
-table.items{width:100%; border-collapse:collapse; font-size:12px; margin-top:16px}
-table.items th, table.items td{border-bottom:1px solid #e5e7eb; padding:9px 8px; vertical-align:top}
-table.items thead th{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#374151; text-align:left; background:#f3f4f6}
-table.items td.num, table.items th.num{text-align:right}
-table.items tbody tr:nth-child(odd){background:#fafafa}
-table.items tbody tr:last-child td{border-bottom:1px solid #d1d5db}
-.totals{margin-top:10px; display:flex; justify-content:flex-end}
-.totals table{font-size:12px; border-collapse:collapse; min-width:300px}
-.totals td{padding:8px 10px; border-bottom:1px solid #e5e7eb}
-.totals tr:last-child td{border-top:1px solid #d1d5db; border-bottom:none; font-weight:700}
-.note{margin-top:10px; font-size:11px; color:#374151}
-footer{margin-top:22px; font-size:11px; color:#374151}
-.sign{margin-top:20px; display:flex; justify-content:space-between; align-items:flex-end; gap:16px}
-.sign .box{height:64px; border:1px dashed #d1d5db; border-radius:10px; width:260px}
-.sign .label{font-size:11px; color:#374151; margin-bottom:6px}
-.printbar{position:sticky; top:0; background:#fff; padding:8px 0 12px; display:flex; gap:8px; justify-content:flex-end}
-.btn{font-size:12px; border:1px solid #e5e7eb; background:#fff; padding:6px 10px; border-radius:8px; cursor:pointer}
-.btn:hover{background:#f9fafb}
+.tag{display:inline-block;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#374151;background:var(--chip);border:1px solid var(--border);padding:2px 6px;border-radius:6px;margin-bottom:6px}
+.logo .word{font-size:26px;font-weight:800;letter-spacing:.01em;color:#111827}
+.brand .meta{margin-top:6px;font-size:12px;color:${watermark?'#475569':'#6b7280'}}
+.doc-meta{text-align:right;font-size:12px;border:1px solid var(--border);border-radius:12px;padding:10px;min-width:300px}
+.doc-meta .title{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:${watermark?'var(--accent)':'var(--ok)'};font-weight:800}
+.doc-meta .kv{margin-top:6px}.kv div{margin:2px 0}
+hr.sep{border:none;border-top:1px solid var(--border);margin:16px 0 18px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.card{border:1px solid var(--border);border-radius:12px;padding:12px}
+.card h3{margin:0 0 8px;font-size:11px;color:#374151;text-transform:uppercase;letter-spacing:.08em}
+.small{font-size:12px;color:#374151}.mono{font-feature-settings:"tnum" 1;font-variant-numeric:tabular-nums}.muted{color:#6b7280}
+table.items{width:100%;border-collapse:collapse;font-size:12px;margin-top:16px}
+table.items th,table.items td{border-bottom:1px solid var(--border);padding:9px 8px;vertical-align:top}
+table.items thead th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#374151;text-align:left;background:var(--chip)}
+table.items td.num,table.items th.num{text-align:right}table.items tbody tr:nth-child(odd){background:var(--zebra)}
+table.items tbody tr:last-child td{border-bottom:1px solid var(--border-strong)}
+.totals{margin-top:10px;display:flex;justify-content:flex-end}
+.totals table{font-size:12px;border-collapse:collapse;min-width:300px}.totals td{padding:8px 10px;border-bottom:1px solid var(--border)}
+.totals tr:last-child td{border-top:1px solid var(--border-strong);border-bottom:none;font-weight:700}
+.note{margin-top:10px;font-size:11px;color:#374151}
+footer{margin-top:22px;font-size:11px;color:#374151}
+.sign{margin-top:20px;display:flex;justify-content:space-between;align-items:flex-end;gap:16px}
+.sign .box{height:64px;border:1px dashed var(--border-strong);border-radius:10px;width:260px}
+.sign .label{font-size:11px;color:#374151;margin-bottom:6px}
+.printbar{position:sticky;top:0;background:#fff;padding:8px 0 12px;display:flex;gap:8px;justify-content:flex-end}
+.btn{font-size:12px;border:1px solid var(--border);background:#fff;padding:6px 10px;border-radius:8px;cursor:pointer}.btn:hover{background:#f9fafb}
 @media print {.printbar{display:none}}
-</style>
-</head>
-<body>
-  <div class="page">
-    <div class="printbar">
-      <button class="btn" onclick="window.print()">Print / Save PDF</button>
+</style></head>
+<body><div class="page"><div class="printbar"><button class="btn" onclick="window.print()">Print / Save PDF</button></div>
+<div class="watermark"><span>${watermark ? 'PROFORMA' : ''}</span></div>
+<header>
+  <div class="brand">
+    <div class="tag">Sender</div>
+    <div class="logo"><div class="word">${escapeHTML(senderName)}</div></div>
+    <div class="meta">
+      ${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}${senderCountry? ' · ' : ''}${senderVat ? ('VAT ' + escapeHTML(senderVat)) : ''}<br/>
+      ${senderPhone ? ('Tel: ' + escapeHTML(senderPhone)) : ''}
     </div>
-    <div class="watermark"><span>${watermark ? 'PROFORMA' : ''}</span></div>
-
-    <header>
-      <div class="brand">
-        <div class="tag">Sender</div>
-        <div class="logo"><div class="word">${escapeHTML(senderName)}</div></div>
-        <div class="meta">
-          ${escapeHTML(senderAddr)}${senderAddr?', ':''}${escapeHTML(senderZip)} ${escapeHTML(senderCity)}${senderCity?', ':''}${escapeHTML(senderCountry)}${senderCountry? ' · ' : ''}${senderVat ? ('VAT ' + escapeHTML(senderVat)) : ''}<br/>
-          ${senderPhone ? ('Tel: ' + escapeHTML(senderPhone)) : ''}
-        </div>
-      </div>
-      <div class="doc-meta">
-        <div class="title">${docTitle}</div>
-        <div class="kv">
-          <div><strong>No.:</strong> ${escapeHTML(docNo)}</div>
-          <div><strong>Date:</strong> ${escapeHTML(fmtDate(pickupDate) || fmtDate(Date.now()))}</div>
-          <div><strong>Shipment ID:</strong> ${escapeHTML(sid)}</div>
-        </div>
-      </div>
-    </header>
-
-    <hr class="sep" />
-
-    <section class="grid">
-      <div class="card">
-        <h3>Receiver</h3>
-        <div class="small"><strong>${escapeHTML(shName)}</strong></div>
-        <div class="small">${escapeHTML(shAddr)}</div>
-        <div class="small">${escapeHTML(shZip)} ${escapeHTML(shCity)} (${escapeHTML(shCountry)})</div>
-        ${shPhone ? `<div class="small">Tel: ${escapeHTML(shPhone)}</div>` : ``}
-        ${shVat   ? `<div class="small">VAT/CF: ${escapeHTML(shVat)}</div>` : ``}
-      </div>
-      <div class="card">
-        <h3>Invoice Receiver</h3>
-        <div class="small"><strong>${escapeHTML(btName || shName)}</strong></div>
-        <div class="small">${escapeHTML(btAddr || shAddr)}</div>
-        <div class="small">${escapeHTML(btZip || shZip)} ${escapeHTML(btCity || shCity)} (${escapeHTML(btCountry || shCountry)})</div>
-        ${(btPhone || shPhone) ? `<div class="small">Tel: ${escapeHTML(btPhone || shPhone)}</div>` : ``}
-        ${(btVat || '') ? `<div class="small">VAT/CF: ${escapeHTML(btVat)}</div>` : ``}
-      </div>
-    </section>
-
-    <section class="grid" style="grid-template-columns:1fr">
-      <div class="card ship-card">
-        <h3>Shipment Details</h3>
-        <div class="small">Carrier: ${escapeHTML(carrier || '—')}</div>
-        <div class="small">Incoterm: ${escapeHTML(incoterm || '—')} · Currency: ${escapeHTML(ccy)}</div>
-        <div class="small">Net weight: <strong>${escapeHTML(kgFmt(totalsWeights.net))}</strong> · Gross weight: <strong>${escapeHTML(kgFmt(totalsWeights.gross))}</strong></div>
-      </div>
-    </section>
-
-    <table class="items" aria-label="Goods details">
-      <thead>
-        <tr>
-          <th style="width:28px">#</th>
-          <th>Description</th>
-          <th style="width:110px">HS Code</th>
-          <th style="width:70px" class="num">Qty</th>
-          <th style="width:110px" class="num">Price / unit</th>
-          <th style="width:120px" class="num">Amount</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${lines.map((r,i)=>`
-          <tr>
-            <td>${i+1}</td>
-            <td>
-              <strong>${escapeHTML(r.title || '—')}</strong>
-              ${r.meta?`<br/><span class="muted">${escapeHTML(r.meta)}</span>`:''}
-            </td>
-            <td>${escapeHTML(r.hs || '')}</td>
-            <td class="num mono">${num(r.qty)}</td>
-            <td class="num mono">${money(r.price, ccySym)}</td>
-            <td class="num mono">${money(r.amount, ccySym)}</td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-
-    <div class="totals">
-      <table>
-        <tr>
-          <td style="text-align:right">Total</td>
-          <td style="text-align:right; width:140px"><strong>${money(total, ccySym)}</strong></td>
-        </tr>
-      </table>
-    </div>
-
-    <div class="note">Country of origin: <strong>Italy</strong>.</div>
-    ${type==='proforma' ? `<div class="note"><strong>Note:</strong> Goods are not for resale. Declared values are for customs purposes only.</div>` : ''}
-
-    <footer>
-      <div class="sign">
-        <div>
-          <div class="small"><strong>Place & date:</strong> ${escapeHTML(place)}, ${escapeHTML(dateStr)}</div>
-          <div class="small">If you need more information about this shipping you can contact us at:<br/>info@spst.it · +39 320 144 1789 · www.spst.it</div>
-        </div>
-        <div>
-          <div class="label">Signature</div>
-          <div class="box"></div>
-        </div>
-      </div>
-    </footer>
   </div>
-</body>
-</html>`;
+  <div class="doc-meta">
+    <div class="title">${docTitle}</div>
+    <div class="kv">
+      <div><strong>No.:</strong> ${escapeHTML(docNo)}</div>
+      <div><strong>Date:</strong> ${escapeHTML(fmtDate(pickupDate) || fmtDate(Date.now()))}</div>
+      <div><strong>Shipment ID:</strong> ${escapeHTML(sid)}</div>
+    </div>
+  </div>
+</header>
+
+<hr class="sep" />
+<section class="grid">
+  <div class="card">
+    <h3>Receiver</h3>
+    <div class="small"><strong>${escapeHTML(shName)}</strong></div>
+    <div class="small">${escapeHTML(shAddr)}</div>
+    <div class="small">${escapeHTML(shZip)} ${escapeHTML(shCity)} (${escapeHTML(shCountry)})</div>
+    ${shPhone ? `<div class="small">Tel: ${escapeHTML(shPhone)}</div>` : ``}
+    ${shVat   ? `<div class="small">VAT/CF: ${escapeHTML(shVat)}</div>` : ``}
+  </div>
+  <div class="card">
+    <h3>Invoice Receiver</h3>
+    <div class="small"><strong>${escapeHTML(btName || shName)}</strong></div>
+    <div class="small">${escapeHTML(btAddr || shAddr)}</div>
+    <div class="small">${escapeHTML(btZip || shZip)} ${escapeHTML(btCity || shCity)} (${escapeHTML(btCountry || shCountry)})</div>
+    ${(btPhone || shPhone) ? `<div class="small">Tel: ${escapeHTML(btPhone || shPhone)}</div>` : ``}
+    ${(btVat || '') ? `<div class="small">VAT/CF: ${escapeHTML(btVat)}</div>` : ``}
+  </div>
+</section>
+
+<section class="grid" style="grid-template-columns:1fr">
+  <div class="card ship-card">
+    <h3>Shipment Details</h3>
+    <div class="small">Carrier: ${escapeHTML(carrier || '—')}</div>
+    <div class="small">Incoterm: ${escapeHTML(incoterm || '—')} · Currency: ${escapeHTML(ccy)}</div>
+    <div class="small">Net weight: <strong>${escapeHTML(kgFmt(totalsWeights.net))}</strong> · Gross weight: <strong>${escapeHTML(kgFmt(totalsWeights.gross))}</strong></div>
+  </div>
+</section>
+
+<table class="items" aria-label="Goods details">
+  <thead><tr><th style="width:28px">#</th><th>Description</th><th style="width:110px">HS Code</th><th style="width:70px" class="num">Qty</th><th style="width:110px" class="num">Price / unit</th><th style="width:120px" class="num">Amount</th></tr></thead>
+  <tbody>
+    ${lines.map((r,i)=>`
+      <tr>
+        <td>${i+1}</td>
+        <td><strong>${escapeHTML(r.title || '—')}</strong>${r.meta?`<br/><span class="muted">${escapeHTML(r.meta)}</span>`:''}</td>
+        <td>${escapeHTML(r.hs || '')}</td>
+        <td class="num mono">${num(r.qty)}</td>
+        <td class="num mono">${money(r.price, ccySym)}</td>
+        <td class="num mono">${money(r.amount, ccySym)}</td>
+      </tr>
+    `).join('')}
+  </tbody>
+</table>
+
+<div class="totals"><table><tr><td style="text-align:right">Total</td><td style="text-align:right;width:140px"><strong>${money(total, ccySym)}</strong></td></tr></table></div>
+<footer><div class="sign"><div><div class="small"><strong>Place & date:</strong> ${escapeHTML(place)}, ${escapeHTML(dateStr)}</div></div><div><div class="label">Signature</div><div class="box"></div></div></div></footer>
+</div></body></html>`;
 }
 
-// ---------- DLE HTML (fallback) ----------
+// ---------- DLE HTML fallback ----------
 function renderDLEHTML({ ship }) {
   const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
   const senderRS  = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
@@ -430,16 +372,8 @@ function renderDLEHTML({ ship }) {
   const pickup    = get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
   const dateStr   = fmtDate(pickup) || fmtDate(Date.now());
   const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
-
-  return `<!doctype html>
-<html><head><meta charset="utf-8"/></head><body>Export Free Declaration — ${escapeHTML(sid)} — ${escapeHTML(senderCity)} ${escapeHTML(dateStr)} — To: ${escapeHTML(carrier)}</body></html>`;
+  return `<!doctype html><meta charset="utf-8"/><title>DLE ${escapeHTML(sid)}</title>Export Free Declaration — ${escapeHTML(senderRS)} — ${escapeHTML(senderCity)} ${escapeHTML(dateStr)} — To: ${escapeHTML(carrier)}`;
 }
-
-// --- SOSTITUISCI QUESTO BLOCCO NEL TUO file: api/docs/unified/render.js ---
-// (Da: "// ---------- PDF helpers ----------" fino a prima dell'handler)
-
-import { PDFDocument, rgb } from 'pdf-lib';
-import fontkit from '@pdf-lib/fontkit';
 
 // ---------- PDF helpers ----------
 async function loadPdfTemplate(absolutePath) {
@@ -450,36 +384,27 @@ async function loadPdfTemplate(absolutePath) {
   const font = await pdf.embedFont(fontBytes, { subset: true });
   return { pdf, font };
 }
-
-function drawText(page, text, { x, y, size, maxW }, font, color = rgb(0,0,0)) {
+function drawText(page, text, pos, font, color = rgb(0,0,0)) {
   const s = String(text ?? '');
-  if (!maxW) {
-    page.drawText(s, { x, y, size, font, color });
-    return;
-  }
-  // word-wrap semplice per non “uscire” dal box
+  const { x, y, size, maxW } = pos;
+  if (!maxW) { page.drawText(s, { x, y, size, font, color }); return; }
+  // word-wrap basilare
   const words = s.split(/\s+/);
-  let line = '';
-  let yy = y;
-  const lh = size + 2;
+  let line = ''; let yy = y; const lh = size + 2;
   for (const w of words) {
     const test = (line ? line + ' ' : '') + w;
     if (font.widthOfTextAtSize(test, size) > maxW && line) {
       page.drawText(line, { x, y: yy, size, font, color });
-      line = w;
-      yy -= lh;
-    } else {
-      line = test;
-    }
+      line = w; yy -= lh;
+    } else line = test;
   }
   if (line) page.drawText(line, { x, y: yy, size, font, color });
 }
-
 function whiteout(page, rect) {
   page.drawRectangle({ x: rect.x, y: rect.y, width: rect.w, height: rect.h, color: rgb(1,1,1) });
 }
 
-// ---------- DATA extraction ----------
+// ---------- DATA for DLE ----------
 function buildDLEData(ship){
   const f = ship.fields || {};
   const mitt = {
@@ -491,7 +416,6 @@ function buildDLEData(ship){
     country: get(f, ['Mittente - Paese'], 'Italy'),
     tel:  get(f, ['Mittente - Telefono'], ''),
     ref:  get(f, ['Mittente - Referente','Referente Mittente'], ''),
-    email:get(f, ['Mittente - Email','Email Mittente'], ''),
   };
   const dest = { country: get(f, ['Destinatario - Paese'], '') };
   const sid   = get(f, ['ID Spedizione', 'Id Spedizione'], ship.id);
@@ -501,9 +425,7 @@ function buildDLEData(ship){
   return { mitt, dest, sid, dateStr, invNo };
 }
 
-// ---------- Coord/boxes ----------
-// NOTE: coordinate in punti PDF (0,0 in basso a sinistra). Box ampi per “coprire” i placeholder rossi.
-
+// ---------- Coord/whiteout ----------
 const FED_EX_FIELDS = {
   shipment_id:    { x: 420, y: 760, size: 10 },
   invoice_no:     { x: 420, y: 744, size: 10 },
@@ -515,7 +437,6 @@ const FED_EX_FIELDS = {
   place_date:     { x: 120, y: 175, size: 10 },
   signature_hint: { x: 420, y: 150, size: 9 },
 };
-// whiteout: copre intestazione mittente + shipment/invoice + paesi + place/date
 const FED_EX_WHITE = [
   { x: 110, y: 668, w: 400, h: 55 },
   { x: 410, y: 738, w: 170, h: 30 },
@@ -526,21 +447,20 @@ const FED_EX_WHITE = [
 ];
 
 const UPS_FIELDS = {
-  sottoscritto:   { x: 150, y: 745, size: 11, maxW: 370 }, // “Il sottoscritto …”
-  societa:        { x: 150, y: 728, size: 11, maxW: 370 }, // “società …”
+  sottoscritto:   { x: 150, y: 745, size: 11, maxW: 370 },
+  societa:        { x: 150, y: 728, size: 11, maxW: 370 },
   luogo:          { x: 150, y: 270, size: 11 },
   data:           { x: 350, y: 270, size: 11 },
   firma_hint:     { x: 350, y: 238, size: 9 },
 };
-// whiteout esteso: copre tutte le righe segnaposto rosse presenti nel PDF UPS
 const UPS_WHITE = [
-  { x: 140, y: 720, w: 420, h: 50 }, // blocco “Il sottoscritto … / società …”
-  { x: 140, y: 264, w: 220, h: 18 }, // luogo
-  { x: 338, y: 264, w: 140, h: 18 }, // data
-  { x: 338, y: 232, w: 210, h: 18 }, // firma hint
+  { x: 140, y: 720, w: 420, h: 50 },
+  { x: 140, y: 264, w: 220, h: 18 },
+  { x: 338, y: 264, w: 140, h: 18 },
+  { x: 338, y: 232, w: 210, h: 18 },
 ];
 
-// ---------- DLE PDF RENDERERS ----------
+// ---------- DLE PDF renderers ----------
 async function renderFedExPDF({ ship }, res){
   const { pdf, font } = await loadPdfTemplate(PDF_FDX);
   const page = pdf.getPage(0);
@@ -548,10 +468,8 @@ async function renderFedExPDF({ ship }, res){
 
   FED_EX_WHITE.forEach(r => whiteout(page, r));
 
-  const addrLine = [data.mitt.ind, `${data.mitt.cap} ${data.mitt.city}`, data.mitt.country]
-    .filter(Boolean).join(' · ');
-  const vatTel   = [data.mitt.piva && `VAT/CF: ${data.mitt.piva}`, data.mitt.tel && `TEL: ${data.mitt.tel}`]
-    .filter(Boolean).join(' · ');
+  const addrLine = [data.mitt.ind, `${data.mitt.cap} ${data.mitt.city}`, data.mitt.country].filter(Boolean).join(' · ');
+  const vatTel   = [data.mitt.piva && `VAT/CF: ${data.mitt.piva}`, data.mitt.tel && `TEL: ${data.mitt.tel}`].filter(Boolean).join(' · ');
   const placeDate= `${data.mitt.city}, ${data.dateStr}`;
 
   drawText(page, data.sid,                        FED_EX_FIELDS.shipment_id,    font);
@@ -570,7 +488,6 @@ async function renderFedExPDF({ ship }, res){
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.status(200).send(Buffer.from(pdfBytes));
 }
-
 async function renderUPSPDF({ ship }, res){
   const { pdf, font } = await loadPdfTemplate(PDF_UPS);
   const page = pdf.getPage(0);
@@ -578,14 +495,12 @@ async function renderUPSPDF({ ship }, res){
 
   UPS_WHITE.forEach(r => whiteout(page, r));
 
-  // “Il sottoscritto …” = referente se presente, altrimenti ragione sociale
   const sottoscritto = data.mitt.ref || data.mitt.rs;
-
-  drawText(page, sottoscritto,  UPS_FIELDS.sottoscritto, font);
-  drawText(page, data.mitt.rs,  UPS_FIELDS.societa,     font);
-  drawText(page, data.mitt.city,UPS_FIELDS.luogo,       font);
-  drawText(page, data.dateStr,  UPS_FIELDS.data,        font);
-  drawText(page, 'Firma',       UPS_FIELDS.firma_hint,  font);
+  drawText(page, sottoscritto,      UPS_FIELDS.sottoscritto, font);
+  drawText(page, data.mitt.rs,      UPS_FIELDS.societa,      font);
+  drawText(page, data.mitt.city,    UPS_FIELDS.luogo,        font);
+  drawText(page, data.dateStr,      UPS_FIELDS.data,         font);
+  drawText(page, 'Firma',           UPS_FIELDS.firma_hint,   font);
 
   const pdfBytes = await pdf.save();
   res.setHeader('Content-Type', 'application/pdf');
@@ -593,11 +508,10 @@ async function renderUPSPDF({ ship }, res){
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.status(200).send(Buffer.from(pdfBytes));
 }
-// --- FINE BLOCCO DA INCOLLARE ---
-
 
 // ---------- Handler ----------
 export default async function handler(req, res) {
+  const t0 = Date.now();
   try {
     const q = req.query || {};
     const rawType = String(q.type || 'proforma').toLowerCase();
@@ -605,7 +519,6 @@ export default async function handler(req, res) {
     const sidRaw  = q.sid || q.ship;
     const sig     = q.sig;
     const exp     = q.exp;
-
     const carrierOverride = (q.carrier || q.courier || '').toString().trim();
 
     if (!sidRaw) return bad(res, 400, 'Bad request', 'Missing sid/ship');
@@ -616,19 +529,13 @@ export default async function handler(req, res) {
     const ship = await getShipmentBySid(sidRaw);
     if (!ship) return bad(res, 404, 'Not found', `No shipment found for ${sidRaw}`);
 
-    // DLE (PDF)
+    // DLE routing
     if (type === 'dle' || type === 'dle_fedex' || type === 'dle_ups') {
       const carrierFromShip = get(ship.fields, ['Corriere','Carrier'], '');
       const carrier = (carrierOverride || carrierFromShip || '').toUpperCase();
+      if (type === 'dle_fedex' || carrier.includes('FEDEX')) return await renderFedExPDF({ ship }, res);
+      if (type === 'dle_ups'   || carrier.includes('UPS'))   return await renderUPSPDF({ ship }, res);
 
-      if (type === 'dle_fedex' || carrier.includes('FEDEX')) {
-        return await renderFedExPDF({ ship }, res);
-      }
-      if (type === 'dle_ups' || carrier.includes('UPS')) {
-        return await renderUPSPDF({ ship }, res);
-      }
-
-      // fallback HTML
       const html = renderDLEHTML({ ship });
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Cache-Control', 'no-store, max-age=0');
@@ -637,7 +544,7 @@ export default async function handler(req, res) {
 
     // Invoices
     const pl = await getPLRows({ ship, sidRaw });
-    const items = pl.length ? pl.map((r, i) => {
+    const items = pl.length ? pl.map((r) => {
       const f = r.fields || {};
       const title   = String(f['Etichetta'] ?? '').trim();
       const qty     = Number(f['Bottiglie'] ?? 0) || 0;
@@ -656,7 +563,6 @@ export default async function handler(req, res) {
 
       const netLine = qty * netPerB;
       const grsLine = qty * grsPerB;
-
       const price   = (type === 'proforma') ? 2 : (Number(f['Prezzo'] ?? 0) || 0);
       const amount  = qty * price;
 
@@ -672,14 +578,13 @@ export default async function handler(req, res) {
     const totalNet   = items.reduce((s, r) => s + num(r.netLine), 0);
     const totalGross = items.reduce((s, r) => s + num(r.grsLine), 0);
 
-    const ccy = get(ship.fields, ['Valuta', 'Currency'], 'EUR');
-    const ccySym = ccy === 'EUR' ? '€' : (ccy || '€');
-    const incoterm  = get(ship.fields, ['Incoterm'], '');
-    const carrier   = (carrierOverride || get(ship.fields, ['Corriere', 'Carrier'], '—'));
+    const shipForRender = (carrierOverride && (type === 'proforma' || type === 'commercial'))
+      ? { ...ship, fields: { ...(ship.fields||{}), Carrier: carrierOverride, Corriere: carrierOverride } }
+      : ship;
 
     const html = renderInvoiceHTML({
       type,
-      ship: { ...ship, fields: { ...(ship.fields||{}), Carrier: carrier, Corriere: carrier, Valuta: ccy, Currency: ccy, Incoterm: incoterm } },
+      ship: shipForRender,
       lines: items,
       total: totalMoney,
       totalsWeights: { net: totalNet, gross: totalGross },
@@ -688,8 +593,9 @@ export default async function handler(req, res) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.status(200).send(html);
+    dlog('DONE', { ms: Date.now() - t0 });
   } catch (err) {
-    try { return bad(res, 500, 'Render error', String(err?.message || err)); }
-    catch {}
+    derr('render error', err?.status || '', err?.message || err);
+    try { return bad(res, 500, 'Render error', String(err?.message || err)); } catch {}
   }
 }
