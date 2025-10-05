@@ -1,7 +1,7 @@
 // api/docs/unified/dle_html.js
-// HTML renderer “da zero” per DLE (UPS / FedEx) con testi e formattazione simili ai PDF di riferimento.
-// Parametri: ?sid|ship & type=(dle|dle:ups|dle:fedex) & exp & sig
-// Firma HMAC compatibile con gli altri endpoint.
+// HTML renderer “da zero” per DLE (UPS / FedEx) con routing affidabile al layout selezionato.
+// Accetta anche override via query: ?carrier=UPS|FEDEX oppure ?tpl=ups|fedex
+// Parametri HMAC: ?sid|ship & type=(dle|dle:ups|dle:fedex) & exp & sig
 
 export const config = { runtime: 'nodejs' };
 
@@ -280,7 +280,7 @@ function renderUPSHTML({ data }) {
       <div><strong>Luogo</strong> ${escapeHTML(place)}</div>
       <div><strong>Data</strong> ${escapeHTML(data.dateStr)}</div>
       <div style="margin-top:10px">.......................................................................</div>
-      <div class="muted">(timbro e firma autogenerati)</div>
+      <div class="muted">(timbro e firma)</div>
       <div class="muted" style="margin-top:10px">Shipment ID: ${escapeHTML(data.sid)}</div>
     </div>
   </div>
@@ -297,6 +297,10 @@ export default async function handler(req, res) {
     const sig     = q.sig;
     const exp     = q.exp;
 
+    // NUOVO: override esplicito da query
+    const carrierOverride = (q.carrier || q.courier || '').toString().trim();
+    const tplOverride     = (q.tpl || q.template || q.dleTpl || q.dle_template || q.dleTemplate || '').toString().trim();
+
     if (!sid) return res.status(400).send('Missing sid/ship');
     if (!verifySigFlexible({ sid, rawType, normType: type, exp, sig })) {
       return res.status(401).send('Invalid signature');
@@ -307,14 +311,21 @@ export default async function handler(req, res) {
 
     const data = extractDLE(ship);
 
-    // autodetect carrier if 'dle_auto'
-    const carrierUp = (data.carrier || '').toUpperCase();
-    let layout = type;
-    if (type === 'dle_auto') {
-      if (carrierUp.includes('UPS')) layout = 'dle_ups';
-      else if (carrierUp.includes('FEDEX')) layout = 'dle_fedex';
-      else layout = 'dle_fedex'; // default english layout
+    // Routing layout con priorità: type esplicito > tplOverride > carrierOverride > carrier da Airtable > default FedEx
+    let layout = type; // 'dle_ups' | 'dle_fedex' | 'dle_auto'
+    if (layout === 'dle_auto') {
+      const pref = (tplOverride || carrierOverride).toString().toLowerCase();
+      const fromShip = (data.carrier || '').toLowerCase();
+      if (pref.includes('ups') || pref === 'ups') layout = 'dle_ups';
+      else if (pref.includes('fedex') || pref === 'fedex' || pref === 'fx') layout = 'dle_fedex';
+      else if (fromShip.includes('ups')) layout = 'dle_ups';
+      else if (fromShip.includes('fedex') || fromShip.includes('fx')) layout = 'dle_fedex';
+      else layout = 'dle_fedex';
     }
+
+    dlog('layout chosen:', layout, {
+      typeRaw: rawType, tplOverride, carrierOverride, shipCarrier: data.carrier
+    });
 
     const html = (layout === 'dle_ups')
       ? renderUPSHTML({ data })
