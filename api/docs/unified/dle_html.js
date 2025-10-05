@@ -189,6 +189,7 @@ function renderFedExHTML({ data }) {
       <div class="muted" style="margin-top:4px;line-height:1.8">
         ..........................................................................................................................<br/>
         ..........................................................................................................................<br/>
+        ..........................................................................................................................
       </div>
     </div>
 
@@ -223,9 +224,10 @@ function renderFedExHTML({ data }) {
       </ul>
     </div>
 
-    <!-- Footer: Shipment ID vicino a place & date; firma a destra coi puntini -->
+    <!-- Footer: Shipment ID su nuova riga sotto place & date; firma a destra coi puntini -->
     <div class="footer" style="margin-top:16px">
-      <div><strong>Place and date:</strong> ${placeCap} — ${escapeHTML(data.dateStr)} · <strong>Shipment ID:</strong> ${escapeHTML(data.sid)}</div>
+      <div><strong>Place and date:</strong> ${placeCap} — ${escapeHTML(data.dateStr)}</div>
+      <div class="muted" style="margin-top:4px"><strong>Shipment ID:</strong> ${escapeHTML(data.sid)}</div>
       <div style="text-align:right;margin-top:8px">..............................</div>
       <div class="muted" style="text-align:right">Signature of Shipper</div>
     </div>
