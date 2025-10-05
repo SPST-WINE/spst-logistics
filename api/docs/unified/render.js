@@ -435,36 +435,46 @@ function renderDLEHTML({ ship }) {
 <html><head><meta charset="utf-8"/></head><body>Export Free Declaration — ${escapeHTML(sid)} — ${escapeHTML(senderCity)} ${escapeHTML(dateStr)} — To: ${escapeHTML(carrier)}</body></html>`;
 }
 
+// --- SOSTITUISCI QUESTO BLOCCO NEL TUO file: api/docs/unified/render.js ---
+// (Da: "// ---------- PDF helpers ----------" fino a prima dell'handler)
+
+import { PDFDocument, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
+
 // ---------- PDF helpers ----------
 async function loadPdfTemplate(absolutePath) {
   const bytes = await readFile(absolutePath);
-  const pdf = await PDFDocument.load(bytes);
+  const pdf = await PDFDocument.load(bytes, { updateMetadata: false });
   pdf.registerFontkit(fontkit);
   const fontBytes = await readFile(FONT_INTER);
   const font = await pdf.embedFont(fontBytes, { subset: true });
   return { pdf, font };
 }
-function drawText(page, text, { x, y, size }, font, color = rgb(0,0,0)) {
-  page.drawText(String(text ?? ''), { x, y, size, font, color });
-}
-function drawMultiline(page, text, box, font, lineSize) {
-  const words = String(text||'').split(/\s+/);
+
+function drawText(page, text, { x, y, size, maxW }, font, color = rgb(0,0,0)) {
+  const s = String(text ?? '');
+  if (!maxW) {
+    page.drawText(s, { x, y, size, font, color });
+    return;
+  }
+  // word-wrap semplice per non “uscire” dal box
+  const words = s.split(/\s+/);
   let line = '';
-  let y = box.y;
-  const lh = lineSize + 2;
+  let yy = y;
+  const lh = size + 2;
   for (const w of words) {
     const test = (line ? line + ' ' : '') + w;
-    const width = font.widthOfTextAtSize(test, lineSize);
-    if (width > box.w && line) {
-      page.drawText(line, { x: box.x, y, size: lineSize, font, color: rgb(0,0,0) });
+    if (font.widthOfTextAtSize(test, size) > maxW && line) {
+      page.drawText(line, { x, y: yy, size, font, color });
       line = w;
-      y -= lh;
+      yy -= lh;
     } else {
       line = test;
     }
   }
-  if (line) page.drawText(line, { x: box.x, y, size: lineSize, font, color: rgb(0,0,0) });
+  if (line) page.drawText(line, { x, y: yy, size, font, color });
 }
+
 function whiteout(page, rect) {
   page.drawRectangle({ x: rect.x, y: rect.y, width: rect.w, height: rect.h, color: rgb(1,1,1) });
 }
@@ -487,46 +497,47 @@ function buildDLEData(ship){
   const sid   = get(f, ['ID Spedizione', 'Id Spedizione'], ship.id);
   const dataRitiro = get(f, ['Ritiro - Data'], '') || f['Ritiro Data'];
   const dateStr = fmtDate(dataRitiro) || fmtDate(Date.now());
-  const carrier = get(f, ['Corriere','Carrier'], '');
   const invNo = get(f, ['Fattura - Numero','Commercial Invoice - Numero','Proforma - Numero'], '') || `CI-${sid}`;
-  return { mitt, dest, sid, dateStr, carrier, invNo };
+  return { mitt, dest, sid, dateStr, invNo };
 }
 
 // ---------- Coord/boxes ----------
+// NOTE: coordinate in punti PDF (0,0 in basso a sinistra). Box ampi per “coprire” i placeholder rossi.
+
 const FED_EX_FIELDS = {
   shipment_id:    { x: 420, y: 760, size: 10 },
   invoice_no:     { x: 420, y: 744, size: 10 },
   sender_rs:      { x: 120, y: 705, size: 10 },
-  sender_addr:    { x: 120, y: 690, size: 10 },
-  sender_vat_tel: { x: 120, y: 675, size: 10 },
+  sender_addr:    { x: 120, y: 688, size: 10, maxW: 390 },
+  sender_vat_tel: { x: 120, y: 672, size: 10, maxW: 390 },
   origin_country: { x: 160, y: 640, size: 10 },
   dest_country:   { x: 420, y: 640, size: 10 },
   place_date:     { x: 120, y: 175, size: 10 },
   signature_hint: { x: 420, y: 150, size: 9 },
 };
-// aree da “cancellare in bianco” (placeholder rossi)
+// whiteout: copre intestazione mittente + shipment/invoice + paesi + place/date
 const FED_EX_WHITE = [
-  { x: 110, y: 700, w: 390, h: 45 },  // blocco intestazione mittente
-  { x: 410, y: 738, w: 160, h: 30 },  // shipment / invoice
-  { x: 150, y: 635, w: 140, h: 14 },  // origin country
-  { x: 410, y: 635, w: 180, h: 14 },  // destination country
-  { x: 110, y: 170, w: 380, h: 16 },  // place+date
-  { x: 410, y: 145, w: 160, h: 14 },  // firma label
+  { x: 110, y: 668, w: 400, h: 55 },
+  { x: 410, y: 738, w: 170, h: 30 },
+  { x: 150, y: 635, w: 150, h: 16 },
+  { x: 410, y: 635, w: 190, h: 16 },
+  { x: 110, y: 168, w: 400, h: 20 },
+  { x: 410, y: 145, w: 170, h: 16 },
 ];
 
 const UPS_FIELDS = {
-  sottoscritto:   { x: 160, y: 745, size: 11 },
-  societa:        { x: 160, y: 728, size: 11 },
-  luogo:          { x: 160, y: 270, size: 11 },
-  data:           { x: 360, y: 270, size: 11 },
-  firma_hint:     { x: 360, y: 238, size: 9 },
+  sottoscritto:   { x: 150, y: 745, size: 11, maxW: 370 }, // “Il sottoscritto …”
+  societa:        { x: 150, y: 728, size: 11, maxW: 370 }, // “società …”
+  luogo:          { x: 150, y: 270, size: 11 },
+  data:           { x: 350, y: 270, size: 11 },
+  firma_hint:     { x: 350, y: 238, size: 9 },
 };
-// whiteout placeholder
+// whiteout esteso: copre tutte le righe segnaposto rosse presenti nel PDF UPS
 const UPS_WHITE = [
-  { x: 150, y: 740, w: 360, h: 34 },  // sottoscritto + società (2 righe rosse)
-  { x: 150, y: 266, w: 220, h: 16 },  // luogo
-  { x: 350, y: 266, w: 120, h: 16 },  // data
-  { x: 350, y: 232, w: 200, h: 16 },  // firma label
+  { x: 140, y: 720, w: 420, h: 50 }, // blocco “Il sottoscritto … / società …”
+  { x: 140, y: 264, w: 220, h: 18 }, // luogo
+  { x: 338, y: 264, w: 140, h: 18 }, // data
+  { x: 338, y: 232, w: 210, h: 18 }, // firma hint
 ];
 
 // ---------- DLE PDF RENDERERS ----------
@@ -535,18 +546,19 @@ async function renderFedExPDF({ ship }, res){
   const page = pdf.getPage(0);
   const data = buildDLEData(ship);
 
-  // Whiteout dei placeholder rossi
-  FED_EX_WHITE.forEach(rect => whiteout(page, rect));
+  FED_EX_WHITE.forEach(r => whiteout(page, r));
 
-  const addrLine = [data.mitt.ind, `${data.mitt.cap} ${data.mitt.city}`, data.mitt.country].filter(Boolean).join(' · ');
-  const vatTel   = [data.mitt.piva ? `VAT/CF: ${data.mitt.piva}` : '', data.mitt.tel ? `TEL: ${data.mitt.tel}`:''].filter(Boolean).join(' · ');
+  const addrLine = [data.mitt.ind, `${data.mitt.cap} ${data.mitt.city}`, data.mitt.country]
+    .filter(Boolean).join(' · ');
+  const vatTel   = [data.mitt.piva && `VAT/CF: ${data.mitt.piva}`, data.mitt.tel && `TEL: ${data.mitt.tel}`]
+    .filter(Boolean).join(' · ');
   const placeDate= `${data.mitt.city}, ${data.dateStr}`;
 
   drawText(page, data.sid,                        FED_EX_FIELDS.shipment_id,    font);
   drawText(page, data.invNo,                      FED_EX_FIELDS.invoice_no,     font);
   drawText(page, data.mitt.rs,                    FED_EX_FIELDS.sender_rs,      font);
-  drawMultiline(page, addrLine,                   { x: FED_EX_FIELDS.sender_addr.x, y: FED_EX_FIELDS.sender_addr.y, w: 390, h: 24 }, font, FED_EX_FIELDS.sender_addr.size);
-  drawMultiline(page, vatTel,                     { x: FED_EX_FIELDS.sender_vat_tel.x, y: FED_EX_FIELDS.sender_vat_tel.y, w: 390, h: 24 }, font, FED_EX_FIELDS.sender_vat_tel.size);
+  drawText(page, addrLine,                        FED_EX_FIELDS.sender_addr,    font);
+  drawText(page, vatTel,                          FED_EX_FIELDS.sender_vat_tel, font);
   drawText(page, 'ITALY',                         FED_EX_FIELDS.origin_country, font);
   drawText(page, (data.dest.country||'').toUpperCase(), FED_EX_FIELDS.dest_country, font);
   drawText(page, placeDate,                       FED_EX_FIELDS.place_date,     font);
@@ -564,13 +576,16 @@ async function renderUPSPDF({ ship }, res){
   const page = pdf.getPage(0);
   const data = buildDLEData(ship);
 
-  UPS_WHITE.forEach(rect => whiteout(page, rect));
+  UPS_WHITE.forEach(r => whiteout(page, r));
 
-  drawText(page, (data.mitt.ref || data.mitt.rs), UPS_FIELDS.sottoscritto, font);
-  drawText(page, data.mitt.rs,                    UPS_FIELDS.societa,     font);
-  drawText(page, data.mitt.city,                  UPS_FIELDS.luogo,       font);
-  drawText(page, data.dateStr,                    UPS_FIELDS.data,        font);
-  drawText(page, 'Firma',                         UPS_FIELDS.firma_hint,  font);
+  // “Il sottoscritto …” = referente se presente, altrimenti ragione sociale
+  const sottoscritto = data.mitt.ref || data.mitt.rs;
+
+  drawText(page, sottoscritto,  UPS_FIELDS.sottoscritto, font);
+  drawText(page, data.mitt.rs,  UPS_FIELDS.societa,     font);
+  drawText(page, data.mitt.city,UPS_FIELDS.luogo,       font);
+  drawText(page, data.dateStr,  UPS_FIELDS.data,        font);
+  drawText(page, 'Firma',       UPS_FIELDS.firma_hint,  font);
 
   const pdfBytes = await pdf.save();
   res.setHeader('Content-Type', 'application/pdf');
@@ -578,6 +593,8 @@ async function renderUPSPDF({ ship }, res){
   res.setHeader('Cache-Control', 'no-store, max-age=0');
   res.status(200).send(Buffer.from(pdfBytes));
 }
+// --- FINE BLOCCO DA INCOLLARE ---
+
 
 // ---------- Handler ----------
 export default async function handler(req, res) {
