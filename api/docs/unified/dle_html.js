@@ -139,8 +139,11 @@ function baseCSS() {
 }
 
 // ---------- FedEx-like ----------
+// Sostituisci INTERA funzione renderFedExHTML in api/docs/unified/dle_html.js
+
 function renderFedExHTML({ data }) {
   const place = data.mitt.city || '';
+  const placeCap = `${escapeHTML(place)} ${escapeHTML(data.mitt.cap || '')}`.trim();
   return `<!doctype html><html lang="en"><head>
   <meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
   <title>Export Free Declaration — ${escapeHTML(data.sid)}</title>
@@ -148,27 +151,29 @@ function renderFedExHTML({ data }) {
   <div class="page">
     <div class="printbar"><button class="btn" onclick="window.print()">Print / Save PDF</button></div>
 
-    <div style="font-size:11px;color:#4b5563;margin-bottom:10px"><em>(If the consignor is a company, the Declaration below must be printed on company letterhead)</em></div>
-    <div class="small" style="margin-bottom:6px"><strong>To the attention of the Customs Agency</strong></div>
+    <div style="font-size:11px;color:#4b5563;margin-bottom:8px"><em>(If the consignor is a company, the Declaration below must be printed on company letterhead)</em></div>
+    <div class="small" style="margin-bottom:8px"><strong>To the attention of the Customs Agency</strong></div>
 
-    <div class="box letterhead" style="margin-bottom:12px">
-      <div class="title" style="margin-bottom:6px">Sender details</div>
-      <div class="small"><strong>${escapeHTML(data.mitt.rs)}</strong></div>
-      <div class="small">${escapeHTML(data.mitt.piva ? `VAT/CF: ${data.mitt.piva}` : '')}</div>
-      <div class="small">${escapeHTML(data.mitt.ind)}</div>
-      <div class="small">${escapeHTML(data.mitt.city)}, ${escapeHTML(data.mitt.cap)}</div>
-      <div class="small">${escapeHTML(data.mitt.country)}</div>
-      ${data.mitt.tel ? `<div class="small">Tel: ${escapeHTML(data.mitt.tel)}</div>` : ``}
-      <div class="muted" style="margin-top:6px">Shipment ID: ${escapeHTML(data.sid)}</div>
+    <!-- Sender details compatti, senza box -->
+    <div class="letterhead">
+      <div class="title" style="margin-bottom:4px">Sender details</div>
+      <div class="small" style="margin:2px 0"><strong>${escapeHTML(data.mitt.rs)}</strong></div>
+      ${data.mitt.piva ? `<div class="small" style="margin:2px 0">VAT/CF: ${escapeHTML(data.mitt.piva)}</div>` : ``}
+      <div class="small" style="margin:2px 0">${escapeHTML(data.mitt.ind)}</div>
+      <div class="small" style="margin:2px 0">${escapeHTML(data.mitt.city)}${data.mitt.cap ? ', ' + escapeHTML(data.mitt.cap) : ''}</div>
+      <div class="small" style="margin:2px 0">${escapeHTML(data.mitt.country)}</div>
+      ${data.mitt.tel ? `<div class="small" style="margin:2px 0">Tel: ${escapeHTML(data.mitt.tel)}</div>` : ``}
     </div>
 
-    <div class="small" style="margin-bottom:10px">
+    <div class="small" style="margin:10px 0 8px 0">
       While accepting all consequent responsibilities for the shipment we hereby declare that none of the goods in export are subject to any export license and therefore:
     </div>
 
-    <div class="box" style="margin-top:10px">
+    <!-- Tutto testo semplice, nessun box -->
+    <div>
       <div class="small checkbox">☐ GOODS OF EU PREFERENTIAL ORIGIN</div>
-      <div class="muted" style="font-size:11px;margin-top:6px">(please mark the box in case of goods of EU preferential origin and fill in the following mandatory declaration)</div>
+      <div class="muted" style="font-size:11px;margin-top:4px">(please mark the box in case of goods of EU preferential origin and fill in the following mandatory declaration)</div>
+
       <h3 style="margin-top:10px">Declaration</h3>
       <div class="small">
         I, the undersigned, declare that the goods listed on this document (invoice number)
@@ -188,20 +193,21 @@ function renderFedExHTML({ data }) {
       </div>
     </div>
 
-    <div class="box" style="margin-top:12px">
-      <h3>Goods destined to Turkey</h3>
+    <div>
+      <h3 style="margin-top:12px">Goods destined to Turkey</h3>
       <div class="small checkbox">☐ GOODS DESTINED TO TURKEY</div>
       <div class="small" style="margin-top:6px">
         I declare that the goods meet the requirements for the application of EU/Turkey Agreement (Decision n.1/95 of the Council of Association EC-Turkey, of 22/12/1995 and 2006/646/EC: Decision n.1/2006 of the Customs Cooperation Committee EC-Turkey, of 26/09/2006)
       </div>
+
       <h3 style="margin-top:10px">Mandate to issue EUR1/EUR-MED/ATR certificate</h3>
       <div class="small">
-        We assign to ………... the mandate to proceed with customs clearance activities, to issue, sign on our behalf and file the EUR1/EUR-MED/ATR certificate, relieving ………… of any responsibilities directly or indirectly associated with the fulfillment of the above indicated procedure.
+        We assign to <strong>FedEx</strong> the mandate to proceed with customs clearance activities, to issue, sign on our behalf and file the EUR1/EUR-MED/ATR certificate, relieving <strong>FedEx</strong> of any responsibilities directly or indirectly associated with the fulfillment of the above indicated procedure.
       </div>
     </div>
 
-    <div class="box" style="margin-top:12px">
-      <h3>Regulatory statements</h3>
+    <div>
+      <h3 style="margin-top:12px">Regulatory statements</h3>
       <ul class="list">
         <li><strong>Dual use (Y901):</strong> The goods are not included in the list of products as per Council Regulation (EC) No. 428/09 and its amendments; the goods are only for civil use.</li>
         <li><strong>Washington Convention (Y900):</strong> The goods are not included in the list as per Council Regulation (EC) No. 338/97 and its amendments (CITES).</li>
@@ -218,16 +224,16 @@ function renderFedExHTML({ data }) {
       </ul>
     </div>
 
+    <!-- Footer: Shipment ID vicino a place & date; firma a destra coi puntini -->
     <div class="footer" style="margin-top:16px">
-      <div><strong>Place and date:</strong> ${escapeHTML(place)} ${escapeHTML(data.mitt.cap)} — ${escapeHTML(data.dateStr)}</div>
-      <div class="signrow" style="margin-top:8px">
-        <div><strong>Shipper’s signature:</strong></div>
-        <div class="sigbox"></div>
-      </div>
+      <div><strong>Place and date:</strong> ${placeCap} — ${escapeHTML(data.dateStr)} · <strong>Shipment ID:</strong> ${escapeHTML(data.sid)}</div>
+      <div style="text-align:right;margin-top:8px">..............................</div>
+      <div class="muted" style="text-align:right">Signature of Shipper</div>
     </div>
   </div>
   </body></html>`;
 }
+
 
 // ---------- UPS-like ----------
 function renderUPSHTML({ data }) {
