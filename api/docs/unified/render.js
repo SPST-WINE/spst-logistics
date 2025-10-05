@@ -630,6 +630,8 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 
 
 // ---------- Handler ----------
+// Sostituisci INTERA funzione handler in api/docs/unified/render.js
+
 export default async function handler(req, res) {
   const t0 = Date.now();
   try {
@@ -637,13 +639,14 @@ export default async function handler(req, res) {
     const rawType = String(q.type || 'proforma').toLowerCase();
     const type    = normalizeType(rawType); // 'proforma' | 'commercial' | 'dle'
     const sidRaw  = q.sid || q.ship;
-    const sig     = q.sig;
-    const exp     = q.exp;
 
-    // override manuale del corriere — valido per Proforma **e** Commercial
-    const carrierOverride = (q.carrier || q.courier || '').toString().trim();
+    // ⬇️ Prende l’override del corriere anche da tpl/template (UI DLE)
+    const carrierOverride = (q.carrier || q.courier || q.tpl || q.template || '').toString().trim();
 
-    dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride: !!carrierOverride });
+    const sig  = q.sig;
+    const exp  = q.exp;
+
+    dlog('REQUEST', { rawType, normType: type, sidRaw, hasSig: !!sig, exp, carrierOverride });
 
     if (!sidRaw) return bad(res, 400, 'Bad request', 'Missing sid/ship');
     if (!verifySigFlexible({ sid: sidRaw, rawType, normType: type, exp, sig })) {
@@ -658,10 +661,10 @@ export default async function handler(req, res) {
     let html;
 
     if (type === 'dle') {
-  // Passiamo l’override arrivato dalla query (?carrier=...)
-  html = renderDLEHTML({ ship, overrideCarrier: carrierOverride });
-  dlog('RENDER DLE OK', { overrideCarrier: carrierOverride });
-} else {
+      // ✅ DLE generica: usa l’override (DHL/GLS/TNT/BRT) se selezionato in UI
+      html = renderDLEHTML({ ship, overrideCarrier: carrierOverride });
+      dlog('RENDER DLE OK', { overrideCarrier: carrierOverride || '(none → Airtable)' });
+    } else {
       // Invoices: load PL
       const pl = await getPLRows({ ship, sidRaw });
       dlog('PL SUMMARY', { count: pl.length });
