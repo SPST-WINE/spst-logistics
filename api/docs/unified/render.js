@@ -512,13 +512,21 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 }
 
 // ---------- DLE HTML (unchanged) ----------
-function renderDLEHTML({ ship }) {
-  const carrier   = get(ship.fields, ['Corriere', 'Carrier'], '—');
-  const senderRS  = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
-  const senderCity= get(ship.fields, ['Mittente - Città'], '');
-  const pickup    = get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
-  const dateStr   = fmtDate(pickup) || fmtDate(Date.now());
-  const sid       = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
+// ✅ Sostituisci **SOLO** questa funzione in api/docs/unified/render.js
+
+function renderDLEHTML({ ship, overrideCarrier }) {
+  // Carrier: usa override della UI (DHL/GLS/TNT/BRT) se presente,
+  // altrimenti ricade sul valore in Airtable.
+  const carrierFromShip = get(ship.fields, ['Corriere', 'Carrier'], '—');
+  const ov = String(overrideCarrier || '').trim();
+  const ignoreOverride = /^(usa|use).*(valore|value)|generico|altro|other$/i.test(ov);
+  const carrier = (ov && !ignoreOverride) ? ov : carrierFromShip;
+
+  const senderRS   = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
+  const senderCity = get(ship.fields, ['Mittente - Città'], '');
+  const pickup     = get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
+  const dateStr    = fmtDate(pickup) || fmtDate(Date.now());
+  const sid        = get(ship.fields, ['ID Spedizione', 'Id Spedizione'], ship.id);
 
   return `<!doctype html>
 <html lang="en">
@@ -620,6 +628,7 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 </html>`;
 }
 
+
 // ---------- Handler ----------
 export default async function handler(req, res) {
   const t0 = Date.now();
@@ -649,9 +658,10 @@ export default async function handler(req, res) {
     let html;
 
     if (type === 'dle') {
-      html = renderDLEHTML({ ship });
-      dlog('RENDER DLE OK');
-    } else {
+  // Passiamo l’override arrivato dalla query (?carrier=...)
+  html = renderDLEHTML({ ship, overrideCarrier: carrierOverride });
+  dlog('RENDER DLE OK', { overrideCarrier: carrierOverride });
+} else {
       // Invoices: load PL
       const pl = await getPLRows({ ship, sidRaw });
       dlog('PL SUMMARY', { count: pl.length });
