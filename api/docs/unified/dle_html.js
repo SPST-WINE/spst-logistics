@@ -239,7 +239,8 @@ function renderUPSHTML({ data }) {
   <div class="page">
     <div class="printbar"><button class="btn" onclick="window.print()">Stampa / Salva PDF</button></div>
 
-    <div class="addrBlock small">
+    <!-- BLOCCO DESTINATARIO ALLINEATO A DESTRA -->
+    <div class="addrBlock small" style="text-align:right; margin-left:auto; max-width:280px">
       <div><strong>Spettabile</strong></div>
       <div><strong>UPS ITALIA Srl</strong></div>
       <div>Via Orio al Serio 49/51</div>
@@ -279,9 +280,14 @@ function renderUPSHTML({ data }) {
     <div class="footer" style="margin-top:16px">
       <div><strong>Luogo</strong> ${escapeHTML(place)}</div>
       <div><strong>Data</strong> ${escapeHTML(data.dateStr)}</div>
-      <div style="margin-top:10px">.......................................................................</div>
-      <div class="muted">(timbro e firma)</div>
+      <!-- Shipment ID sotto Luogo e Data -->
       <div class="muted" style="margin-top:10px">Shipment ID: ${escapeHTML(data.sid)}</div>
+
+      <!-- LINEA + (timbro e firma) ALLINEATI A DESTRA -->
+      <div style="margin-top:10px; text-align:right">
+        <div>.......................................................................</div>
+        <div class="muted">(timbro e firma)</div>
+      </div>
     </div>
   </div>
   </body></html>`;
