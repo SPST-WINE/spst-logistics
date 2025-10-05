@@ -527,13 +527,9 @@ footer{margin-top:22px; font-size:11px; color:#374151}
 </html>`;
 }
 
-// ---------- DLE HTML (generic) ----------
-function renderDLEHTML({ ship, overrideCarrier }) {
-  // Usa SEMPRE l'override se presente; altrimenti valore da Airtable
-  const carrierFromShip = get(ship.fields, ['Corriere', 'Carrier'], '—');
-  const ov = normalizeCarrierName(overrideCarrier);
-  const carrier = ov || carrierFromShip || '—';
-
+// ---------- DLE HTML (generic, senza "To: ...") ----------
+function renderDLEHTML({ ship /*, overrideCarrier */ }) {
+  // Non usiamo più il corriere nel template per tenerlo generico
   const senderRS   = get(ship.fields, ['Mittente - Ragione Sociale'], '—');
   const senderCity = get(ship.fields, ['Mittente - Città'], '');
   const pickup     = get(ship.fields, ['Ritiro - Data'], '') || ship.fields?.['Ritiro Data'];
@@ -560,7 +556,7 @@ header{display:flex; align-items:flex-start; justify-content:space-between; gap:
 .doc-meta .kv{margin-top:6px}
 .kv div{margin:2px 0}
 hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
-.to{font-size:12px; color:#374151; margin-bottom:12px}
+/* .to{...} eliminato: non serve più */
 .section{font-size:13px; line-height:1.55}
 .section p{margin:8px 0}
 .list{margin:8px 0 8px 16px; padding:0}
@@ -596,10 +592,10 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 
     <hr class="sep" />
 
-    <div class="to"><strong>To:</strong> ${escapeHTML(carrier)}</div>
+    <!-- RIGA "To: <corriere>" rimossa -->
 
     <div class="section">
-      <p>I, the undersigned <strong>${escapeHTML(senderRS)}</strong>, as Shipper, hereby declare under my sole responsibility that all goods entrusted to <strong>${escapeHTML(carrier)}</strong>:</p>
+      <p>I, the undersigned <strong>${escapeHTML(senderRS)}</strong>, as Shipper, hereby declare under my sole responsibility that all goods entrusted to the carrier:</p>
       <ul class="list">
         <li>Are not included in the list of products protected by the Washington Convention (CITES) – Council Regulation (EC) No. 338/97 and subsequent amendments.</li>
         <li>Are not included in the list of goods covered by Council Regulation (EC) No. 116/2009 on the export of cultural goods.</li>
@@ -639,7 +635,6 @@ hr.sep{border:none;border-top:1px solid var(--border); margin:18px 0 16px}
 </body>
 </html>`;
 }
-
 
 // ---------- Handler ----------
 export default async function handler(req, res) {
